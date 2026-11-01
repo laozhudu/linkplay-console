@@ -1,0 +1,220 @@
+# LinkPlay / WiiMu 音箱控制协议规格
+
+> 本文是从一个 2015 年的厂商 App（包名 `com.wifiaudio.doss`，ver1.6.5）静态分析后
+> **重新表述**的协议事实，用于 clean-room 重写。文中不含反编译源码，所有命令、字段、
+> 编码规则均为接口层面的客观描述。
+>
+> 标记约定：
+> - ✅ **已确证**：在原厂 App 的字节码/字符串中直接读到，或在其解析代码中被引用。
+> - ⚠️ **推断**：由命令家族的一致性推出，未在本样本中被调用；实机使用前请先验证。
+>
+> 复现方式见仓库根目录 README「证据与复现」。
+
+---
+
+## 1. 设备与网络模型
+
+| 项 | 值 |
+|---|---|
+| 厂商平台 | LinkPlay 方案（WiiMu 白标），设备 SSDP 描述中 `manufacturer=WiiMu`、`modelName=WiiMu Media player` |
+| 默认 AP SSID | `LinkPlay_<MAC 后 4 位>`（描述模板里为 `LinkPlay_32C8`） |
+| 控制通道 A | HTTP，`GET http://<ip>/httpapi.asp?command=<cmd>`，**明文、无鉴权、无 token** ✅ |
+| 控制通道 B | UPnP/DLNA（AVTransport + RenderingControl + 厂商私有 PlayQueue）✅ |
+| 控制通道 C | 私有 TCP 文本协议（MCU，用于灯效/按键，见 §5）✅ |
+| 发现 | SSDP 组播 `239.255.255.250:1900` ✅ |
+| 默认超时 | 原厂对 httpapi 用 15 s，配网类命令 8 s ✅ |
+| 请求头 | 固定 `Accept-Language: zh-cn` 或 `en-us` ✅ |
+
+### 典型交互顺序
+
+```
+SSDP M-SEARCH ──► 拿到 device ip / LOCATION
+      │
+      ├─ GET /httpapi.asp?command=getStatusEx        → 设备身份、固件、联网状态
+      ├─ GET /httpapi.asp?command=multiroom:getSlaveList → 多房间成员
+      ├─ UPnP AVTransport / RenderingControl         → 播放、音量、进度
+      └─ 需要改网络/改名时走 httpapi setXxx
+```
+
+## 2. HTTP 控制面（`httpapi.asp`）
+
+全部为 `GET`，命令直接拼在 query 上，返回值多为 JSON 或纯文本，**无统一错误码**，
+失败通常表现为连接超时或返回 `OK`/空串。客户端必须自己做超时与重发策略。
+
+### 2.1 设备信息
+
+| 命令 | 返回 | 说明 |
+|---|---|---|
+| `getStatusEx` | JSON（见 §2.2） | 设备身份与联网状态，最常用的探活命令 ✅ |
+| `getNetwork` | 文本键值 | 当前 Wi-Fi / 有线状态 ✅ |
+| `wlanGetApListEx` | 文本，逐行 AP | 扫描周边 AP，配网前用 ✅ |
+| `StartCheck` | 文本 | 触发设备自检/连通性检查 ✅ |
+| `restoreToDefault` | — | **恢复出厂**，清空 Wi-Fi 配置 ⚠️（危险） ✅ |
+
+### 2.2 `getStatusEx` 返回字段（✅ 已确证）
+
+```json
+{
+  "ssid": "LinkPlay_32C8",          // 设备自身 AP/名称
+  "hardware": "A31",                // 硬件平台标识
+  "firmware": "4.2.8820",           // 固件版本
+  "uuid": "FF9607407DD495DAF88EA665",
+  "eth2": "00:22:6C:32:C8:00",      // 有线 MAC
+  "apcli0": "00:22:6C:32:C8:01",    // 无线 MAC
+  "essid": "6c696e6b706c6179",      // 上游 Wi-Fi SSID，可能是 hex（见 §6）
+  "expired": "0",
+  "internet": 1,                     // 1 = 已联网
+  "netstat": 1,
+  "language": "zh_CN",
+  "Release": "20190101",
+  "build": "a31-2019",
+  "securemode": "2"
+}
+```
+
+`essid` 为 hex 时需解码（`6c696e6b706c6179` → `linkplay`）。`internet`/`netstat` 是整数，
+其它字段基本是字符串（`expired` 也可能是字符串 `"0"`，解析时两种都要容忍）。
+
+### 2.3 设备设置
+
+| 命令 | 参数 | 编码 |
+|---|---|---|
+| `setDeviceName:<name>` | 新设备名 | **URL 编码**（`Living Room` → `Living+Room`）✅ |
+| `setLanguage:<lang>` | 如 `zh_CN` | 原样 ✅ |
+| `setPlayerCmd:switchmode:<mode>` | 输入源，如 `wifi` / `line-in` / `bluetooth` / `optical` | 原样 ✅ |
+| `MCUKeyShortClick:<n>` | 模拟面板第 n 个按键 | 整数 ✅ |
+| `setNetwork:<dhcp 0\|1>:<payload>` | 设置网络 | 原厂把第二参直接拼在冒号后，payload 语义未确证 ⚠️ |
+
+## 3. 配网
+
+LinkPlay 有三条配网路径，同一份 App 里全部存在：
+
+### 3.1 AP 直连（推荐，最可靠）
+
+手机先连设备自带热点 `LinkPlay_xxxx`，然后：
+
+```
+GET /httpapi.asp?command=ConnectMasterAp:ssid=<SSID_HEX_UPPER>:ch=<channel>:auth=<WPA2PSK|OPEN>:encry=<AES|NONE>:pwd=<PWD_HEX_UPPER>:chext=0
+```
+
+- SSID 与密码用 **大写 hex**（UTF-8 字节，见 §6）。
+- 密码为空 → `auth=OPEN`、`encry=NONE`、`pwd=` 留空。
+- `chext` 在直连场景为 `0`，在多房间从机跟随场景为 `1`。
+
+### 3.2 已联网设备改连另一个 AP
+
+```
+GET /httpapi.asp?command=wlanConnectApEx:ssid=<SSID_HEX_LOWER>:ch=<ch>:auth=<AUTH>:encry=<ENCRY>:pwd=<PWD_HEX_LOWER>:chext=1
+```
+
+注意这里原厂用的是 **小写 hex**（与 3.1 不一致，是历史遗留差异）。
+
+### 3.3 多房间从机跟随主机
+
+```
+GET /httpapi.asp?command=multiroom:ConnnectAP:<master_ip>:ConnectMasterAp:ssid=<SSID_HEX_LOWER>:ch=<ch>:auth=<AUTH>:encry=<ENCRY>:pwd=<PWD_HEX_LOWER>:chext=1
+```
+
+`ConnnectAP` 里的三个 n 是原厂拼写错误，**必须原样保留**，改成 `ConnectAP` 会失败。
+
+### 3.4 EasyLink（声波/组播广播配网，兼容用）
+
+- 实现于厂商 SDK 的 `smartlinkver2` 模块：把 SSID+密码编码后周期性组播/广播发出，
+  设备在配网模式下监听并自行连网。
+- 配网结束后需要通知设备停止应答：`GET /httpapi.asp?command=EasyLinkResponseStop` ✅
+- 这条路径依赖 32 位 native 库（`libEasylinkControllerVer2.so`，仅 armeabi），
+  重写时代价高、收益低，**建议只把 AP 直连作为主路径**，EasyLink 留作可选。
+
+## 4. 多房间（multiroom）
+
+| 命令 | 说明 |
+|---|---|
+| `multiroom:getSlaveList` | 返回 `{"slave_list":[...]}`，见下 ✅ |
+| `multiroom:SlaveVolume:<ip>:<0-100>` | 设某从机音量 ✅ |
+| `multiroom:SlaveChannel:<ip>:<ch>` | 设某从机声道（左右） ✅ |
+| `multiroom:SlaveDeviceName:<ip>:<urlenc name>` | 从机改名（URL 编码） ✅ |
+| `multiroom:SlaveMask:<ip|ip...>` | 把从机加入本机群组 ✅ |
+| `multiroom:SlaveUnMask:<ip|ip...>` | 从群组移除（保留从机） ✅ |
+| `multiroom:SlaveKickout:<ip>` | 把从机踢出群组 ✅ |
+
+`getSlaveList` 单条元素：
+
+```json
+{"ip":"192.168.1.21","mask":"1","version":"4.2.8820","uuid":"...","name":"Kitchen","ssid":"Home","volume":30}
+```
+
+- `mask` 是**字符串** `"0"/"1"`：`1` 表示已加入本机群组。
+- `volume` 是整数 0-100。
+- 群组是「主从」模型：所有编组命令都发给主机，主机再下发给从机。
+
+## 5. 私有 MCU 文本协议（灯效 / 按键）
+
+设备另开一条 TCP 通道（原厂 NIO `SocketChannel`，读超时 20 s），收发**纯 ASCII 文本帧**，
+帧以 `&` 结尾，字段以 `+` 分隔，命令空间前缀 `MCU+PAS+`：
+
+| 帧 | 方向 | 含义 |
+|---|---|---|
+| `MCU+PAS+light-get&` | 客户端 → 设备 | 查询当前灯效 ✅ |
+| `MCU+PAS+LWD+DAF+000&` | 客户端 → 设备 | 写入灯效参数（DAF 动画/亮度域） ✅ |
+| `MCU+PAS+LWD+TIM+<...>&` | 客户端 → 设备 | 灯效定时参数 ✅ |
+| `MCU+PAS+LIGHT-<n>&` | 设备 → 客户端 | 亮度回报（0-100 量级） ✅ |
+| `MCU+PAS+LIGHTSTYLE-<s>&` | 设备 → 客户端 | 灯效样式回报 ✅ |
+
+同一份 App 内按 OEM 分了三套 MCU 实现（厂商代号 `jabees`、`loogwood`、`youzhuan`），
+帧格式相同但上报字段集合不同，重写时建议做成「厂商 profile + 通用帧解析」。
+
+## 6. 编码规则（最容易踩的坑）
+
+| 字段 | 编码 | 例 |
+|---|---|---|
+| `ConnectMasterAp` 的 ssid/pwd | UTF-8 → **大写** hex | `Home` → `484F4D45` |
+| `wlanConnectApEx` / `multiroom:ConnnectAP` 的 ssid/pwd | UTF-8 → **小写** hex | `Home` → `486f6d65` |
+| `setDeviceName` / `SlaveDeviceName` | **URL 编码**（空格变 `+`） | `Living Room` → `Living+Room` |
+| `getStatusEx.essid` | 可能是 hex，需尝试解码后展示 | `6c696e...` → `linkplay` |
+| 非 ASCII SSID | 按 UTF-8 字节走 hex | `客厅` → `e5aea2e58e85` |
+
+hex 不是 Base64——原厂实现是逐字节 `toHexString(b & 0xFF)`、不足两位补 0。
+
+## 7. UPnP / DLNA 面
+
+设备声明为 `MediaRenderer:1`，服务清单：
+
+| 服务 | controlURL | 用途 |
+|---|---|---|
+| `urn:schemas-upnp-org:service:AVTransport:1` | `/upnp/control/rendertransport1` | 播放/暂停/停止/Seek/Next/Previous、`SetAVTransportURI` 投流 |
+| `urn:schemas-upnp-org:service:ConnectionManager:1` | `/upnp/control/renderconnmgr1` | 能力协商、协议信息 |
+| `urn:schemas-upnp-org:service:RenderingControl:1` | `/upnp/control/rendercontrol1` | 音量、静音、EQ |
+| `urn:schemas-wiimu-com:service:PlayQueue:1` | `/upnp/control/PlayQueue1` | 厂商私有播放队列 |
+
+事件订阅走 `/upnp/event/...`（GENA），原厂 App 用 Cling 的 subscription 回调同步
+「当前音量/播放状态」。**播放控制只有这条路径**——`httpapi.asp` 里没有
+`setPlayerCmd:play/pause/vol`，`setPlayerCmd` 只用于 `switchmode`（输入源）。
+
+## 8. 固件升级（音箱侧）
+
+```
+GET /httpapi.asp?command=getMvRemoteUpdateStart     → 触发检查并开始下载
+GET /httpapi.asp?command=getMvRemoteUpdateStatus    → 检查/下载状态
+GET /httpapi.asp?command=getMvRomDownloadStatus     → 下载进度
+GET /httpapi.asp?command=getMvRomBurnPrecent        → 烧写进度（原厂拼写 PerCent 错误，原样保留）
+```
+
+这是**音箱固件**的 OTA，与 App 自升级无关。轮询间隔原厂未固定，建议 1-2 s 并在
+`getMvRomBurnPrecent` 到 100 后停止，避免刷写期间密集请求。
+
+## 9. 安全事实（重写时必须知道的约束）
+
+- `httpapi.asp` **完全无鉴权**：同一局域网内任何主机都能 `restoreToDefault`、
+  `SlaveKickout`、`getMvRemoteUpdateStart`。这是设备固件侧的问题，客户端无法修复，
+  只能在部署侧缓解（IoT VLAN / 访客网络 / 禁止跨网段访问）。
+- 所有通道均为明文 HTTP/TCP，无 TLS。
+- 命名/语言/网络命令的参数直接进 URL，未做长度或字符校验，客户端必须自己校验。
+
+## 10. 尚未确证的部分（诚实清单）
+
+- `setNetwork` 第二参的 payload 语义（原厂直接拼接，未见解析）。
+- `getNetwork` / `wlanGetApListEx` 返回文本的具体行格式（原厂按行 + 分隔符手工切分，
+  未见结构化解析代码路径）。
+- `getMvRomBurnPrecent` 之外的烧写阶段命令（如写入完成回调）。
+- MCU 帧的完整字段表（只确证了 light 相关的 5 条）。
+- 部分老固件是否要求 `chext` 参数（当前样本中恒出现）。
