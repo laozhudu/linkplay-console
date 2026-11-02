@@ -73,12 +73,58 @@ GetPositionInfo   → TrackDuration 00:02:14，RelTime 递增
 | 现象 | 证据 | 影响 |
 |---|---|---|
 | **UPnP 端口 49152 会消失** | 播放期间可用；做完一轮队列/QPlay 探测后 `connection refused`，30 秒内反复检查持续关闭，而 `httpapi`(80) 一直 200 | 所有播放控制走 UPnP，因此**必须实现自动重连/降级**，不能假设一次连上就一直在 |
-| UPnP 不在 80 端口 | `:80/description.xml` → 404，`:80/upnp/control/*` → 404 | 没有「换个端口」的兜底，只能等它恢复或用 httpapi 兜底（`setPlayerCmd:*`，但本固件不支持） |
+| UPnP 不在 80 端口 | `:80/description.xml` → 404，`:80/upnp/control/*` → 404 | 没有「换个端口」的兜底 |
 | 私有端口常开 | `8899`(uart_pass)、`8819`(communication) | 可能是 MCU 直通/内部通信，未触碰 |
-| 电量在掉 | `battery_percent` 60 → 70 → …（充电中/波动） | 便携机；低电可能进休眠导致 UPnP 关闭 |
+| 电量在掉 | `battery_percent` 60 → 70（充电中波动） | 便携机；低电可能进休眠导致 UPnP 关闭 |
 
-**建议**：App 侧对 UPnP 用「探活 + 指数退避重试」，并在 UI 上把「UPnP 掉线」和「设备离线」分开提示
-（httpapi 能通就说明设备在线，只是控制面掉了）。
+### 5.1 ✅ 已找到恢复手段：httpapi `reboot`（实测有效）
+
+```
+GET http://<ip>/httpapi.asp?command=reboot   →  响应体 "OK"
+```
+
+实测时间线（`SystemCommand+rebootdevice` 是 `unknown command`，**裸 `reboot` 才有效**）：
+
+```
+t=0s    发送 reboot → "OK"
+t=10s   主机 alive，UPnP closed       ← 正在重启
+t=20s   主机 down（ping 不通）
+t=30s   主机 down
+t=40s   主机 alive，UPnP 49152 open   ← 完全恢复
+```
+
+**约 40 秒恢复，UPnP 重新可用。** 这解释了之前「一掉就再也不回来」：
+设备并没有自己重启 UPnP 服务，需要外部触发重启。
+
+> 注意 `getStatusEx` 里的 `battery:0 / battery_percent:70` 在重启前后不变，
+> 所以「掉电休眠」不是主因，更像是固件里 UPnP 守护线程在某些操作后退出。
+
+App 侧应当：
+
+1. 控制指令连续失败（如 3 次 `Connection refused`）且 `httpapi` 仍 200 → 判定为「控制面掉线」；
+2. 提示用户「音箱控制服务已停止，是否重启音箱？」→ 调 `reboot`；
+3. 轮询 `getStatusEx` 直到 200 + 49152 可连，再恢复播放。
+
+### 5.2 ✅ 连续播放（客户端排队）真机验证通过
+
+用 3 个 6 秒测试音频，`剩余 ≤ 2s` 切下一首：
+
+```
+t=1s 00:00:01/00:00:06 当前第1首
+t=4s 00:00:04/00:00:06 剩余2s → 切第2首
+t=7s 00:00:04/00:00:06 剩余2s → 切第3首
+```
+
+服务端（音箱来拉流）铁证：
+
+```
+[srv] 192.168.99.153 "GET /tone1.mp3 HTTP/1.1" 200
+[srv] 192.168.99.153 "GET /tone2.mp3 HTTP/1.1" 200
+[srv] 192.168.99.153 "GET /tone3.mp3 HTTP/1.1" 200
+```
+
+**结论：3/3 连续播完，列表推送成立。** 随后又用 NAS 真实曲目跑通「第 1 首播完自动切第 2 首」，
+第 2 首（`000 凯叔水浒传·魔君降世`，14:23）进度正常递增。
 
 ## 6. 固件能否升级（调研结论：不建议动）
 
@@ -91,6 +137,7 @@ GetPositionInfo   → TrackDuration 00:02:14，RelTime 递增
 | `getMvRomDownloadStatus` | 全 0，`new_ver:"0"` | 无下载任务、无新版本号 |
 | `getMvRomBurnPrecent` | `{"status":"0","progress":"0"}` | 无烧写 |
 | `SystemCommand+onlineupgrade_check`（GET 与 POST、`+` 与 `%2B` 都试过） | `unknown command` | **该构建没有实现 `SystemCommand` 家族**：Web UI 里那些升级按钮是 LinkPlay 的通用模板，本固件未接线 |
+| 裸 `reboot`（对照验证 httpapi 是否真的被裁剪） | `OK` 且设备真的重启了 | **httpapi 没被裁剪，只是 SystemCommand 命名空间没注册** —— 证明「命令不存在」是精确的，不是整体禁用 |
 | `getfwinfo` | `unknown command` | 同上 |
 
 当前固件：`3.6.5310`（`Release 20180110`），`hardware A31`，`mcu_ver 126`，`dsp_ver 6.120.1.11`。

@@ -5,7 +5,12 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.laozhudu.linkplay.discovery.DiscoveredDevice
 import io.github.laozhudu.linkplay.discovery.SsdpDiscovery
+import io.github.laozhudu.linkplay.protocol.DeviceHttpClient
+import io.github.laozhudu.linkplay.protocol.LinkPlayCommands
 import io.github.laozhudu.linkplay.protocol.queue.ClientSideQueue
+import io.github.laozhudu.linkplay.protocol.recovery.RendererHealth
+import io.github.laozhudu.linkplay.protocol.recovery.RendererProbe
+import io.github.laozhudu.linkplay.protocol.recovery.RendererRecovery
 import io.github.laozhudu.linkplay.protocol.queue.QueueItem
 import io.github.laozhudu.linkplay.protocol.queue.QueueTarget
 import io.github.laozhudu.linkplay.protocol.upnp.BrowseEntry
@@ -45,6 +50,10 @@ data class NasUiState(
     val loopMode: Int = ClientSideQueue.LOOP_ALL,
     val error: String? = null,
     val log: List<String> = emptyList(),
+    /** 控制面（UPnP 49152）掉线。设备本身在线，只是控制通道没了，提示用户重启音箱。 */
+    val controlLost: Boolean = false,
+    /** 正在重启音箱并等待恢复。 */
+    val healing: Boolean = false,
 )
 
 /**
@@ -254,14 +263,65 @@ class NasViewModel(
                         shouldStop = { stopRequested },
                     )
                 }
-                _state.update { it.copy(playing = false) }
-                log("结束，共播 $played 首")
+                val expected = items.size
+                // 中途停止是用户意图，不算故障；提前结束才说明控制面掉了
+                val dropped = !stopRequested && played < expected
+                _state.update { it.copy(playing = false, controlLost = dropped) }
+                if (dropped) {
+                    log("提前中断：只播了 $played/$expected 首 —— 音箱的 UPnP 控制口(49152)掉线了")
+                    log("httpapi 仍可用，说明设备在线；可点「重启音箱」恢复（实测约 40 秒）")
+                } else {
+                    log("结束，共播 $played 首")
+                }
             } catch (t: Throwable) {
                 _state.update { it.copy(playing = false, error = t.message) }
                 log("推送失败：${t.message}")
             }
         }
     }
+
+    /**
+     * 重启音箱以恢复 UPnP 控制口。
+     *
+     * 为什么必须由人/客户端触发：实测这台固件掉 49152 之后**不会自己回来**，
+     * 而 `reboot`（httpapi 裸命令，不是 `SystemCommand+rebootdevice`）能把整机重启并恢复端口。
+     * 恢复约需 40 秒，期间以「49152 可连」为成功标准（只看 httpapi 会误判）。
+     */
+    fun restartRenderer() {
+        if (_state.value.healing) return
+        _state.update { it.copy(healing = true) }
+        log("正在重启音箱（约 40 秒）…")
+        viewModelScope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                val http = DeviceHttpClient()
+                val probe = object : RendererProbe {
+                    override fun httpApiOk(): Boolean =
+                        runCatching { http.status(rendererIp) }.isSuccess
+
+                    override fun upnpOk(): Boolean = canConnect(rendererIp, 49152)
+
+                    override fun reboot(): Boolean =
+                        runCatching { http.send(rendererIp, LinkPlayCommands.reboot()) }.isSuccess
+                }
+                when (val health = RendererRecovery(probe).diagnose()) {
+                    RendererHealth.HEALTHY -> true
+                    RendererHealth.OFFLINE -> {
+                        log("音箱不在线（httpapi 也不通），先检查电源/Wi-Fi")
+                        false
+                    }
+                    RendererHealth.CONTROL_LOST -> RendererRecovery(probe).heal()
+                }
+            }
+            _state.update { it.copy(healing = false, controlLost = !ok) }
+            log(if (ok) "音箱已恢复，可以继续推送" else "恢复失败；请手动断电重开音箱")
+        }
+    }
+
+    /** 端口可连探测：比发 SOAP 快，且不需要知道控制路径。 */
+    private fun canConnect(ip: String, port: Int): Boolean = runCatching {
+        java.net.Socket().use { it.connect(java.net.InetSocketAddress(ip, port), 800) }
+        true
+    }.getOrDefault(false)
 
     fun stopQueue() {
         stopRequested = true
