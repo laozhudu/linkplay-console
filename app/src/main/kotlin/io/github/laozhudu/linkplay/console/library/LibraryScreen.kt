@@ -139,7 +139,6 @@ fun LibraryScreen(
                 LibraryTab.SEARCH to "搜索",
                 LibraryTab.FAVORITES to "收藏 ${state.favorites.size}",
                 LibraryTab.RECENT to "最近 ${state.recents.size}",
-                LibraryTab.RADIO to "电台 ${state.radios.size}",
             ).forEach { (tab, label) ->
                 val active = state.tab == tab
                 Box(
@@ -194,7 +193,6 @@ fun LibraryScreen(
                 onToggleFav = vm::toggleFavorite,
                 favoriteKeys = state.favorites.map { it.dedupeKey }.toSet(),
             )
-            LibraryTab.RADIO -> RadioSection(state, vm)
         }
 
         VSpace(Spacing.md)
@@ -424,185 +422,6 @@ private fun TrackRow(
 }
 
 // ---------------------------------------------------------------- 电台
-
-/** 几条**公开可直连**的流，用来演示"流地址长什么样"。不内置任何平台接口或凭据。 */
-private val radioExamples = listOf(
-    "SomaFM Groove Salad" to "https://ice1.somafm.com/groovesalad-128-mp3",
-    "SomaFM Drone Zone" to "https://ice1.somafm.com/dronezone-128-mp3",
-    "Radio Paradise" to "https://stream.radioparadise.com/mp3-192",
-)
-
-@Composable
-private fun RadioSection(state: LibraryUiState, vm: LibraryViewModel) {
-    var showAdd by remember { mutableStateOf(false) }
-    var pendingDelete by remember { mutableStateOf<RadioStation?>(null) }
-
-    if (state.radios.isEmpty()) {
-        EmptyState(
-            title = "还没有电台",
-            hint = "点下面的「添加电台」，粘一条流地址就行。不知道填什么？对话框里有可点的示例。",
-        )
-        VSpace(Spacing.sm)
-        PillButton("＋ 添加电台", filled = true, onClick = { showAdd = true })
-        return
-    }
-
-    AppCard {
-        SectionTitle("我的电台", "${state.radios.size} 个 · 点一行即播")
-        state.radios.forEach { station ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(AppShapesExpressive.squircle)
-                    .clickable { vm.playRadio(station) }
-                    .padding(start = Spacing.sm, end = Spacing.xs, top = Spacing.xs, bottom = Spacing.xs),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(38.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text("◉", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-                }
-                Spacer(Modifier.width(Spacing.sm))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        station.name,
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        station.url,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .clickable { pendingDelete = station },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text("✕", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-        }
-    }
-    VSpace(Spacing.sm)
-    PillButton("＋ 添加电台", filled = false, onClick = { showAdd = true })
-
-    if (showAdd) {
-        AddRadioDialog(
-            onDismiss = { showAdd = false },
-            onAdd = { name, url ->
-                vm.addRadio(name, url)
-                showAdd = false
-            },
-        )
-    }
-
-    pendingDelete?.let { station ->
-        AlertDialog(
-            onDismissRequest = { pendingDelete = null },
-            title = { Text("删掉「${station.name}」？") },
-            text = { Text("只是从本机列表移除，不影响电台本身。") },
-            confirmButton = {
-                TextButton(onClick = {
-                    vm.removeRadio(station.id)
-                    pendingDelete = null
-                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } },
-        )
-    }
-}
-
-/**
- * 添加电台的对话框。
- *
- * 为什么要有示例和实时校验：用户面对"流地址"这个输入框时，
- * 不知道该填 URL、m3u8 还是 IP。给三条能直接点的公开流 + 边输边校验，
- * 比一句「请输入流地址」有用得多。
- */
-@Composable
-private fun AddRadioDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Unit) {
-    var url by remember { mutableStateOf("") }
-    var name by remember { mutableStateOf("") }
-    val trimmed = url.trim()
-    val valid = trimmed.startsWith("http://") || trimmed.startsWith("https://")
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("添加网络电台") },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
-                OutlinedTextField(
-                    value = url,
-                    onValueChange = {
-                        url = it
-                        if (name.isBlank()) name = RadioStation.suggestName(it)
-                    },
-                    label = { Text("流地址") },
-                    placeholder = { Text("https://…") },
-                    singleLine = true,
-                    isError = trimmed.isNotEmpty() && !valid,
-                    supportingText = {
-                        Text(
-                            if (trimmed.isEmpty()) "必须是 http/https 开头的直链流；m3u8、mp3 流都行"
-                            else if (valid) "格式没问题" else "必须以 http:// 或 https:// 开头",
-                            style = MaterialTheme.typography.labelSmall,
-                        )
-                    },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                VSpace(Spacing.xs)
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("名称（留空会自动取域名）") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                VSpace(Spacing.sm)
-                Text(
-                    "试试这些（公开可直连）：",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                radioExamples.forEach { (label, demoUrl) ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(AppShapesExpressive.squircle)
-                            .clickable { url = demoUrl; name = label }
-                            .padding(vertical = Spacing.xs, horizontal = Spacing.xs),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        PillTag(text = "示例", color = MaterialTheme.colorScheme.secondary)
-                        Spacer(Modifier.width(Spacing.xs))
-                        Text(label, style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(
-                enabled = valid,
-                onClick = { onAdd(name.ifBlank { RadioStation.suggestName(trimmed) }, trimmed) },
-            ) { Text(if (valid) "添加" else "填个有效地址") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-    )
-}
 
 // ---------------------------------------------------------------- 预设键
 

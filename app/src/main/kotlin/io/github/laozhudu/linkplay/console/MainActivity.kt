@@ -56,6 +56,7 @@ import io.github.laozhudu.linkplay.console.playback.PlayerScreen
 import io.github.laozhudu.linkplay.console.playback.QueueBus
 import io.github.laozhudu.linkplay.console.playback.QueueRunState
 import io.github.laozhudu.linkplay.console.provisioning.ProvisioningScreen
+import io.github.laozhudu.linkplay.console.radio.RadioScreen
 import io.github.laozhudu.linkplay.console.room.MultiroomCard
 import io.github.laozhudu.linkplay.console.ui.components.AppCard
 import io.github.laozhudu.linkplay.console.ui.components.AppShapesExpressive
@@ -96,7 +97,7 @@ private enum class Tab(val label: String, val glyph: String) {
 }
 
 /** 二级页面：从一级页推进去，返回即回一级。 */
-private enum class SubPage { Nas, LocalQueue, Library, Settings, Provisioning }
+private enum class SubPage { Nas, LocalQueue, Library, Radio, Settings, Provisioning }
 
 @Composable
 fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
@@ -142,6 +143,12 @@ fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
             SubPage.LocalQueue -> QueueScreen(
                 deviceIp = state.selectedIp.orEmpty(),
                 location = state.selectedLocation,
+                onBack = { sub = null },
+            )
+
+            SubPage.Radio -> RadioScreen(
+                deviceIp = state.selectedIp.orEmpty(),
+                deviceLabel = state.status?.ssid,
                 onBack = { sub = null },
             )
 
@@ -217,6 +224,7 @@ fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
                     onOpenNas = { sub = SubPage.Nas },
                     onOpenLibrary = { sub = SubPage.Library },
                     onOpenLocal = { sub = SubPage.LocalQueue },
+                    onOpenRadio = { sub = SubPage.Radio },
                     onGoDevices = { tab = Tab.Devices },
                 )
             }
@@ -283,6 +291,7 @@ private fun SourcesScreen(
     onOpenNas: () -> Unit,
     onOpenLibrary: () -> Unit,
     onOpenLocal: () -> Unit,
+    onOpenRadio: () -> Unit,
     onGoDevices: () -> Unit,
 ) {
     Column(
@@ -312,8 +321,12 @@ private fun SourcesScreen(
             SectionTitle("手机本地音乐", "手机里的歌，通过本机 HTTP 服务推给音箱")
         }
         VSpace(Spacing.sm)
+        AppCard(onClick = onOpenRadio) {
+            SectionTitle("网络电台", "内置可用电台 + 自己粘流地址，点一下即播")
+        }
+        VSpace(Spacing.sm)
         AppCard(onClick = onOpenLibrary) {
-            SectionTitle("音乐库", "搜索 · 收藏 · 最近播放 · 网络电台")
+            SectionTitle("音乐库", "搜索 · 收藏 · 最近播放")
         }
     }
 }
