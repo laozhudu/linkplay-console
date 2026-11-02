@@ -18,7 +18,7 @@ LinkPlay / WiiMu 方案 Wi-Fi 音箱的**现代化控制台**：Kotlin + Jetpack
 | 多房间从机列表 / 音量 | ✅ 已实现 |
 | 改名 / 输入源切换 / 恢复出厂（二次确认） | ✅ 已实现 |
 | 原始命令控制台 | ✅ 已实现 |
-| 协议层单元测试 | ✅ 215 个用例 |
+| 协议层单元测试 | ✅ 225 个用例 |
 | AP 直连配网（4 步流程 + 结果轮询） | ✅ 已实现 |
 | UPnP 播放控制（投流 / 播放暂停停止 / 跳转 / 音量 / 进度） | ✅ 已实现（1s 轮询，非 GENA） |
 | 本地音乐整列表推送 + 列表循环（私有 PlayQueue） | ✅ 已实现 |
@@ -61,6 +61,13 @@ docs/             协议规格、功能裁剪决策、架构说明
 > 播放控制走 UPnP，需要 SSDP 提供的描述地址（LOCATION）。手动输入 IP 的设备没有这个地址，
 > 卡片会说明原因而不是假装能用。
 
+### 防盗链直链也能投（本机转发）
+
+音箱拉流时只发 `curl/7.36.0` 的裸 GET，不带 Referer/Cookie，所以平台直链必然 403。
+`RelayMediaServer` 会替它补头并把 Range 接住：播放页勾「需要 Referer（自动转发）」即可。
+真机已验证（设备拉到的是本机 `/s/<token>.mp3`，进度正常递增）。详见
+[docs/16-lxmusic-feasibility.md](docs/16-lxmusic-feasibility.md)。
+
 ### 界面
 
 播放页重做为「封面主导 + 曲名派生渐变 + 浮动主控」：进度/音量拖动松手才下发、循环模式本地先变、
@@ -69,6 +76,13 @@ docs/             协议规格、功能裁剪决策、架构说明
 
 > 开源里好看的音乐 App 基本是 GPL-3.0（Gramophone / Auxio / Rhythm），**代码不能抄**；
 > 唯一可复制的设计系统是 Apache-2.0 的 `material-3-expressive-catalog`。
+
+### 防盗链直链也能投（本机转发）
+
+音箱拉流时只发 `curl/7.36.0` 的裸 GET，不带 Referer/Cookie，所以平台直链必然 403。
+`RelayMediaServer` 会替它补头并把 Range 接住：播放页勾「需要 Referer（自动转发）」即可。
+真机已验证（设备拉到的是本机 `/s/<token>.mp3`，进度正常递增）。详见
+[docs/16-lxmusic-feasibility.md](docs/16-lxmusic-feasibility.md)。
 
 ### 界面改造节奏
 
