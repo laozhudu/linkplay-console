@@ -47,6 +47,18 @@ jobs:
           test -s "$RUNNER_TEMP/keys/release.jks" || { echo "keystore 解码为空"; exit 1; }
           echo "LINKPLAY_KEYSTORE=$RUNNER_TEMP/keys/release.jks" >> "$GITHUB_ENV"
 
+      # 版本号：main 用自身提交数（每次 squash 合并 +1，单调递增）；
+      # PR 用「目标分支当前提交数」，否则 PR 分支提交多、合并后变少，会出现降级安装。
+      - name: Resolve versionCode
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            CODE=$(git rev-list --count "origin/$GITHUB_BASE_REF")
+          else
+            CODE=$(git rev-list --count HEAD)
+          fi
+          echo "本次 versionCode = $CODE"
+          echo "LINKPLAY_VERSION_CODE=$CODE" >> "$GITHUB_ENV"
+
       - name: Protocol unit tests
         run: ./gradlew --no-daemon :core-protocol:test
 

@@ -22,6 +22,18 @@ val gitCommitCount: Int = runCatching {
 }.getOrDefault(1)
 
 /**
+ * CI 可以用 `LINKPLAY_VERSION_CODE` 覆盖上面的推导值。
+ *
+ * 为什么需要覆盖：squash 合并会把「PR 上的 3 个提交」压成 main 上的 1 个，于是
+ * PR 分支的提交数**大于**合并后的 main。若两者都直接取 HEAD 的提交数，先用 PR 产物再用
+ * main 产物就成了降级安装（`INSTALL_FAILED_VERSION_DOWNGRADE`）。
+ * 所以 CI 在 PR 构建时传入 main 当前的提交数：PR 包与 main 同号（可覆盖），
+ * main 每次合并继续 +1（单调递增）。
+ */
+val effectiveVersionCode: Int =
+    System.getenv("LINKPLAY_VERSION_CODE")?.trim()?.toIntOrNull() ?: gitCommitCount
+
+/**
  * 签名密钥的读取顺序：环境变量 → local.properties → ~/.linkplay/。
  *
  * 为什么不提交 keystore 到仓库：这是公开仓库，密钥进 Git 等于把「用同一身份签名任意 APK」的
@@ -58,10 +70,8 @@ android {
         applicationId = "io.github.laozhudu.linkplay.console"
         minSdk = 24
         targetSdk = 35
-        // +1 让首个包从 2 开始：早期 0.7.0/0.8.0 用的是 versionCode=1 且随机签名的包，
-        // 卸载一次之后，后续任何新包都应被视为「更新版本」。
-        versionCode = gitCommitCount
-        versionName = "0.9.$gitCommitCount"
+        versionCode = effectiveVersionCode
+        versionName = "0.9.$effectiveVersionCode"
     }
 
     signingConfigs {
