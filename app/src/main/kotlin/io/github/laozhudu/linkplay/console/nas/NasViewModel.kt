@@ -365,6 +365,8 @@ class NasViewModel(
         album = e.album,
         durationSec = e.durationSec,
         mimeType = mimeOf(e.protocolInfo),
+        // 封面只有浏览这一刻拿得到；投流之后设备不回填元数据（docs/14）
+        albumArtUrl = e.albumArtUri,
     )
 
     /**

@@ -7,7 +7,9 @@ import io.github.laozhudu.linkplay.protocol.LinkPlayCapabilities
 import io.github.laozhudu.linkplay.protocol.LinkPlayDevice
 import io.github.laozhudu.linkplay.protocol.library.LibrarySearch
 import io.github.laozhudu.linkplay.protocol.library.SearchHit
+import io.github.laozhudu.linkplay.console.playback.QueueBus
 import io.github.laozhudu.linkplay.protocol.library.TrackRecord
+import io.github.laozhudu.linkplay.protocol.queue.QueueItem
 import io.github.laozhudu.linkplay.protocol.radio.RadioStation
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -135,6 +137,19 @@ class LibraryViewModel(
                     true
                 }
                 if (ok) {
+                    // 单曲播放也要进队列：播放页的「播放列表」读的就是 QueueBus，
+                    // 不写进去用户就会看到「在播歌但列表是空的」
+                    val item = QueueItem(
+                        url = url,
+                        title = track.title,
+                        artist = track.displayArtist,
+                        album = null,
+                        durationSec = track.durationSec,
+                        mimeType = "audio/mpeg",
+                        albumArtUrl = track.albumArtUri,
+                    )
+                    QueueBus.begin(listOf(item))
+                    QueueBus.playing(track.title, 0)
                     val recent = withContext(Dispatchers.IO) {
                         store.recents.record(track.copy(playUri = url), System.currentTimeMillis())
                         store.recents.recent()

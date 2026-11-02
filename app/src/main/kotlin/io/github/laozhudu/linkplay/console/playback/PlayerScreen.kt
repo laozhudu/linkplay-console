@@ -232,7 +232,20 @@ fun PlayerScreen(
                             ),
                         contentAlignment = Alignment.Center,
                     ) {
-                        ArtworkInitial(state.title, palette)
+                        // 有 albumArtURI 就显示真图，没有才退回首字占位。
+                        // 投流后设备不回填元数据，所以封面只能来自「浏览时带进队列」的那个值。
+                        val art = queue.current?.albumArtUrl?.takeIf { it.isNotBlank() }
+                            ?: state.albumArtUrl?.takeIf { it.isNotBlank() }
+                        if (art != null) {
+                            coil.compose.AsyncImage(
+                                model = art,
+                                contentDescription = state.title,
+                                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        } else {
+                            ArtworkInitial(state.title, palette)
+                        }
                     }
                 }
             }

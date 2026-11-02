@@ -8,6 +8,14 @@ data class QueueItem(
     val album: String? = null,
     val durationSec: Long = 0,
     val mimeType: String = "audio/mpeg",
+    /**
+     * 封面地址（DIDL 的 `upnp:albumArtURI`）。
+     *
+     * 为什么放在队列项里而不是监听时再查：设备投流后**不回填元数据**
+     * （实测 Title/Artist 为空，docs/14 §0.1），封面更是拿不回来。
+     * 只有在浏览 DLNA 目录的那一刻才知道封面地址，所以必须随队列入栈。
+     */
+    val albumArtUrl: String? = null,
 )
 
 /** 单曲等待的结局。 */

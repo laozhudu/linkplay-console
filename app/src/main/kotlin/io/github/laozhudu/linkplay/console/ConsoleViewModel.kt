@@ -13,6 +13,7 @@ import io.github.laozhudu.linkplay.protocol.LinkPlayCommands
 import io.github.laozhudu.linkplay.protocol.LinkPlayStatus
 import io.github.laozhudu.linkplay.protocol.SlaveDevice
 import io.github.laozhudu.linkplay.protocol.identity.LinkPlayIdentity
+import io.github.laozhudu.linkplay.protocol.multiroom.MultiroomClient
 import io.github.laozhudu.linkplay.protocol.session.SavedDevice
 import io.github.laozhudu.linkplay.protocol.upnp.UpnpRendererClient
 import kotlinx.coroutines.Dispatchers
@@ -43,6 +44,19 @@ data class ConsoleUiState(
     val busy: Boolean = false,
     /** 扫描后有没有被过滤掉的其它 UPnP 设备（用于给用户一句解释，而不是「怎么什么都搜不到」）。 */
     val filteredOutCount: Int = 0,
+    /** 正在成组（轮询等待中）。 */
+    val multiroomBusy: Boolean = false,
+    /** 成组轮询已等待的秒数。 */
+    val multiroomTick: Long = 0,
+    /**
+     * 成组时可手填的信道与密码。
+     *
+     * 为什么要露出来：原厂 App 用 `getNetwork` 取主机热点密码，
+     * 但这批固件的 `getNetwork` 只返回 `{"securemode":"0",}`（实测），
+     * 于是 auth 只能按 OPEN 走；万一某些机器实际是 WPA2，这里能手动补上。
+     */
+    val joinChannel: Int = 0,
+    val joinPassword: String = "",
 )
 
 class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
@@ -304,6 +318,93 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         val ip = _state.value.selectedIp ?: return
         run("SlaveVolume($slaveIp=$volume)") {
             client.send(ip, LinkPlayCommands.slaveVolume(slaveIp, volume.coerceIn(0, 100)))
+        }
+    }
+
+    // ---- 多房间 ----
+
+    /**
+     * 让另一台已保存的音箱接入本机（本机当主机）。
+     *
+     * 走的是原厂 APK 的真实逻辑（docs/14 §4.7）：
+     * 向**从机**发 `multiroom:ConnnectAP:<主机IP>:ConnectMasterAp:...`，
+     * 然后每 2 秒读一次主机的 `getSlaveList`，40 秒内看到从机就算成功。
+     *
+     * 为什么必须轮询确认：`multiroom:*` 命令只要名字认识就回 `OK`，
+     * 真机上 `SlaveMask` 各种参数都回 OK 但一台从机都没出现。
+     *
+     * **风险提示（UI 上也要写）**：这一步会让从机去连主机的热点，
+     * 从机可能短暂离开原网段。失败时它会自己连回原来的 Wi-Fi，但要等一会儿。
+     */
+    /** 成组用的可选项：主机热点信道（0=自动）与密码（我们的设备 securemode=0，一般留空）。 */
+    fun setJoinChannel(ch: Int) = _state.update { it.copy(joinChannel = ch.coerceIn(0, 14)) }
+
+    fun setJoinPassword(pwd: String) = _state.update { it.copy(joinPassword = pwd) }
+
+    fun joinSlave(device: SavedDevice) {
+        val masterIp = _state.value.selectedIp ?: return
+        val masterSsid = _state.value.status?.ssid
+        if (masterSsid.isNullOrBlank()) {
+            _state.update { it.copy(error = "还读不到本机热点名，先刷新设备信息") }
+            return
+        }
+        if (_state.value.multiroomBusy) return
+        _state.update { it.copy(multiroomBusy = true, multiroomTick = 0, error = null) }
+        viewModelScope.launch {
+            log("开始成组：${device.title}（${device.ip}）→ 主机 $masterIp（$masterSsid）")
+            val ok = withContext(Dispatchers.IO) {
+                runCatching {
+                    MultiroomClient(client).joinWithPolling(
+                        masterIp = masterIp,
+                        masterSsid = masterSsid,
+                        slaveIp = device.ip,
+                        channel = _state.value.joinChannel,
+                        password = _state.value.joinPassword,
+                        onTick = { sec ->
+                            log("等待从机出现… ${sec}s / 40s")
+                            viewModelScope.launch { _state.update { it.copy(multiroomTick = sec) } }
+                        },
+                        shouldStop = { !_state.value.multiroomBusy },
+                    )
+                }.getOrElse { t ->
+                    log("成组异常：${t.message}")
+                    false
+                }
+            }
+            val after = withContext(Dispatchers.IO) { runCatching { client.slaveList(masterIp) }.getOrDefault(emptyList()) }
+            _state.update { it.copy(multiroomBusy = false, slaves = after) }
+            if (ok) {
+                log("成组成功：主机现在有 ${after.size} 台从机")
+            } else {
+                log("成组未确认：40 秒内主机仍没看到从机（命令已被设备接受，但设备之间没建立连接）")
+                log("可以等 1~2 分钟再点「重新读取从机」；若从机暂时离线，它会自己连回原 Wi-Fi")
+            }
+        }
+    }
+
+    fun cancelMultiroom() = _state.update { it.copy(multiroomBusy = false) }
+
+    fun kickSlave(slaveIp: String) {
+        val master = _state.value.selectedIp ?: return
+        run("踢出 $slaveIp") {
+            log("SlaveKickout → " + client.send(master, "multiroom:SlaveKickout:$slaveIp"))
+            _state.update { it.copy(slaves = client.slaveList(master)) }
+        }
+    }
+
+    fun renameSlave(slaveIp: String, name: String) {
+        val master = _state.value.selectedIp ?: return
+        if (name.isBlank()) return
+        run("从机改名") {
+            client.send(master, LinkPlayCommands.slaveDeviceName(slaveIp, name))
+            _state.update { it.copy(slaves = client.slaveList(master)) }
+        }
+    }
+
+    fun refreshSlaves() {
+        val master = _state.value.selectedIp ?: return
+        run("读取从机") {
+            _state.update { it.copy(slaves = client.slaveList(master)) }
         }
     }
 
