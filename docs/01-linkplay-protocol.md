@@ -233,7 +233,11 @@ hex 不是 Base64——原厂实现是逐字节 `toHexString(b & 0xFF)`、不足
 
 事件订阅走 `/upnp/event/...`（GENA），原厂 App 用 Cling 的 subscription 回调同步
 「当前音量/播放状态」。**播放控制只有这条路径**——`httpapi.asp` 里没有
-`setPlayerCmd:play/pause/vol`，`setPlayerCmd` 只用于 `switchmode`（输入源）。
+~~`setPlayerCmd:play/pause/vol`，`setPlayerCmd` 只用于 `switchmode`（输入源）。~~
+
+> **2026-11 更正**：这句是错的。本机实测 `setPlayerCmd:mute:1` → `OK` 且回读 `CurrentMute=1`，
+> `setPlayerCmd:play:<url>` → 设备主动来拉流并播完。httpapi 播放控制完整可用，是 UPnP 掉线时的兜底。
+> 详见 docs/14 §0.1。教训：把「探测脚本的参数写错」当成了「设备不支持」。
 
 ### 7.1 控制点必须实现的 SOAP 细节
 
