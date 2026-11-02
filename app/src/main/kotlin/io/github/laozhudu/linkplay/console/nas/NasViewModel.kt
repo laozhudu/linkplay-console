@@ -11,6 +11,11 @@ import io.github.laozhudu.linkplay.protocol.queue.ClientSideQueue
 import io.github.laozhudu.linkplay.protocol.recovery.RendererHealth
 import io.github.laozhudu.linkplay.protocol.recovery.RendererProbe
 import io.github.laozhudu.linkplay.protocol.recovery.RendererRecovery
+import io.github.laozhudu.linkplay.protocol.session.NasPathStep
+import io.github.laozhudu.linkplay.protocol.session.NasServerRef
+import io.github.laozhudu.linkplay.protocol.session.NasSession
+import io.github.laozhudu.linkplay.protocol.session.PlaybackSession
+import io.github.laozhudu.linkplay.console.session.SessionStore
 import io.github.laozhudu.linkplay.protocol.queue.QueueItem
 import io.github.laozhudu.linkplay.protocol.queue.QueueTarget
 import io.github.laozhudu.linkplay.protocol.upnp.BrowseEntry
@@ -54,6 +59,12 @@ data class NasUiState(
     val controlLost: Boolean = false,
     /** 正在重启音箱并等待恢复。 */
     val healing: Boolean = false,
+    /** 上次连过的 NAS（有就展示快捷入口，省掉每次搜索）。 */
+    val rememberedServer: NasServerRef? = null,
+    /** 上次停在哪一层（用于说明「继续上次」会跳到哪）。 */
+    val rememberedPath: List<NasPathStep> = emptyList(),
+    /** 上次没播完的队列（断点续播）。 */
+    val resumable: PlaybackSession? = null,
 )
 
 /**
@@ -71,12 +82,37 @@ class NasViewModel(
     app: Application,
     private val rendererIp: String,
     private val rendererLocation: String?,
+    /** 设备 UUID。DHCP 换 IP 后记忆仍能对上，所以记忆的键是它而不是 IP。 */
+    private val deviceUuid: String?,
 ) : AndroidViewModel(app) {
 
     private val _state = MutableStateFlow(NasUiState())
     val state: StateFlow<NasUiState> = _state.asStateFlow()
 
     private val discovery = SsdpDiscovery(timeoutMs = 3_000)
+    private val sessions = SessionStore.of(app)
+    /** 记忆的键：优先设备 UUID；拿不到（比如手动 IP 且未连上）就退回 IP。 */
+    private val memoryKey: String = deviceUuid?.takeIf { it.isNotBlank() } ?: "ip:$rendererIp"
+
+    init {
+        restoreMemory()
+    }
+
+    /** 读出「上次连的 NAS / 停在哪层 / 没播完的队列」，只读一次，不自动连接（避免一进页面就发请求）。 */
+    private fun restoreMemory() {
+        val nas = runCatching { sessions.loadNasSession(memoryKey) }.getOrNull()
+        val playback = runCatching { sessions.loadPlayback(memoryKey) }.getOrNull()
+        _state.update {
+            it.copy(
+                rememberedServer = nas?.server,
+                rememberedPath = nas?.path.orEmpty(),
+                resumable = playback,
+                manualHost = it.manualHost.ifBlank { nas?.server?.label.orEmpty() },
+            )
+        }
+        if (nas != null) log("上次用的 NAS：${nas.server.friendlyName ?: nas.server.label}")
+        playback?.let { log("有未播完的队列：${it.remaining.size} 首，可从第 ${it.index + 1} 首继续") }
+    }
     private var contentDir: ContentDirectoryClient? = null
     private var queueJob: Job? = null
     @Volatile
@@ -95,6 +131,56 @@ class NasViewModel(
     }
 
     fun setManualHost(v: String) = _state.update { it.copy(manualHost = v) }
+
+    /** 待重放的路径（「继续上次」用）。连上服务器后逐层走完就清空。 */
+    private var pendingPath: List<NasPathStep> = emptyList()
+
+    /** 从 LOCATION 里拆出 host/port。DLNA 的 LOCATION 一定是完整 URL。 */
+    private fun serverRefOf(location: String, friendlyName: String?): NasServerRef? = runCatching {
+        val uri = java.net.URI(location)
+        val host = uri.host ?: return@runCatching null
+        val port = if (uri.port > 0) uri.port else 80
+        NasServerRef(host, port, friendlyName)
+    }.getOrNull()
+
+    private fun savePlayback(items: List<QueueItem>, index: Int, loopMode: Int) {
+        runCatching {
+            sessions.savePlayback(
+                memoryKey,
+                PlaybackSession(
+                    deviceUuid = deviceUuid ?: rendererIp,
+                    deviceIp = rendererIp,
+                    items = items,
+                    index = index.coerceIn(0, (items.size - 1).coerceAtLeast(0)),
+                    loopMode = loopMode,
+                ),
+            )
+        }
+    }
+
+    private fun remember(server: NasServerRef?, path: List<NavStep>) {
+        if (server == null) return
+        runCatching {
+            sessions.saveNasSession(memoryKey, NasSession(server, path.map { NasPathStep(it.objectId, it.title) }))
+        }
+    }
+
+    /**
+     * 「继续上次」：先连上次那台 NAS，再逐层走到上次停的目录。
+     *
+     * 为什么逐层重放而不是直接 browse 目标 objectId：DLNA 的 objectId 在不同服务器实现里
+     * 语义不同（fnOS 是 `1$4` 这种组合键），直接跳可以工作但一旦 objectId 过期就白屏；
+     * 逐层走失败时能停在上一个有效层级，用户也看得懂自己在哪。
+     */
+    fun resumeRemembered() {
+        val server = _state.value.rememberedServer
+        if (server == null) {
+            _state.update { it.copy(error = "没有可恢复的记录，先搜索或手填 NAS 地址") }
+            return
+        }
+        pendingPath = _state.value.rememberedPath
+        connect(server.rootDescUrl)
+    }
 
     /** 手动连接：组播不通时直接给 IP:端口。 */
     fun connectManual() {
@@ -118,15 +204,34 @@ class NasViewModel(
                 val url = ContentDirectoryClient.controlUrlOf(desc)
                     ?: throw IllegalStateException("该服务器没有 ContentDirectory 服务")
                 contentDir = ContentDirectoryClient(url)
+                val server = serverRefOf(location, desc.friendlyName)
                 _state.update {
                     it.copy(
                         loadingDir = false,
                         connectedServer = desc.friendlyName ?: location,
                         path = emptyList(),
+                        rememberedServer = server,
                     )
                 }
                 log("已连接 ${desc.friendlyName ?: location}")
-                openDir(ContentDirectory.ROOT_ID, desc.friendlyName ?: "根目录", push = false)
+                browseInto(ContentDirectory.ROOT_ID, desc.friendlyName ?: "根目录", push = false)
+
+                // 「继续上次」：连上之后逐层重放到上次停的那一层。
+                // 中途某层打不开就停在上一层，并说明原因——比直接报错白屏有用。
+                val target = pendingPath
+                pendingPath = emptyList()
+                if (target.isNotEmpty()) {
+                    log("正在回到上次的目录（${target.size} 层）…")
+                    for (step in target) {
+                        val ok = browseInto(step.objectId, step.title, push = true)
+                        if (!ok) {
+                            log("「${step.title}」打不开了（可能曲库重建），停在上层")
+                            break
+                        }
+                    }
+                } else {
+                    remember(server, emptyList())
+                }
             } catch (t: Throwable) {
                 _state.update { it.copy(loadingDir = false, error = t.message) }
             }
@@ -134,24 +239,37 @@ class NasViewModel(
     }
 
     fun openDir(objectId: String, title: String, push: Boolean = true) {
-        val client = contentDir ?: return
+        viewModelScope.launch { browseInto(objectId, title, push) }
+    }
+
+    /**
+     * 浏览一层并把结果写进状态。返回是否成功——「继续上次」需要知道哪一层断了。
+     *
+     * 抽成 suspend 而不是 fire-and-forget：重放路径必须按顺序、且失败要能停。
+     */
+    private suspend fun browseInto(objectId: String, title: String, push: Boolean): Boolean {
+        val client = contentDir ?: return false
         _state.update { it.copy(loadingDir = true, error = null) }
-        viewModelScope.launch {
-            val result = runCatching { withContext(Dispatchers.IO) { client.browse(objectId, 0, 300) } }
-            result.onSuccess { r ->
-                _state.update { cur ->
-                    cur.copy(
-                        loadingDir = false,
-                        entries = r.entries,
-                        selected = emptySet(),
-                        path = if (push) cur.path + NavStep(objectId, title) else cur.path,
-                    )
-                }
-                log("${r.entries.size} 项 / 共 ${r.totalMatches} 项")
-            }.onFailure { t ->
-                _state.update { it.copy(loadingDir = false, error = t.message) }
+        return runCatching {
+            val r = withContext(Dispatchers.IO) { client.browse(objectId, 0, 300) }
+            _state.update { cur ->
+                cur.copy(
+                    loadingDir = false,
+                    entries = r.entries,
+                    selected = emptySet(),
+                    path = if (push) cur.path + NavStep(objectId, title) else cur.path,
+                )
             }
-        }
+            log("${r.entries.size} 项 / 共 ${r.totalMatches} 项")
+            // 只在「往下走」时记路径：返回上级不该覆盖成更浅的位置，否则重进 App 停在浅层
+            if (push) {
+                val cur = _state.value
+                remember(cur.rememberedServer, cur.path)
+            }
+            true
+        }.onFailure { t ->
+            _state.update { it.copy(loadingDir = false, error = t.message) }
+        }.isSuccess
     }
 
     /** 返回上一级。 */
@@ -205,11 +323,42 @@ class NasViewModel(
             _state.update { it.copy(error = "队列为空，先在目录里选曲并「加入队列」") }
             return
         }
+        pushQueue(items.map(::toQueueItem))
+    }
+
+    /** 「继续上次播放」：从上次断掉的那一首接着推。 */
+    fun resumePlayback() {
+        val saved = _state.value.resumable
+        if (saved == null) {
+            _state.update { it.copy(error = "没有可续播的队列") }
+            return
+        }
+        if (queueJob?.isActive == true) return
+        log("续播：从第 ${saved.index + 1} 首开始，共 ${saved.remaining.size} 首")
+        pushQueue(saved.remaining)
+    }
+
+    private fun toQueueItem(e: BrowseEntry) = QueueItem(
+        url = e.url!!,
+        title = e.title,
+        artist = e.artist,
+        album = e.album,
+        durationSec = e.durationSec,
+        mimeType = mimeOf(e.protocolInfo),
+    )
+
+    private fun pushQueue(items: List<QueueItem>) {
+        if (items.isEmpty()) {
+            _state.update { it.copy(error = "没有可播放的曲目") }
+            return
+        }
         if (queueJob?.isActive == true) return
 
         stopRequested = false
         _state.update { it.copy(playing = true, error = null, playedCount = 0) }
         log("开始推送 ${items.size} 首到 $rendererIp")
+        // 先落一份快照：即使这一刻直接杀进程，重启后也知道该从哪首继续
+        savePlayback(items, 0, _state.value.loopMode)
 
         queueJob = viewModelScope.launch {
             try {
@@ -229,6 +378,8 @@ class NasViewModel(
                                 client.setAvTransportUri(item.url, item.title, item.mimeType)
                                 client.play()
                             }
+                            // 记录当前是第几首，断点续播靠它
+                            savePlayback(items, items.indexOfFirst { it.url == item.url }.coerceAtLeast(0), _state.value.loopMode)
                             _state.update { s ->
                                 s.copy(nowPlaying = item.title, playedCount = s.playedCount + 1)
                             }
@@ -249,24 +400,17 @@ class NasViewModel(
                 )
                 queue.loopMode = _state.value.loopMode
                 val played = withContext(Dispatchers.IO) {
-                    queue.run(
-                        items = items.map {
-                            QueueItem(
-                                url = it.url!!,
-                                title = it.title,
-                                artist = it.artist,
-                                album = it.album,
-                                durationSec = it.durationSec,
-                                mimeType = mimeOf(it.protocolInfo),
-                            )
-                        },
-                        shouldStop = { stopRequested },
-                    )
+                    queue.run(items = items, shouldStop = { stopRequested })
                 }
                 val expected = items.size
                 // 中途停止是用户意图，不算故障；提前结束才说明控制面掉了
                 val dropped = !stopRequested && played < expected
                 _state.update { it.copy(playing = false, controlLost = dropped) }
+                if (!dropped) {
+                    // 正常播完就把快照清掉，否则下次进页面还会提示「继续上次」
+                    runCatching { sessions.clearPlayback(memoryKey) }
+                    _state.update { it.copy(resumable = null) }
+                }
                 if (dropped) {
                     log("提前中断：只播了 $played/$expected 首 —— 音箱的 UPnP 控制口(49152)掉线了")
                     log("httpapi 仍可用，说明设备在线；可点「重启音箱」恢复（实测约 40 秒）")

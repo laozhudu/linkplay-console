@@ -25,6 +25,8 @@ data class ConsoleUiState(
     val selectedIp: String? = null,
     /** 该设备的 UPnP 描述地址（SSDP 的 LOCATION）；手动输入 IP 时为 null。 */
     val selectedLocation: String? = null,
+    /** 设备 UUID（来自 `getStatusEx`）。会话记忆按它做键，所以换 IP 也不会丢。 */
+    val selectedUuid: String? = null,
     val status: LinkPlayStatus? = null,
     val slaves: List<SlaveDevice> = emptyList(),
     val log: List<String> = emptyList(),
@@ -88,7 +90,8 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         run("getStatusEx") {
             val status = client.status(ip)
             val slaves = runCatching { client.slaveList(ip) }.getOrDefault(emptyList())
-            _state.update { it.copy(status = status, slaves = slaves) }
+            // UUID 在这里落定：SSDP 只给 IP/LOCATION，UUID 必须问设备要
+            _state.update { it.copy(status = status, slaves = slaves, selectedUuid = status.uuid) }
         }
     }
 

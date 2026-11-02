@@ -49,12 +49,14 @@ import io.github.laozhudu.linkplay.protocol.queue.ClientSideQueue
 fun NasScreen(
     deviceIp: String,
     deviceLocation: String?,
+    /** 设备 UUID：记忆（上次的 NAS、断点续播）按它存，换 IP 也不丢。 */
+    deviceUuid: String?,
     onBack: () -> Unit,
 ) {
     val app = LocalContext.current.applicationContext as android.app.Application
     val vm: NasViewModel = viewModel(
         key = "nas-$deviceIp",
-        factory = viewModelFactory { initializer { NasViewModel(app, deviceIp, deviceLocation) } },
+        factory = viewModelFactory { initializer { NasViewModel(app, deviceIp, deviceLocation, deviceUuid) } },
     )
     val state by vm.state.collectAsState()
 
@@ -77,6 +79,29 @@ fun NasScreen(
 
         // ---- 连接区 ----
         if (state.connectedServer == null) {
+            // 上次连过的 NAS：一步回到上次的库和目录，省掉重复搜索
+            state.rememberedServer?.let { server ->
+                Card(
+                    onClick = vm::resumeRemembered,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                ) {
+                    Column(Modifier.padding(10.dp)) {
+                        Text(
+                            "上次：${server.friendlyName ?: server.label}",
+                            fontWeight = FontWeight.Medium,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Text(
+                            if (state.rememberedPath.isEmpty()) server.label + " · 根目录"
+                            else server.label + " · " + state.rememberedPath.joinToString(" / ") { it.title },
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                        Text("点一下直接回去", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+            }
             Button(
                 onClick = vm::scan,
                 enabled = !state.scanning,
@@ -199,6 +224,27 @@ fun NasScreen(
             }
         }
         Spacer(Modifier.height(6.dp))
+        // 上次没播完的队列：锁屏被系统杀掉、或切走太久丢了进度时，从断点接着播
+        state.resumable?.let { saved ->
+            if (!state.playing) {
+                Card(
+                    onClick = vm::resumePlayback,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+                ) {
+                    Column(Modifier.padding(10.dp)) {
+                        Text("继续上次播放", fontWeight = FontWeight.Medium, style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            "从第 ${saved.index + 1} 首开始，剩余 ${saved.remaining.size} 首：" +
+                                (saved.remaining.firstOrNull()?.title ?: ""),
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+            }
+        }
+
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
                 onClick = vm::startQueue,
