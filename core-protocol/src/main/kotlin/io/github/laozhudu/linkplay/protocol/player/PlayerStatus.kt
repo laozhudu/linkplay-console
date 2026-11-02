@@ -41,6 +41,14 @@ data class PlayerStatus(
     val mute: Boolean,
     val playListCount: Int?,
     val playListCurrent: Int?,
+    /** 曲名。本机实测是 **HEX 编码**（`556E6B6E6F776E` = "Unknown"），空值给 null。 */
+    val title: String? = null,
+    val artist: String? = null,
+    val album: String? = null,
+    /** 当前播放地址，同样是 HEX（例如投流进去的 `http://…mp3`）。 */
+    val uri: String? = null,
+    /** 闹钟标志位。设备用 `alarmflag` 表示这条播放是否由闹钟触发。 */
+    val alarmFlag: Int? = null,
 ) {
     val positionSec: Long get() = positionMs / 1000
     val durationSec: Long get() = durationMs / 1000
@@ -74,6 +82,19 @@ data class PlayerStatus(
             else -> "未知($mode)"
         }
 
+        /**
+         * 设备把文本字段写成 HEX（与 SSID/密码同一套编码）。
+         * 解析失败或为空返回 null —— 一旦这里抛异常，整条状态链都读不到。
+         */
+        internal fun hexText(value: String?): String? {
+            val v = value?.trim().orEmpty()
+            if (v.isEmpty() || v.length % 2 != 0) return null
+            return io.github.laozhudu.linkplay.protocol.HexCodec.decodeOrNull(v)
+                ?.toString(Charsets.UTF_8)
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() && it.all { ch -> !ch.isISOControl() } }
+        }
+
         fun parse(json: String): PlayerStatus {
             val root = Json.parse(json) as? JsonValue.Obj ?: throw IllegalArgumentException("getPlayerStatus 返回非 JSON 对象")
             fun int(key: String): Int? = root.string(key)?.trim()?.toIntOrNull() ?: root.int(key)
@@ -91,6 +112,11 @@ data class PlayerStatus(
                 mute = (int("mute") ?: 0) != 0,
                 playListCount = int("plicount"),
                 playListCurrent = int("plicurr"),
+                title = hexText(root.string("Title")),
+                artist = hexText(root.string("Artist")),
+                album = hexText(root.string("Album")),
+                uri = hexText(root.string("uri")) ?: hexText(root.string("iuri")),
+                alarmFlag = int("alarmflag"),
             )
         }
     }
