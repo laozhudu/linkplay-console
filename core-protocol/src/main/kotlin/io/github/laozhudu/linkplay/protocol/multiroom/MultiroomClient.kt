@@ -109,6 +109,9 @@ class MultiroomClient(
         channel: Int = 0,
         password: String = "",
     ): String {
+        // 忠实照抄原厂：`auth` 只看「密码串是否非空」，不看它是真密码还是脏数据。
+        // 真机教训 —— 我曾按 securemode=0 自作聪明改用 OPEN，命令照样回 OK，但从机根本不来；
+        // 原厂走的是 WPA2PSK 分支，用它就能组上。宁可照抄，不要"优化"协议。
         val secured = password.isNotEmpty()
         val cmd = buildString {
             append("multiroom:ConnnectAP:").append(masterIp)
@@ -145,21 +148,28 @@ class MultiroomClient(
         onTick: (Long) -> Unit = {},
         shouldStop: () -> Boolean = { false },
     ): Boolean {
-        // 没指定信道就用主机自报的 WifiChannel —— AP 与 STA 同信道，这是唯一可靠的来源
+        // 信道：AP 与 STA 同信道，用主机自报的 WifiChannel（传 0 让固件自选实测不行）
         val realChannel = if (channel > 0) channel else (readApInfo(masterIp)?.channel ?: 0)
-        runCatching { joinGroup(masterIp, masterSsid, slaveIp, realChannel, password) }
+        // 密码：留空则照原厂从 getNetwork 取整段返回值（见 readJoinPassword 的说明）
+        val realPassword = password.ifBlank { readJoinPassword(masterIp) }
+        runCatching { joinGroup(masterIp, masterSsid, slaveIp, realChannel, realPassword) }
+        // 从机会换 IP：接入主机热点后它落在主机的 AP 网段（真机实测 192.168.99.153 → 10.10.10.92），
+        // 所以「按 IP 找自己刚发命令的那台」永远找不到。正确判据是**列表里多了一台新的**。
+        val before = slaves(masterIp).map { identity(it) }.toSet()
         val start = now()
         while (now() - start < timeoutMs) {
             sleep(intervalMs)
             if (shouldStop()) return false
             onTick((now() - start) / 1000)
-            // 从机可能换 IP（接入主机热点后不在原网段），所以按 uuid 或 IP 都算数
-            if (slaves(masterIp).any { it.ip == slaveIp || it.uuid?.contains(slaveIp) == true }) {
-                return true
-            }
+            val added = slaves(masterIp).filter { identity(it) !in before }
+            if (added.isNotEmpty()) return true
         }
         return false
     }
+
+    /** 从机身份：uuid 归一化后优先，没有 uuid 才退回 IP（IP 会变，不能当主键）。 */
+    private fun identity(slave: SlaveInfo): String =
+        (slave.uuid ?: "").removePrefix("uuid:").lowercase().ifBlank { slave.ip }
 
     /** 读某台设备（通常是主机）已知的从机。设备不认识从机时返回空列表。 */
     fun slaves(masterIp: String): List<SlaveInfo> {
@@ -168,11 +178,9 @@ class MultiroomClient(
     }
 
     /**
-     * 读主机自身热点的 [ApInfo]。
+     * 读主机自身热点的 [ApInfo]（ssid / 信道 / 加密方式）。
      *
-     * 只读 `getStatusEx`。注意不能用 `getNetwork` —— 反编译里原厂 App 用 `getNetwork`
-     * 拿热点密码，但这批固件 `getNetwork` 只返回 `{"securemode":"0",}`，
-     * 原厂于是把这段 JSON 当密码、auth 变成 WPA2PSK，**必然连不上**（真机已验证）。
+     * 只读 `getStatusEx`，**不含密码** —— 密码的真实来源见 [readJoinPassword]。
      */
     fun readApInfo(masterIp: String): ApInfo? {
         val raw = runCatching { http.send(masterIp, "getStatusEx") }.getOrNull() ?: return null
@@ -183,6 +191,29 @@ class MultiroomClient(
             channel = root.string("WifiChannel")?.toIntOrNull() ?: root.int("WifiChannel") ?: 0,
             securemode = root.string("securemode")?.toIntOrNull() ?: 0,
         )
+    }
+
+    /**
+     * 读主机热点密码 —— 就照原厂的做法，把 `getNetwork` 的**整段返回值**当密码。
+     *
+     * 听起来很脏，但这正是原厂 `ax.a(String)` 干的事：
+     * ```java
+     * this.f1415a.f.n = str;                       // str = getNetwork 的返回
+     * com.wifiaudio.a.b.a(this.b, this.c, this.f1415a);
+     * ```
+     * 然后 `b.a()` 用 `str.length() != 0 ? "WPA2PSK" : "OPEN"` 决定 auth。
+     *
+     * 这批固件 `getNetwork` 只返回 `{"securemode":"0",}`（不是密码），于是原厂实际发出的是
+     * `auth=WPA2PSK:encry=AES:pwd=<那段 JSON 的 hex>`。**这个"错"的命令能组上**，
+     * 而按 `securemode=0` 推断出的 `auth=OPEN` 组不上 —— 真机两台机器对照验证过。
+     *
+     * 结论：这里不做"美化"，原样返回，让 [joinGroup] 走与原厂完全相同的分支。
+     * 用户在 UI 里手填密码时，会覆盖这里的结果。
+     */
+    fun readJoinPassword(masterIp: String): String {
+        val raw = runCatching { http.send(masterIp, "getNetwork") }.getOrNull() ?: return ""
+        val t = raw.trim()
+        return if (t.startsWith("<ERR") || t == "unknown command") "" else t
     }
 
     fun setSlaveVolume(masterIp: String, slaveIp: String, volume: Int): String =

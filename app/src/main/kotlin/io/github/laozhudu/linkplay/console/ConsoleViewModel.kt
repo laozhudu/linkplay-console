@@ -57,6 +57,15 @@ data class ConsoleUiState(
      * 失败时若只把按钮变回原样，用户会以为「点了一下什么都没发生」。
      */
     val multiroomNote: String? = null,
+    /**
+     * 已加入别的设备的组的音箱：`uuid → 主机显示名`。
+     *
+     * 为什么需要它：入组的从机会被主机拉到主机的 AP 网段（真机实测 `10.10.10.92`），
+     * 从路由器这边**根本连不上**，直接探活必然判"离线"。但它其实正在同步播放，
+     * 报"离线"是撒谎。这里把「它在我某台音箱的组里」这一事实记下来，界面据此显示"同步播放中"。
+     */
+    val groupedUnder: Map<String, String> = emptyMap(),
+
     /** 点了某个从机后要弹的详情框。 */
     val slaveDialog: SlaveDevice? = null,
     /**
@@ -123,7 +132,18 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
             }
-            _state.update { it.copy(online = it.online + result) }
+            // 顺带把「谁在谁的组里」也读出来（从机不可直连，只能由主机转述）
+            val grouped = mutableMapOf<String, String>()
+            for (d in targets) {
+                if (result[d.uuid] != true) continue
+                val slaves = withContext(Dispatchers.IO) {
+                    runCatching { MultiroomClient(client).slaves(d.ip) }.getOrDefault(emptyList())
+                }
+                slaves.forEach { sl ->
+                    sl.uuid?.removePrefix("uuid:")?.lowercase()?.let { grouped[it] = d.title }
+                }
+            }
+            _state.update { it.copy(online = it.online + result, groupedUnder = grouped) }
         }
     }
 
