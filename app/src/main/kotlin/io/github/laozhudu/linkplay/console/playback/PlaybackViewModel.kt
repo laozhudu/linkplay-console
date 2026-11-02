@@ -8,6 +8,7 @@ import io.github.laozhudu.linkplay.protocol.media.RelayMediaServer
 import io.github.laozhudu.linkplay.protocol.media.RelayTarget
 import io.github.laozhudu.linkplay.protocol.player.LoopMode
 import io.github.laozhudu.linkplay.protocol.queue.QueueItem
+import io.github.laozhudu.linkplay.protocol.metadata.TagFetcher
 import io.github.laozhudu.linkplay.protocol.player.PlaybackEngine
 import io.github.laozhudu.linkplay.protocol.player.PlaybackSnapshot
 import io.github.laozhudu.linkplay.protocol.player.UpnpPlaybackEngine
@@ -49,6 +50,18 @@ data class PlaybackUiState(
     /** 该链接是否需要我们代补 Referer/Cookie（防盗链）。 */
     val castNeedsHeaders: Boolean = false,
     val castReferer: String = "",
+    /**
+     * 从**音频文件里内嵌的标签**读到的封面（原始字节）。
+     *
+     * 为什么要这条路径：DLNA 的 `albumArtURI` 不是所有服务器都给
+     * （本项目的 fnOS/MiniDLNA 就不给），但文件自己带着 APIC / covr。
+     * 实测 NAS 上的 m4a 能读出 59KB 的 JPEG。
+     */
+    val embeddedCover: ByteArray? = null,
+    /** 内嵌歌词（ID3 的 USLT / MP4 的 ©lyr / FLAC 的 LYRICS）。没有就为 null，界面不显示假歌词。 */
+    val lyrics: String? = null,
+    /** 已尝试过读标签的地址，避免重复拉字节。 */
+    val tagsLoadedFor: String? = null,
     val error: String? = null,
     val log: List<String> = emptyList(),
 ) {
@@ -170,6 +183,8 @@ class PlaybackViewModel(
         if (!silent) _state.update { it.copy(busy = true, error = null) }
         try {
             val snapshot: PlaybackSnapshot = withContext(Dispatchers.IO) { e.snapshot() }
+            // 设备侧的真实音量同步给全站（首页多房间卡片也订阅它）
+            VolumeBus.publish(deviceIp, snapshot.volume, snapshot.mute)
             _state.update {
                 it.copy(
                     busy = false,
@@ -320,6 +335,8 @@ class PlaybackViewModel(
     fun setVolumeLive(value: Int) {
         val v = value.coerceIn(0, 100)
         _state.update { it.copy(volume = v) }
+        // 立刻广播给全站：首页的音量条同一帧就跟上，不用等设备回读
+        VolumeBus.publishVolume(deviceIp, v)
         volumeChannel.trySend(v)
     }
 
@@ -341,9 +358,44 @@ class PlaybackViewModel(
         act("播放第 ${index + 1} 首") { engine!!.playUrl(item.url, item.title) }
     }
 
+    /**
+     * 读这首曲子文件里内嵌的封面与歌词。
+     *
+     * 只在「还没有封面」或「还没试过这个地址」时才发请求：
+     * 用 HTTP Range 读开头 256KB（ID3/FLAC），若是 MP4 再读尾部 1MB（moov 通常在末尾）。
+     * 一首 13MB 的歌总共只取几百 KB，不会拖慢投流。
+     */
+    fun loadEmbeddedTags(url: String?) {
+        if (url.isNullOrBlank()) return
+        val st = _state.value
+        if (st.tagsLoadedFor == url) return
+        _state.update { it.copy(tagsLoadedFor = url) }
+        viewModelScope.launch {
+            val tags = withContext(Dispatchers.IO) {
+                runCatching { TagFetcher.fetch(url) }.getOrNull()
+            }
+            if (tags == null) return@launch
+            _state.update {
+                it.copy(
+                    embeddedCover = tags.cover ?: it.embeddedCover,
+                    lyrics = tags.lyrics ?: it.lyrics,
+                    // 设备不回填元数据时，用文件里的标题/歌手补上（比显示 unknown 有信息量）
+                    title = it.title ?: tags.title,
+                    artist = it.artist ?: tags.artist,
+                )
+            }
+            log("内嵌标签：封面 ${tags.cover?.size ?: 0}B，歌词 ${tags.lyrics?.length ?: 0} 字")
+        }
+    }
+
     /** 从播放列表里删掉第 [index] 首。 */
     fun removeQueueItem(index: Int) = QueueBus.removeAt(index)
-    fun toggleMute() = act("静音切换") { engine!!.setMute(!_state.value.mute) }
+    fun toggleMute() {
+        val next = !_state.value.mute
+        _state.update { it.copy(mute = next) }
+        VolumeBus.publish(deviceIp, _state.value.volume, next)
+        act("静音切换") { engine!!.setMute(next) }
+    }
 
     private fun act(label: String, block: () -> Unit) {
         if (_state.value.busy || engine == null) return
@@ -362,6 +414,11 @@ class PlaybackViewModel(
     }
 
     private fun log(line: String) = _state.update { it.copy(log = (it.log + line).takeLast(40)) }
+
+    /** 换曲时清掉上一首的封面/歌词，避免新歌配着旧封面。 */
+    fun clearEmbeddedTags() = _state.update {
+        it.copy(embeddedCover = null, lyrics = null, tagsLoadedFor = null)
+    }
 
     init {
         // 音量合并通道：只保留最新值，每 80ms 最多下发一次

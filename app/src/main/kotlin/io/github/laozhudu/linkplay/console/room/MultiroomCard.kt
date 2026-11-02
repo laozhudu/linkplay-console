@@ -20,6 +20,7 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -70,7 +71,12 @@ fun MultiroomCard(
     vm: ConsoleViewModel,
     onOpenDevice: (SavedDevice) -> Unit,
 ) {
-    val members = state.groupMembers
+    // 音量以全站总线为准：播放页刚拖过的值要立刻反映到这里
+    val bus by io.github.laozhudu.linkplay.console.playback.VolumeBus.state.collectAsState()
+    val members = state.groupMembers.map { m ->
+        // 主机音量跟着总线走；从机音量只能由主机回报（直连不可达）
+        if (m.isMaster) bus[m.ip]?.let { b -> m.copy(volume = b.volume) } ?: m else m
+    }
     val grouped = members.size > 1
     var picker by remember { mutableStateOf(false) }
     val outsiders = state.saved.filter { saved -> members.none { it.ip == saved.ip } }

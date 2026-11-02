@@ -12,17 +12,15 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
@@ -53,6 +51,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -60,6 +60,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.graphics.BitmapFactory
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
@@ -145,6 +146,19 @@ fun PlayerScreen(
     val shownVolume = volDraft ?: (state.volume.toFloat() / 100f)
     val art = state.albumArtUrl?.takeIf { it.isNotBlank() }
         ?: queue.current?.albumArtUrl?.takeIf { it.isNotBlank() }
+    // 服务器不给封面时，用文件里内嵌的（实测 NAS 的 m4a 能读出 59KB JPEG）
+    val embeddedCover = remember(state.embeddedCover) {
+        state.embeddedCover?.let {
+            runCatching { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() }.getOrNull()
+        }
+    }
+    // 换曲后重新读标签（内嵌封面/歌词是跟着文件走的）
+    LaunchedEffect(queue.current?.url) {
+        queue.current?.url?.let {
+            vm.clearEmbeddedTags()
+            vm.loadEmbeddedTags(it)
+        }
+    }
     val title = state.title ?: queue.current?.title
     val artist = state.artist ?: queue.current?.artist
 
@@ -173,7 +187,7 @@ fun PlayerScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .windowInsetsPadding(WindowInsets.systemBars)
+                // 系统栏内边距由外层 Scaffold 统一提供，这里不再重复加（否则顶部会多出一条空白）
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = Spacing.xl),
         ) {
@@ -236,6 +250,13 @@ fun PlayerScreen(
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize(),
                     )
+                } else if (embeddedCover != null) {
+                    Image(
+                        bitmap = embeddedCover,
+                        contentDescription = "内嵌封面",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
                 } else {
                     Text(
                         text = (title ?: "?").take(1).uppercase(),
@@ -269,6 +290,40 @@ fun PlayerScreen(
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
             )
+
+            // ---------- 歌词（文件里真的带才出现，不放假按钮）----------
+            state.lyrics?.takeIf { it.isNotBlank() }?.let { lyrics ->
+                Spacer(Modifier.height(Spacing.sm))
+                var showLyrics by remember { mutableStateOf(false) }
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(AppShapesExpressive.pill)
+                        .background(Color.White.copy(alpha = 0.08f))
+                        .clickable { showLyrics = !showLyrics }
+                        .padding(vertical = Spacing.sm, horizontal = Spacing.md),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        if (showLyrics) "收起歌词" else "查看歌词",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = extras.onBackdrop,
+                    )
+                }
+                if (showLyrics) {
+                    Spacer(Modifier.height(Spacing.xs))
+                    Text(
+                        lyrics,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = extras.onBackdropMuted,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 220.dp)
+                            .verticalScroll(rememberScrollState()),
+                    )
+                }
+            }
 
             // ---------- 进度 ----------
             Spacer(Modifier.height(Spacing.md))

@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -120,8 +121,17 @@ fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
 
     val currentSub = sub
     if (currentSub != null) {
-        // 二级页全屏，不带底部导航：避免「在一个页面里还显示别的 Tab」的割裂感
-        when (currentSub) {
+        // 二级页全屏，不带底部导航：避免「在一个页面里还显示别的 Tab」的割裂感。
+        //
+        // 必须在这里统一加系统栏内边距：这些页面走的是 Scaffold 之外的早退分支，
+        // 原来完全不避让状态栏，于是「顶部内容贴着屏幕边缘」—— 用户反馈的正是这个。
+        // 放在这层的好处是每个页面自己不用记，也不会出现某个页面加了、某个没加。
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .windowInsetsPadding(WindowInsets.systemBars),
+        ) {
+            when (currentSub) {
             SubPage.Nas -> NasScreen(
                 deviceIp = state.selectedIp.orEmpty(),
                 deviceLocation = state.selectedLocation,
@@ -152,6 +162,7 @@ fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
                 onDone = { sub = null; tab = Tab.Devices },
                 onBack = { sub = null },
             )
+            }
         }
         return
     }
