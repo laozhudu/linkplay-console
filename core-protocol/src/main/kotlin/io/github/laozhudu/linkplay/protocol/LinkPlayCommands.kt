@@ -126,6 +126,71 @@ object LinkPlayCommands {
 
     fun firmwareBurnPercent(): String = "getMvRomBurnPrecent"
 
+
+    // ---- 播放控制（WiiM 官方 HTTP API v1.2 §2.3；老固件可能不支持，需探测） ----
+
+    fun getPlayerStatus(): String = "getPlayerStatus"
+
+    fun getMetaInfo(): String = "getMetaInfo"
+
+    /** 直接播一个音频流地址；官方说明「响应固定为 OK」。 */
+    fun playUrl(url: String): String = "setPlayerCmd:play:$url"
+
+    /** 播 m3u/asx 播放列表，index 为起始序号。 */
+    fun playPlaylist(url: String, index: Int = 0): String = "setPlayerCmd:playlist:$url:$index"
+
+    fun pause(): String = "setPlayerCmd:pause"
+
+    fun resume(): String = "setPlayerCmd:resume"
+
+    /** 当前在播就暂停、暂停就继续。 */
+    fun togglePause(): String = "setPlayerCmd:onepause"
+
+    fun stopPlayer(): String = "setPlayerCmd:stop"
+
+    fun nextTrack(): String = "setPlayerCmd:next"
+
+    fun previousTrack(): String = "setPlayerCmd:prev"
+
+    /** 位置单位是**秒**（官方文档明确），不是毫秒。 */
+    fun seekPlayer(seconds: Long): String = "setPlayerCmd:seek:${seconds.coerceAtLeast(0)}"
+
+    fun playerVolume(volume: Int): String = "setPlayerCmd:vol:${volume.coerceIn(0, 100)}"
+
+    fun playerMute(mute: Boolean): String = "setPlayerCmd:mute:${if (mute) 1 else 0}"
+
+    /** 0 顺序不循环 / 1 单曲循环 / 2 随机循环 / -1 顺序循环。 */
+    fun loopMode(mode: Int): String = "setPlayerCmd:loopmode:$mode"
+
+    // ---- 预设键（官方 §2.8） ----
+
+    fun presetInfo(): String = "getPresetInfo"
+
+    // ---- 设备控制（官方 §2.5 / §2.6） ----
+
+    fun reboot(): String = "reboot"
+
+    /** sec=0 立即关机，-1 取消关机定时。 */
+    fun shutdown(seconds: Int): String = "setShutdown:$seconds"
+
+    fun getShutdown(): String = "getShutdown"
+
+    fun timeSync(yyyymmddhhmmss: String): String = "timeSync:$yyyymmddhhmmss"
+
+    fun alarmStop(): String = "alarmStop"
+
+    // ---- EQ（官方 §2.4） ----
+
+    fun eqOn(): String = "EQOn"
+
+    fun eqOff(): String = "EQOff"
+
+    fun eqStatus(): String = "EQGetStat"
+
+    fun eqList(): String = "EQGetList"
+
+    fun eqLoad(name: String): String = "EQLoad:$name"
+
     fun urlFor(deviceIp: String, command: String): String =
         "http://$deviceIp$HTTP_API_PATH$command"
 

@@ -2,7 +2,11 @@ package io.github.laozhudu.linkplay.console.playback
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import io.github.laozhudu.linkplay.protocol.upnp.DeviceDescription
+import io.github.laozhudu.linkplay.protocol.DeviceHttpClient
+import io.github.laozhudu.linkplay.protocol.player.HttpApiPlaybackEngine
+import io.github.laozhudu.linkplay.protocol.player.PlaybackEngine
+import io.github.laozhudu.linkplay.protocol.player.PlaybackSnapshot
+import io.github.laozhudu.linkplay.protocol.player.UpnpPlaybackEngine
 import io.github.laozhudu.linkplay.protocol.upnp.PositionInfo
 import io.github.laozhudu.linkplay.protocol.upnp.TransportState
 import io.github.laozhudu.linkplay.protocol.upnp.UpnpRendererClient
@@ -19,12 +23,16 @@ import kotlinx.coroutines.withContext
 data class PlaybackUiState(
     val preparing: Boolean = true,
     val ready: Boolean = false,
-    /** 设备没给 UPnP 描述地址时的说明（手动输入 IP 的路径会走到这里）。 */
+    /** 两条通道都不可用时的说明（不是所有固件都支持远程控制）。 */
     val unavailableReason: String? = null,
+    /** 实际选中的通道：`UPnP` 或 `HTTP API`。 */
+    val channel: String? = null,
     val friendlyName: String? = null,
+    val sourceLabel: String? = null,
     val state: TransportState = TransportState.UNKNOWN,
     val title: String? = null,
     val artist: String? = null,
+    val albumArtUrl: String? = null,
     val positionSec: Long = 0,
     val durationSec: Long = 0,
     val volume: Int = 0,
@@ -39,10 +47,13 @@ data class PlaybackUiState(
 }
 
 /**
- * UPnP 播放控制。
+ * 播放控制。
  *
- * 与 httpapi 那套分开的原因：播放/音量只有 UPnP 有（httpapi 里 `setPlayerCmd` 只管输入源）。
- * 轮询而不是 GENA 事件订阅——理由见 `UpnpRendererClient` 的类注释。
+ * 通道选择顺序：**UPnP 优先，httpapi 兜底**。
+ * - UPnP 状态字段规范、能投任意 URL，是首选；
+ * - 有些老固件/精简固件没开 DLNA 渲染器，但支持 WiiM 官方的 `setPlayerCmd:*`，
+ *   这时退到 httpapi（能力略窄：没有播放列表元数据，直播流无进度）。
+ * 两条都探不通时明确告知用户，而不是给一个点不动的界面。
  */
 class PlaybackViewModel(
     private val deviceIp: String,
@@ -52,7 +63,7 @@ class PlaybackViewModel(
     private val _state = MutableStateFlow(PlaybackUiState())
     val state: StateFlow<PlaybackUiState> = _state.asStateFlow()
 
-    private var client: UpnpRendererClient? = null
+    private var engine: PlaybackEngine? = null
     private var polling = false
 
     init {
@@ -60,48 +71,55 @@ class PlaybackViewModel(
     }
 
     private suspend fun prepare() {
-        if (location.isNullOrBlank()) {
-            _state.update {
-                it.copy(
-                    preparing = false,
-                    unavailableReason = "这台设备没有 UPnP 描述地址（LOCATION）。用 SSDP 搜索进入可拿到，" +
-                        "手动输入 IP 时设备不会告知描述文件位置。",
-                )
+        val notes = mutableListOf<String>()
+
+        if (!location.isNullOrBlank()) {
+            try {
+                val description = withContext(Dispatchers.IO) { UpnpRendererClient.describe(location) }
+                if (description.avTransportControlUrl != null) {
+                    engine = withContext(Dispatchers.IO) { UpnpPlaybackEngine(UpnpRendererClient(description)) }
+                    _state.update {
+                        it.copy(
+                            preparing = false,
+                            ready = true,
+                            channel = engine!!.channelName,
+                            friendlyName = description.friendlyName,
+                        )
+                    }
+                    log("通道：UPnP（${description.friendlyName ?: deviceIp}）")
+                    refreshOnce(silent = true)
+                    startPolling()
+                    return
+                }
+                notes += "设备未声明 AVTransport 服务"
+            } catch (t: Throwable) {
+                notes += "读取 UPnP 描述失败（${t.message}）"
             }
+        } else {
+            notes += "没有 UPnP 描述地址（手动输入 IP 时设备不会告知）"
+        }
+
+        // 兜底：httpapi 播放控制
+        val fallback = HttpApiPlaybackEngine(DeviceHttpClient(), deviceIp)
+        val probed = withContext(Dispatchers.IO) { fallback.probe() }
+        if (probed) {
+            engine = fallback
+            _state.update {
+                it.copy(preparing = false, ready = true, channel = fallback.channelName)
+            }
+            log("通道：HTTP API（${notes.joinToString("；")}）")
+            refreshOnce(silent = true)
+            startPolling()
             return
         }
-        try {
-            val description: DeviceDescription = withContext(Dispatchers.IO) {
-                UpnpRendererClient.describe(location)
-            }
-            if (description.avTransportControlUrl == null) {
-                _state.update {
-                    it.copy(
-                        preparing = false,
-                        friendlyName = description.friendlyName,
-                        unavailableReason = "设备未声明 AVTransport 服务（不是 DLNA 渲染器），无法做播放控制。",
-                    )
-                }
-                return
-            }
-            val created = withContext(Dispatchers.IO) { UpnpRendererClient(description) }
-            client = created
-            _state.update {
-                it.copy(
-                    preparing = false,
-                    ready = true,
-                    friendlyName = description.friendlyName,
-                )
-            }
-            refreshOnce()
-            startPolling()
-        } catch (t: Throwable) {
-            _state.update {
-                it.copy(
-                    preparing = false,
-                    unavailableReason = "读取设备描述失败：${t.message}。老固件可能未启用 DLNA 渲染器。",
-                )
-            }
+
+        _state.update {
+            it.copy(
+                preparing = false,
+                unavailableReason = notes.joinToString("；") +
+                    "；httpapi 的 getPlayerStatus 也不可用。" +
+                    "这台设备的固件可能只允许它自己的 App 控制。",
+            )
         }
     }
 
@@ -121,27 +139,22 @@ class PlaybackViewModel(
     }
 
     private suspend fun refreshOnce(silent: Boolean = false) {
-        val c = client ?: return
+        val e = engine ?: return
         if (!silent) _state.update { it.copy(busy = true, error = null) }
         try {
-            val (transport, position, volume) = withContext(Dispatchers.IO) {
-                Triple(
-                    c.transportInfo(),
-                    runCatching { c.positionInfo() }.getOrNull(),
-                    runCatching { c.volume() }.getOrNull(),
-                )
-            }
+            val snapshot: PlaybackSnapshot = withContext(Dispatchers.IO) { e.snapshot() }
             _state.update {
                 it.copy(
                     busy = false,
-                    state = transport.state,
-                    title = position?.trackMetadata?.title
-                        ?: it.title,
-                    artist = position?.trackMetadata?.artist,
-                    positionSec = position?.relTimeSec ?: 0,
-                    durationSec = position?.trackDurationSec ?: 0,
-                    volume = volume?.volume ?: it.volume,
-                    mute = volume?.mute ?: it.mute,
+                    state = snapshot.state,
+                    title = snapshot.title ?: it.title,
+                    artist = snapshot.artist,
+                    albumArtUrl = snapshot.albumArtUrl,
+                    positionSec = snapshot.positionSec,
+                    durationSec = snapshot.durationSec,
+                    volume = snapshot.volume,
+                    mute = snapshot.mute,
+                    sourceLabel = snapshot.sourceLabel,
                     error = null,
                 )
             }
@@ -152,9 +165,8 @@ class PlaybackViewModel(
 
     fun setCastUrl(value: String) = _state.update { it.copy(castUrl = value) }
 
-    /** 把一条媒体 URL 投给音箱：SetAVTransportURI + Play。 */
     fun cast() {
-        val c = client ?: return
+        val e = engine ?: return
         val url = _state.value.castUrl.trim()
         if (url.isEmpty()) {
             _state.update { it.copy(error = "先填一条媒体 URL（音箱会自己去拉流）") }
@@ -164,37 +176,23 @@ class PlaybackViewModel(
             _state.update { it.copy(error = "只支持 http/https 直链；本地文件需要先提供 HTTP 服务") }
             return
         }
-        act("投流") {
-            c.setAvTransportUri(url, title = url.substringAfterLast('/').take(80))
-            c.play()
-            true
-        }
+        act("投流") { e.playUrl(url, url.substringAfterLast('/').take(80)) }
     }
 
-    fun play() = act("播放") { client!!.play(); true }
-    fun pause() = act("暂停") { client!!.pause(); true }
-    fun stop() = act("停止") { client!!.stop(); true }
+    fun play() = act("播放") { engine!!.resume() }
+    fun pause() = act("暂停") { engine!!.pause() }
+    fun stop() = act("停止") { engine!!.stop() }
+    fun seekTo(seconds: Long) = act("跳转") { engine!!.seek(seconds) }
+    fun setVolume(value: Int) = act("音量 ${value.coerceIn(0, 100)}") { engine!!.setVolume(value) }
+    fun toggleMute() = act("静音切换") { engine!!.setMute(!_state.value.mute) }
 
-    fun seekTo(seconds: Long) = act("跳转") { client!!.seek(seconds); true }
-
-    fun setVolume(value: Int) = act("音量 ${value.coerceIn(0, 100)}") {
-        client!!.setVolume(value)
-        true
-    }
-
-    fun toggleMute() = act("静音切换") {
-        client!!.setMute(!_state.value.mute)
-        true
-    }
-
-    private fun act(label: String, block: () -> Boolean) {
-        if (_state.value.busy) return
+    private fun act(label: String, block: () -> Unit) {
+        if (_state.value.busy || engine == null) return
         _state.update { it.copy(busy = true, error = null) }
-        log("$label …")
         viewModelScope.launch {
             val failure = runCatching { withContext(Dispatchers.IO) { block() } }.exceptionOrNull()
             if (failure != null) {
-                _state.update { it.copy(busy = false, error = "${failure.message}") }
+                _state.update { it.copy(busy = false, error = failure.message) }
                 log("$label 失败：${failure.message}")
             } else {
                 _state.update { it.copy(busy = false) }

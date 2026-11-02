@@ -44,7 +44,10 @@ fun PlaybackCard(vm: PlaybackViewModel, modifier: Modifier = Modifier) {
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
     ) {
         Column(Modifier.padding(12.dp)) {
-            Text("播放控制（UPnP）", fontWeight = FontWeight.Medium)
+            Text(
+                "播放控制" + (state.channel?.let { "（$it）" } ?: ""),
+                fontWeight = FontWeight.Medium,
+            )
 
             if (state.preparing) {
                 Spacer(Modifier.height(8.dp))
@@ -68,6 +71,7 @@ fun PlaybackCard(vm: PlaybackViewModel, modifier: Modifier = Modifier) {
             }
             Text(
                 text = "状态 " + stateLabel(state.state) +
+                    (state.sourceLabel?.let { " · $it" } ?: "") +
                     if (state.durationSec > 0) {
                         " · ${PlaybackViewModel.format(state.positionSec)} / ${PlaybackViewModel.format(state.durationSec)}"
                     } else "",
