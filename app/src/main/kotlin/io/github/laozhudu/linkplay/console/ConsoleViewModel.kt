@@ -48,6 +48,17 @@ data class ConsoleUiState(
     val multiroomBusy: Boolean = false,
     /** 成组轮询已等待的秒数。 */
     val multiroomTick: Long = 0,
+    /** 正在加入的音箱显示名，给进度条用。 */
+    val multiroomTarget: String? = null,
+    /**
+     * 组网结果的一句话说明。
+     *
+     * 为什么必须单独一个字段：命令回 `OK` 不代表成功，
+     * 失败时若只把按钮变回原样，用户会以为「点了一下什么都没发生」。
+     */
+    val multiroomNote: String? = null,
+    /** 点了某个从机后要弹的详情框。 */
+    val slaveDialog: SlaveDevice? = null,
     /**
      * 成组时可手填的信道与密码。
      *
@@ -349,7 +360,15 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         if (_state.value.multiroomBusy) return
-        _state.update { it.copy(multiroomBusy = true, multiroomTick = 0, error = null) }
+        _state.update {
+            it.copy(
+                multiroomBusy = true,
+                multiroomTick = 0,
+                multiroomTarget = device.title,
+                multiroomNote = null,
+                error = null,
+            )
+        }
         viewModelScope.launch {
             log("开始成组：${device.title}（${device.ip}）→ 主机 $masterIp（$masterSsid）")
             val ok = withContext(Dispatchers.IO) {
@@ -372,7 +391,17 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
             val after = withContext(Dispatchers.IO) { runCatching { client.slaveList(masterIp) }.getOrDefault(emptyList()) }
-            _state.update { it.copy(multiroomBusy = false, slaves = after) }
+            _state.update {
+                it.copy(
+                    multiroomBusy = false,
+                    slaves = after,
+                    multiroomNote = if (ok || after.isNotEmpty()) {
+                        "已把「${device.title}」加入，现在共 ${after.size} 台同步播放"
+                    } else {
+                        "命令已经发给音箱，但 40 秒内它没有出现在组里 —— 这一步没成功。"
+                    },
+                )
+            }
             if (ok) {
                 log("成组成功：主机现在有 ${after.size} 台从机")
             } else {
@@ -382,7 +411,14 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun cancelMultiroom() = _state.update { it.copy(multiroomBusy = false) }
+    fun cancelMultiroom() = _state.update {
+        it.copy(multiroomBusy = false, multiroomNote = "已停止等待（组网不一定成功，可稍后「重新读取」看看）")
+    }
+
+    /** 点从机芯片 → 打开它的单独音量/退出框。 */
+    fun setSlaveDialog(slave: SlaveDevice) = _state.update { it.copy(slaveDialog = slave) }
+
+    fun clearSlaveDialog() = _state.update { it.copy(slaveDialog = null) }
 
     fun kickSlave(slaveIp: String) {
         val master = _state.value.selectedIp ?: return
