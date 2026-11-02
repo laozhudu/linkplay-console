@@ -333,3 +333,56 @@ Music Assistant 的 DLNA 播放器文档里有个开关 **"Replace Pause with St
 「忽略 pause 命令的老 UPnP 播放器」用。这说明**老固件上 `Pause` 可能无效**，
 客户端要准备「暂停退化为停止」的兜底（本项目尚未实现，列入待验证清单）。
 
+---
+
+## 12. 私有播放队列服务（`urn:schemas-wiimu-com:service:PlayQueue:1`）
+
+标准 UPnP 的 AVTransport **没有队列概念**（只有「设一个 URI」）。整列表推送靠厂商自建的这个私有服务。
+以下动作名与参数名全部从原厂 App 的 Cling 动作封装类逐字段读出（✅ 已确证）。
+
+| 动作 | 参数（顺序即 SOAP 顺序） | 说明 |
+|---|---|---|
+| `CreateQueue` | `QueueContext` | 建立队列 |
+| `DeleteQueue` | `QueueName` | 删除队列 |
+| `BackUpQueue` | `QueueContext` | 备份队列（语义未实测） |
+| `AppendTracksInQueue` | `QueueContext` | 追加曲目 |
+| `AppendTracksInQueueEx` | `QueueContext`, `Direction`, `StartIndex` | 带方向的插入 |
+| `PlayQueueWithIndex` | `QueueName`, `Index` | 从第 N 条开始播 |
+| `GetQueueIndex` | `QueueName` | 读当前条目 |
+| `RemoveTracksInQueue` | `QueueName`, `RangStart`, `RangEnd` | 删除区间 |
+| `SetQueueLoopMode` | `LoopMode` | 列表循环 |
+| `BrowseQueue` | `QueueName` | 读队列内容 |
+
+### 两个必须原样保留的坑
+
+1. **`RangStart` / `RangEnd` 少一个 `e`**（不是 `RangeStart`）——设备端真实参数名，改了必失败。
+2. `AppendTracksInQueueEx` 里 `Direction` 在 SOAP 中**排在 `StartIndex` 之前**，
+   尽管原厂构造函数里 `StartIndex` 先出现。
+
+### `LoopMode` 与 `setPlayerCmd:loopmode` 不是同一套编号
+
+| | 队列服务 `SetQueueLoopMode` | httpapi `setPlayerCmd:loopmode` |
+|---|---|---|
+| 顺序不循环 | 0 | 0 |
+| 单曲循环 | 1 | 1 |
+| 列表循环 | **2** | **-1** |
+| 随机 | **3** | **2** |
+
+⚠️ 容易混，本项目用 `QueueLoopMode` 常量隔离，不要互相传值。
+
+### ⚠️ 尚未确证：`QueueContext` 的内部结构
+
+反向工程只能确定它是**一个字符串参数**（原厂把任意 `String` 直接塞进构造函数），
+看不到设备端如何解析。本项目按 UPnP 通行做法用 DIDL-Lite 文档，并把格式做成可切换策略
+（`QueueContextFormat`：`DIDL_ONLY` / `NAME_THEN_DIDL` / `NAME_ONLY`），真机上一试即知。
+这是本规格里**最大的一处未知**，使用前必须验证。
+
+## 13. 手机侧为什么必须起 HTTP 服务
+
+原厂 App 内置了 **GNaP MediaServer**（DIDL 里能看到 `Container("2","0","Audios","GNaP MediaServer",...)`）
+与 **NanoHTTPD**；`Res` 的 URL 用占位符拼装：`http://#IP_Param#` + 文件路径，
+运行时替换成手机 IP + 端口。
+
+原理：音箱是 DMR，**只会自己发起 HTTP 拉流**。手机要播本地文件，就必须把文件通过 HTTP 暴露到局域网。
+本项目用自研的纯 JVM `LocalMediaServer` 替代 NanoHTTPD，并实现了 renderer 必需的
+`HEAD` 与 `Range`（206 + `Content-Range`）——缺 Range 时进度条拖动会失败、部分固件直接不播。

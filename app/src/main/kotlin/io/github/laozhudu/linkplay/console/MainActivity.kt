@@ -45,6 +45,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import io.github.laozhudu.linkplay.console.library.QueueScreen
 import io.github.laozhudu.linkplay.console.playback.PlaybackCard
 import io.github.laozhudu.linkplay.console.playback.PlaybackViewModel
 import io.github.laozhudu.linkplay.console.provisioning.ProvisioningScreen
@@ -65,6 +66,7 @@ class MainActivity : ComponentActivity() {
 fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
     val state by vm.state.collectAsState()
     var showProvisioning by remember { mutableStateOf(false) }
+    var showQueue by remember { mutableStateOf(false) }
 
     if (showProvisioning) {
         Scaffold(
@@ -79,6 +81,26 @@ fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
                 ProvisioningScreen(
                     onDone = { showProvisioning = false },
                     onBack = { showProvisioning = false },
+                )
+            }
+        }
+        return
+    }
+
+    if (showQueue) {
+        Scaffold(
+            topBar = { TopAppBar(title = { Text("整列表推送", fontWeight = FontWeight.SemiBold) }) },
+        ) { padding ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .padding(horizontal = 16.dp),
+            ) {
+                QueueScreen(
+                    deviceIp = state.selectedIp.orEmpty(),
+                    location = state.selectedLocation,
+                    onBack = { showQueue = false },
                 )
             }
         }
@@ -122,7 +144,7 @@ fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
                     onProvision = { showProvisioning = true },
                 )
             } else {
-                DeviceDetailScreen(state = state, vm = vm)
+                DeviceDetailScreen(state = state, vm = vm, onOpenQueue = { showQueue = true })
             }
         }
     }
@@ -183,7 +205,7 @@ private fun DeviceListScreen(
 }
 
 @Composable
-private fun DeviceDetailScreen(state: ConsoleUiState, vm: ConsoleViewModel) {
+private fun DeviceDetailScreen(state: ConsoleUiState, vm: ConsoleViewModel, onOpenQueue: () -> Unit) {
     var command by remember { mutableStateOf("getNetwork") }
     var newName by remember { mutableStateOf("") }
     var confirmReset by remember { mutableStateOf(false) }
@@ -227,6 +249,10 @@ private fun DeviceDetailScreen(state: ConsoleUiState, vm: ConsoleViewModel) {
 
         Spacer(Modifier.height(10.dp))
         PlaybackCard(playbackVm)
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(onClick = onOpenQueue, modifier = Modifier.fillMaxWidth()) {
+            Text("推送手机本地音乐（整个列表）")
+        }
         Spacer(Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = vm::refreshStatus, enabled = !state.busy) { Text("刷新") }

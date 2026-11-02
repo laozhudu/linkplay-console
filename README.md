@@ -18,10 +18,13 @@ LinkPlay / WiiMu 方案 Wi-Fi 音箱的**现代化控制台**：Kotlin + Jetpack
 | 多房间从机列表 / 音量 | ✅ 已实现 |
 | 改名 / 输入源切换 / 恢复出厂（二次确认） | ✅ 已实现 |
 | 原始命令控制台 | ✅ 已实现 |
-| 协议层单元测试 | ✅ 72 个用例 |
+| 协议层单元测试 | ✅ 113 个用例 |
 | AP 直连配网（4 步流程 + 结果轮询） | ✅ 已实现 |
 | UPnP 播放控制（投流 / 播放暂停停止 / 跳转 / 音量 / 进度） | ✅ 已实现（1s 轮询，非 GENA） |
+| 本地音乐整列表推送 + 列表循环（私有 PlayQueue） | ✅ 已实现 |
+| 手机本地媒体 HTTP 服务（Range/HEAD） | ✅ 已实现 |
 | MCU 灯效 / 音箱固件 OTA | 🚧 待做 |
+| 网络电台 / 收藏 / 最近播放 / 拼音搜索 | 🚧 见 docs/05 优先级 |
 
 ## 模块
 
@@ -75,6 +78,9 @@ docs/             协议规格、功能裁剪决策、架构说明
 这批设备是标准 DLNA 渲染器，因此**能被成熟生态直接控制**（Music Assistant、Lyrion + UPnPBridge、
 Symfonium、OwnTone、Feishin-connect 等），也**能从成熟内容源取歌**（Navidrome/Jellyfin 的 OpenSubsonic API）。
 四套接入路线的取舍、逐项依据与待验证清单见 [docs/04-ecosystem-integration.md](docs/04-ecosystem-integration.md)。
+
+功能对照（原 App 有什么、我们有什么、漏了什么）见 [docs/05-feature-parity.md](docs/05-feature-parity.md)；
+音源方案（能否参考洛雪 LX Music）见 [docs/06-music-sources.md](docs/06-music-sources.md)。
 
 ## 证据与复现
 
