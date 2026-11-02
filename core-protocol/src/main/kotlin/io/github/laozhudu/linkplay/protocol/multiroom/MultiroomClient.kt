@@ -4,6 +4,27 @@ import io.github.laozhudu.linkplay.protocol.DeviceHttpClient
 import io.github.laozhudu.linkplay.protocol.Json
 import io.github.laozhudu.linkplay.protocol.JsonValue
 
+/**
+ * 主机自身热点的关键参数。
+ *
+ * 为什么必须从 `getStatusEx` 读、不能用猜的：
+ * 单 Wi-Fi 模块的机器上，**AP 和 STA 只能是同一个信道**，
+ * 所以主机热点的信道一定等于它当前连上游 Wi-Fi 的信道（`WifiChannel`）。
+ * 真机两台都在 11，而原厂 APK 里 `h.m` 也是从 `getStatusEx` 读出来的。
+ * 之前传 `ch=0` 让固件自己选，实测两个信道段都没连上。
+ *
+ * @param ssid 自身热点名（`ssid` 字段，如 `DOSS DS-1831_400C`）；**不是** `essid`（那是它连的上游）
+ * @param channel 热点信道（`WifiChannel`），读不到为 0
+ * @param securemode 0=开放，非 0=加密
+ */
+data class ApInfo(
+    val ssid: String,
+    val channel: Int = 0,
+    val securemode: Int = 0,
+) {
+    val isOpen: Boolean get() = securemode == 0
+}
+
 /** 一台已经或准备入组的从机。 */
 data class SlaveInfo(
     val ip: String,
@@ -124,7 +145,9 @@ class MultiroomClient(
         onTick: (Long) -> Unit = {},
         shouldStop: () -> Boolean = { false },
     ): Boolean {
-        runCatching { joinGroup(masterIp, masterSsid, slaveIp, channel, password) }
+        // 没指定信道就用主机自报的 WifiChannel —— AP 与 STA 同信道，这是唯一可靠的来源
+        val realChannel = if (channel > 0) channel else (readApInfo(masterIp)?.channel ?: 0)
+        runCatching { joinGroup(masterIp, masterSsid, slaveIp, realChannel, password) }
         val start = now()
         while (now() - start < timeoutMs) {
             sleep(intervalMs)
@@ -142,6 +165,24 @@ class MultiroomClient(
     fun slaves(masterIp: String): List<SlaveInfo> {
         val raw = runCatching { http.send(masterIp, "multiroom:getSlaveList") }.getOrNull() ?: return emptyList()
         return parseSlaveList(raw)
+    }
+
+    /**
+     * 读主机自身热点的 [ApInfo]。
+     *
+     * 只读 `getStatusEx`。注意不能用 `getNetwork` —— 反编译里原厂 App 用 `getNetwork`
+     * 拿热点密码，但这批固件 `getNetwork` 只返回 `{"securemode":"0",}`，
+     * 原厂于是把这段 JSON 当密码、auth 变成 WPA2PSK，**必然连不上**（真机已验证）。
+     */
+    fun readApInfo(masterIp: String): ApInfo? {
+        val raw = runCatching { http.send(masterIp, "getStatusEx") }.getOrNull() ?: return null
+        val root = runCatching { Json.parse(raw) }.getOrNull() as? JsonValue.Obj ?: return null
+        val ssid = root.string("ssid")?.takeIf { it.isNotBlank() } ?: return null
+        return ApInfo(
+            ssid = ssid,
+            channel = root.string("WifiChannel")?.toIntOrNull() ?: root.int("WifiChannel") ?: 0,
+            securemode = root.string("securemode")?.toIntOrNull() ?: 0,
+        )
     }
 
     fun setSlaveVolume(masterIp: String, slaveIp: String, volume: Int): String =

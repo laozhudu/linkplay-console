@@ -16,8 +16,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -303,105 +307,161 @@ fun DeviceSettingsScreen(
  *   试完立刻回读，把设备真实反应写进日志 —— 不假装成功。
  */
 @Composable
+/**
+ * 多房间 —— 一键组网，不抄原厂的拖拽。
+ *
+ * 为什么不复刻拖拽：拖拽是 2015 年平板上的手势隐喻，在手机上容易误触，
+ * 而且「谁拖到谁身上就变成主机」这条规则用户根本看不出来。
+ * 这里改成主流智能音箱的做法：**当前设备固定当主机，点「＋」挑一台加入**。
+ * 底层命令与原厂完全相同（`multiroom:ConnnectAP:...:chext=1`），只是入口更直白。
+ */
 private fun MultiroomSection(state: ConsoleUiState, saved: List<SavedDevice>, vm: ConsoleViewModel) {
+    var picker by remember { mutableStateOf(false) }
+    val others = saved.filter { it.ip != state.selectedIp }
+    val grouped = state.slaves.size
+
     AppCard {
         SectionTitle(
             "多房间",
             when {
-                state.slaves.isNotEmpty() -> "${state.slaves.size} 台从机已入组"
-                saved.size > 1 -> "已保存 ${saved.size} 台，还没组成一组"
-                else -> "只保存了一台音箱"
+                state.multiroomBusy -> "正在组网…"
+                grouped > 0 -> "本机带 $grouped 台音箱同步播放"
+                else -> "本机单独播放，可再加音箱一起响"
             },
         )
-        VSpace(Spacing.xs)
+        VSpace(Spacing.sm)
 
-        if (state.slaves.isNotEmpty()) {
-            state.slaves.forEach { slave ->
-                SlaveRow(slave = slave, busy = state.busy, vm = vm)
-                HorizontalDivider()
+        // ---- 一句话说明，不堆术语 ----
+        Text(
+            if (grouped > 0) {
+                "组内的音箱会和本机播同一首歌。点音箱可以单独调它自己的音量或让它退出。"
+            } else {
+                "把另一台音箱加到本机下面，两台就同步播放同一首歌。加入时它会短暂离开原来的 Wi-Fi，失败会自己连回来。"
+            },
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        VSpace(Spacing.md)
+
+        // ---- 主从关系用「芯片块」表达：主机实心 + 从机描边 + 加号 ----
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            FilterChip(
+                selected = true,
+                onClick = {},
+                label = { Text("本机 · " + (saved.firstOrNull { it.ip == state.selectedIp }?.title ?: "主机")) },
+            )
+            if (grouped > 0) {
+                Text("＋", style = MaterialTheme.typography.titleMedium)
+                state.slaves.forEach { slave ->
+                    FilterChip(
+                        selected = false,
+                        onClick = { vm.setSlaveDialog(slave) },
+                        label = { Text(slave.name ?: slave.ip) },
+                    )
+                }
             }
-            VSpace(Spacing.sm)
-            OutlinedButton(onClick = vm::refreshSlaves, enabled = !state.busy) { Text("重新读取") }
-        } else {
-            Text(
-                "主机：${state.status?.ssid ?: state.selectedIp}",
-                style = MaterialTheme.typography.bodySmall,
+            if (others.isNotEmpty() && !state.multiroomBusy) {
+                Text("＋", style = MaterialTheme.typography.titleMedium)
+                AssistChip(onClick = { picker = true }, label = { Text("添加音箱") })
+            }
+        }
+
+        // ---- 组网中：进度条 + 秒数（原厂是转圈 + 40s 超时，这里把秒数显出来） ----
+        if (state.multiroomBusy) {
+            VSpace(Spacing.md)
+            LinearProgressIndicator(
+                progress = { (state.multiroomTick.coerceAtMost(40) / 40f) },
+                modifier = Modifier.fillMaxWidth(),
             )
             VSpace(Spacing.xs)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "正在把「${state.multiroomTarget ?: "音箱"}」加入… ${state.multiroomTick}s / 40s",
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = vm::cancelMultiroom) { Text("停止") }
+            }
+        }
+
+        // ---- 结果解释：命令回 OK 不等于成功，这里如实说明 ----
+        state.multiroomNote?.let { note ->
+            VSpace(Spacing.sm)
             Text(
-                "设备报告 0 台从机。原厂 App 让两台音箱先「互相发现」（按 WPS 配对），" +
-                    "那一步需要在音箱上动手，App 只能发起尝试。",
+                note,
+                style = MaterialTheme.typography.labelMedium,
+                color = if (grouped > 0) StatusColors.ok else MaterialTheme.colorScheme.error,
+            )
+        }
+
+        if (grouped == 0 && others.isEmpty() && !state.multiroomBusy) {
+            VSpace(Spacing.sm)
+            Text(
+                "还没有第二台音箱。先在「设备」页把它找出来并保存，这里就能直接加入。",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            VSpace(Spacing.sm)
+        }
+    }
 
-            val others = saved.filter { it.ip != state.selectedIp }
-            if (others.isEmpty()) {
-                Text(
-                    "先在「设备」页把第二台音箱也添加进来。",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            } else {
-                if (state.multiroomBusy) {
-                    // 轮询等待中：把「已等 X/40 秒」直接显示出来，
-                    // 否则用户会以为按钮没反应（原厂 App 是转圈 + 提示语）
+    // ---- 选一台加入 ----
+    if (picker) {
+        AlertDialog(
+            onDismissRequest = { picker = false },
+            title = { Text("加入哪一台？") },
+            text = {
+                Column {
                     Text(
-                        "正在成组…已等待 ${state.multiroomTick}s / 40s",
+                        "选中的音箱会连到本机，之后两台同步播放。",
                         style = MaterialTheme.typography.bodySmall,
                     )
-                    VSpace(Spacing.xs)
-                    OutlinedButton(onClick = vm::cancelMultiroom, modifier = Modifier.fillMaxWidth()) {
-                        Text("停止等待")
-                    }
-                } else {
-                    // 可选参数：默认留空即可（设备 securemode=0 → OPEN）
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedTextField(
-                            value = if (state.joinChannel == 0) "" else state.joinChannel.toString(),
-                            onValueChange = { v -> vm.setJoinChannel(v.filter { it.isDigit() }.toIntOrNull() ?: 0) },
-                            label = { Text("主机信道（留空=自动）") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Spacer(Modifier.width(Spacing.sm))
-                        OutlinedTextField(
-                            value = state.joinPassword,
-                            onValueChange = vm::setJoinPassword,
-                            label = { Text("热点密码") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                    VSpace(Spacing.xs)
+                    VSpace(Spacing.sm)
                     others.forEach { other ->
                         OutlinedButton(
-                            onClick = { vm.joinSlave(other) },
-                            enabled = !state.busy,
+                            onClick = { picker = false; vm.joinSlave(other) },
                             modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text("把「${other.title}」接入本机")
-                        }
+                        ) { Text("${other.title}（${other.ip}）") }
                         VSpace(Spacing.xs)
                     }
-                    Text(
-                        "原理同原厂 App 的拖拽连接：向从机下发「连到本机热点」，然后每 2 秒确认一次，" +
-                            "40 秒内看到从机出现即成功。",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    VSpace(Spacing.xs)
-                    Text(
-                        "注意：从机会去连本机热点，可能短暂离开原来的 Wi-Fi；失败时它会自己连回去。",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                    VSpace(Spacing.xs)
-                    OutlinedButton(onClick = vm::refreshSlaves, enabled = !state.busy) { Text("重新读取从机") }
                 }
-            }
-        }
+            },
+            confirmButton = { TextButton(onClick = { picker = false }) { Text("取消") } },
+        )
+    }
+
+    // ---- 从机详情：单独音量 / 退出 ----
+    val dialogSlave = state.slaveDialog
+    if (dialogSlave != null) {
+        AlertDialog(
+            onDismissRequest = vm::clearSlaveDialog,
+            title = { Text(dialogSlave.name ?: dialogSlave.ip) },
+            text = {
+                Column {
+                    Text("这台音箱单独的音量", style = MaterialTheme.typography.bodySmall)
+                    VSpace(Spacing.xs)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedButton(onClick = { vm.setSlaveVolume(dialogSlave.ip, (dialogSlave.volume ?: 50) - 10) }) { Text("−") }
+                        Text(
+                            "  ${dialogSlave.volume ?: "?"}  ",
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        OutlinedButton(onClick = { vm.setSlaveVolume(dialogSlave.ip, (dialogSlave.volume ?: 50) + 10) }) { Text("＋") }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { vm.kickSlave(dialogSlave.ip); vm.clearSlaveDialog() }) {
+                    Text("让它退出组", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = { TextButton(onClick = vm::clearSlaveDialog) { Text("关闭") } },
+        )
     }
 }
 
