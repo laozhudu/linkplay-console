@@ -313,6 +313,7 @@ private fun DeviceDetailScreen(
     var command by remember { mutableStateOf("getNetwork") }
     var newName by remember { mutableStateOf("") }
     var confirmReset by remember { mutableStateOf(false) }
+    var showAdvanced by remember { mutableStateOf(false) }
 
     val playbackVm: PlaybackViewModel = viewModel(
         key = "playback-${state.selectedIp}",
@@ -433,22 +434,42 @@ private fun DeviceDetailScreen(
             }
         }
 
-        Spacer(Modifier.height(10.dp))
-        Text("原始命令（httpapi.asp?command=）", fontWeight = FontWeight.Medium)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = command,
-                onValueChange = { command = it },
-                singleLine = true,
-                modifier = Modifier.weight(1f),
-            )
-            Spacer(Modifier.width(8.dp))
-            Button(onClick = { vm.sendCommand(command) }, enabled = !state.busy) { Text("执行") }
+        // 调试入口收进折叠区。
+        // 原来「原始命令」和「恢复出厂」直接摊在设置列表里，日常使用只会误触；
+        // 而它们又是排查问题时的必需品，所以藏起来但不删。
+        Spacer(Modifier.height(Spacing.sm))
+        AppCard(onClick = { showAdvanced = !showAdvanced }) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (showAdvanced) "收起高级选项" else "高级选项（原始命令 / 恢复出厂）",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(if (showAdvanced) "−" else "+", style = MaterialTheme.typography.titleLarge)
+            }
         }
 
-        Spacer(Modifier.height(10.dp))
-        TextButton(onClick = { confirmReset = true }) {
-            Text("恢复出厂设置", color = MaterialTheme.colorScheme.error)
+        if (showAdvanced) {
+            Spacer(Modifier.height(Spacing.sm))
+            AppCard {
+                Text("原始命令（httpapi.asp?command=）", style = MaterialTheme.typography.titleMedium)
+                VSpace(Spacing.xs)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = command,
+                        onValueChange = { command = it },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(Spacing.sm))
+                    Button(onClick = { vm.sendCommand(command) }, enabled = !state.busy) { Text("执行") }
+                }
+                VSpace(Spacing.sm)
+                // 恢复出厂已经走 AlertDialog 二次确认，这里只做入口
+                OutlinedButton(onClick = { confirmReset = true }) {
+                    Text("恢复出厂设置", color = MaterialTheme.colorScheme.error)
+                }
+            }
         }
 
         Spacer(Modifier.height(10.dp))
