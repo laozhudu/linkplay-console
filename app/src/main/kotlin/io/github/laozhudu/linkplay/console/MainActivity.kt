@@ -4,20 +4,25 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -76,121 +81,251 @@ class MainActivity : ComponentActivity() {
 }
 
 /**
- * 页面栈。
+ * 三个一级页面（底部导航），对应通用播放器的「设备 / 播放 / 媒体库」。
  *
- * 原来用 5 个 `Boolean` 各管一个页面，结果「返回」行为完全不一致：
- * 有的页面点返回直接回桌面、有的要连点两次、播放页返回会落到设备页而不是首页。
- * 改成一个显式的栈 + 一个 [BackHandler]，所有页面共用同一条规则。
+ * 为什么改成底部导航：原来所有页面靠「返回上一级」串起来，从播放页去看 NAS 要
+ * 「进 → 出 → 进」，返回键还得数点几次。底部导航是一级入口，切换不需要任何返回操作
+ * —— 这也是市面播放器（Spotify / Apple Music / Auxio / Gramophone）的共识结构。
  */
-private enum class Screen { Home, Player, DeviceSettings, Nas, Library, LocalQueue, Provisioning }
+private enum class Tab(val label: String, val glyph: String) {
+    Devices("设备", "◍"),
+    Player("播放", "▮▮"),
+    Sources("媒体库", "≡"),
+}
+
+/** 二级页面：从一级页推进去，返回即回一级。 */
+private enum class SubPage { Nas, LocalQueue, Library, Settings, Provisioning }
 
 @Composable
 fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
     val state by vm.state.collectAsState()
     val queue by QueueBus.state.collectAsState()
 
-    // 栈底永远是首页。
-    var stack by remember { mutableStateOf(listOf(Screen.Home)) }
-    fun push(s: Screen) {
-        if (stack.lastOrNull() != s) stack = stack + s
+    var tab by remember { mutableStateOf(Tab.Devices) }
+    var sub by remember { mutableStateOf<SubPage?>(null) }
+
+    /**
+     * 返回规则（全局唯一，也是 Android 通用规则）：
+     * 1. 有二级页 → 退二级；
+     * 2. 不在第一个 Tab → 回第一个 Tab；
+     * 3. 已在第一个 Tab → 交回系统（退出 App）。
+     */
+    BackHandler(enabled = sub != null || tab != Tab.Devices) {
+        when {
+            sub != null -> sub = null
+            else -> tab = Tab.Devices
+        }
     }
 
-    fun pop(): Boolean {
-        if (stack.size <= 1) return false
-        stack = stack.dropLast(1)
-        return true
+    val currentSub = sub
+    if (currentSub != null) {
+        // 二级页全屏，不带底部导航：避免「在一个页面里还显示别的 Tab」的割裂感
+        when (currentSub) {
+            SubPage.Nas -> NasScreen(
+                deviceIp = state.selectedIp.orEmpty(),
+                deviceLocation = state.selectedLocation,
+                deviceUuid = state.selectedUuid,
+                onBack = { sub = null },
+            )
+
+            SubPage.LocalQueue -> QueueScreen(
+                deviceIp = state.selectedIp.orEmpty(),
+                location = state.selectedLocation,
+                onBack = { sub = null },
+            )
+
+            SubPage.Library -> LibraryScreen(
+                deviceIp = state.selectedIp.orEmpty(),
+                location = state.selectedLocation,
+                deviceLabel = state.status?.ssid,
+                onBack = { sub = null },
+            )
+
+            SubPage.Settings -> DeviceSettingsScreen(
+                state = state,
+                vm = vm,
+                onBack = { sub = null },
+                onOpenPlayer = { sub = null; tab = Tab.Player },
+                onOpenNas = { sub = SubPage.Nas },
+                onOpenLibrary = { sub = SubPage.Library },
+                onOpenLocalQueue = { sub = SubPage.LocalQueue },
+            )
+
+            SubPage.Provisioning -> ProvisioningScreen(
+                onDone = { sub = null; tab = Tab.Devices },
+                onBack = { sub = null },
+            )
+        }
+        return
     }
 
-    // 统一返回：有上一层就退一层，在首页才允许退出 App。
-    // 页面内的返回箭头也调 pop()，与系统返回键/手势行为一致。
-    BackHandler(enabled = stack.size > 1) { pop() }
+    Scaffold(
+        bottomBar = {
+            Column {
+                // 有播放内容时，迷你条常驻在导航之上（Spotify 同款位置）
+                if (queue.nowPlaying != null || queue.running) {
+                    MiniPlayerBar(
+                        queue = queue,
+                        onOpen = { tab = Tab.Player },
+                        modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.xs),
+                    )
+                }
+                BottomNav(current = tab, onSelect = { tab = it })
+            }
+        },
+    ) { padding ->
+        Box(Modifier.fillMaxSize().padding(padding)) {
+            when (tab) {
+                Tab.Devices -> HomeScreen(
+                    state = state,
+                    onOpenDevice = { device ->
+                        vm.open(device)
+                        tab = Tab.Player
+                    },
+                    onScan = vm::scan,
+                    onAddManual = vm::addManual,
+                    onAddDiscovered = { vm.add(it); tab = Tab.Player },
+                    onForget = vm::forget,
+                    onProvision = { sub = SubPage.Provisioning },
+                )
 
-    when (val current = stack.last()) {
-        Screen.Home -> HomeScreen(
-            state = state,
-            queue = queue,
-            onOpenDevice = { device ->
-                vm.open(device)
-                push(Screen.Player)
-            },
-            onOpenPlayer = { push(Screen.Player) },
-            onScan = vm::scan,
-            onAddManual = vm::addManual,
-            onAddDiscovered = { vm.add(it); push(Screen.Player) },
-            onForget = vm::forget,
-            onProvision = { push(Screen.Provisioning) },
-        )
+                Tab.Player -> if (state.selectedIp == null) {
+                    NeedDevice(onGoDevices = { tab = Tab.Devices })
+                } else {
+                    PlayerScreen(
+                        deviceIp = state.selectedIp.orEmpty(),
+                        deviceLocation = state.selectedLocation,
+                        // 不传 onBack：播放页是一级页面，靠底部导航切换
+                        onOpenSettings = { sub = SubPage.Settings },
+                        onOpenNas = { sub = SubPage.Nas },
+                        onOpenLibrary = { sub = SubPage.Library },
+                        onOpenLocalQueue = { sub = SubPage.LocalQueue },
+                    )
+                }
 
-        Screen.Player -> PlayerScreen(
-            deviceIp = state.selectedIp.orEmpty(),
-            deviceLocation = state.selectedLocation,
-            onBack = {
-                // 从播放页返回：回首页并清掉选中态，避免首页顶部还挂着上一台设备
-                if (pop() && stack.last() == Screen.Home) vm.leaveDevice()
-            },
-            onOpenSettings = { push(Screen.DeviceSettings) },
-            onOpenNas = { push(Screen.Nas) },
-            onOpenLibrary = { push(Screen.Library) },
-            onOpenLocalQueue = { push(Screen.LocalQueue) },
-        )
+                Tab.Sources -> SourcesScreen(
+                    state = state,
+                    onOpenNas = { sub = SubPage.Nas },
+                    onOpenLibrary = { sub = SubPage.Library },
+                    onOpenLocal = { sub = SubPage.LocalQueue },
+                    onGoDevices = { tab = Tab.Devices },
+                )
+            }
+        }
+    }
+}
 
-        Screen.DeviceSettings -> DeviceSettingsScreen(
-            state = state,
-            vm = vm,
-            onBack = {
-                if (pop() && stack.last() == Screen.Home) vm.leaveDevice()
-            },
-            onOpenPlayer = { push(Screen.Player) },
-            onOpenNas = { push(Screen.Nas) },
-            onOpenLibrary = { push(Screen.Library) },
-            onOpenLocalQueue = { push(Screen.LocalQueue) },
-        )
+/** 底部导航：三个一级页面；播放中时「播放」图标变成 ▶。 */
+@Composable
+private fun BottomNav(current: Tab, onSelect: (Tab) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface)
+            .windowInsetsPadding(WindowInsets.navigationBars)
+            .padding(vertical = Spacing.xs),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+    ) {
+        Tab.entries.forEach { t ->
+            val active = t == current
+            val color = if (active) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.onSurfaceVariant
+            val glyph = if (t == Tab.Player) {
+                if (QueueBus.state.value.running) "▶" else t.glyph
+            } else {
+                t.glyph
+            }
+            Column(
+                modifier = Modifier
+                    .clip(AppShapesExpressive.squircle)
+                    .clickable { onSelect(t) }
+                    .padding(horizontal = Spacing.xl, vertical = Spacing.xs),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(glyph, style = MaterialTheme.typography.titleMedium, color = color)
+                Text(t.label, style = MaterialTheme.typography.labelMedium, color = color)
+            }
+        }
+    }
+}
 
-        Screen.Nas -> NasScreen(
-            deviceIp = state.selectedIp.orEmpty(),
-            deviceLocation = state.selectedLocation,
-            deviceUuid = state.selectedUuid,
-            onBack = { pop() },
+/** 没选设备时的播放页占位。 */
+@Composable
+private fun NeedDevice(onGoDevices: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(Spacing.lg),
+        verticalArrangement = Arrangement.Center,
+    ) {
+        EmptyState(
+            title = "还没有选中音箱",
+            hint = "先去「设备」页点一台音箱，回来这里就能控制播放。",
         )
+        VSpace(Spacing.md)
+        Button(onClick = onGoDevices, modifier = Modifier.fillMaxWidth()) { Text("去设备页") }
+    }
+}
 
-        Screen.Library -> LibraryScreen(
-            deviceIp = state.selectedIp.orEmpty(),
-            location = state.selectedLocation,
-            deviceLabel = state.status?.ssid,
-            onBack = { pop() },
+/** 媒体库入口页：三个来源，各自推进去。 */
+@Composable
+private fun SourcesScreen(
+    state: ConsoleUiState,
+    onOpenNas: () -> Unit,
+    onOpenLibrary: () -> Unit,
+    onOpenLocal: () -> Unit,
+    onGoDevices: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = Spacing.lg),
+    ) {
+        VSpace(Spacing.md)
+        SectionTitle(
+            "媒体库",
+            if (state.selectedIp == null) "先选一台音箱" else "选一个来源，点歌即播",
         )
+        VSpace(Spacing.md)
 
-        Screen.LocalQueue -> QueueScreen(
-            deviceIp = state.selectedIp.orEmpty(),
-            location = state.selectedLocation,
-            onBack = { pop() },
-        )
+        if (state.selectedIp == null) {
+            EmptyState("还没有选中音箱", "媒体库里的歌要投给音箱播，所以先选设备。")
+            VSpace(Spacing.sm)
+            Button(onClick = onGoDevices, modifier = Modifier.fillMaxWidth()) { Text("去设备页") }
+            return
+        }
 
-        Screen.Provisioning -> ProvisioningScreen(
-            onDone = { stack = listOf(Screen.Home) },
-            onBack = { pop() },
-        )
+        AppCard(onClick = onOpenNas) {
+            SectionTitle("NAS 媒体库", "局域网 DLNA 服务器上的曲目，点一首即播")
+        }
+        VSpace(Spacing.sm)
+        AppCard(onClick = onOpenLocal) {
+            SectionTitle("手机本地音乐", "手机里的歌，通过本机 HTTP 服务推给音箱")
+        }
+        VSpace(Spacing.sm)
+        AppCard(onClick = onOpenLibrary) {
+            SectionTitle("音乐库", "搜索 · 收藏 · 最近播放 · 网络电台")
+        }
     }
 }
 
 /**
- * 首页 = DOSS 遥控器。
+ * 「设备」页：已保存的音箱 + 添加入口。
  *
  * 只做三件事，按使用频率排：
  * 1. **已保存的音箱**（主入口）—— 打开 App 一眼点开，不用每次等扫描；
- * 2. 正在播放（有队列时）—— 底部一条迷你播放条，点开进播放页；
- * 3. 添加设备（低频，收在下面折叠区）。
+ * 2. 添加设备（低频，收在折叠区）；
+ * 3. 长按卡片可移除记录。
  *
- * 为什么不再把「搜到的所有 UPnP 设备」铺在首页：局域网里 NAS、路由、电视都会响应 SSDP，
- * 全列出来根本分不清哪台是音箱，点错还会往路由器投流。
- * 现在只收 LinkPlay 系（判据见 `LinkPlayIdentity`），其余过滤掉并给出统计。
+ * 为什么不再把「搜到的所有 UPnP 设备」铺出来：局域网里 NAS、路由、电视都会响应 SSDP，
+ * 全列出来分不清哪台是音箱，点错还会往路由器投流。现在只收 LinkPlay 系
+ * （判据见 `LinkPlayIdentity`），其余过滤并给出统计。
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun HomeScreen(
     state: ConsoleUiState,
-    queue: QueueRunState,
     onOpenDevice: (SavedDevice) -> Unit,
-    onOpenPlayer: () -> Unit,
     onScan: () -> Unit,
     onAddManual: (String) -> Unit,
     onAddDiscovered: (DiscoveredDevice) -> Unit,
@@ -202,207 +337,181 @@ private fun HomeScreen(
     var manualIp by remember { mutableStateOf("") }
     var forgetTarget by remember { mutableStateOf<SavedDevice?>(null) }
 
-    Scaffold(
-        topBar = {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = Spacing.lg, vertical = Spacing.md),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                SectionTitle(
-                    title = "DOSS 遥控器",
-                    subtitle = when {
-                        state.busy -> "正在连接设备…"
-                        state.saved.isEmpty() -> "还没有添加音箱"
-                        else -> "${state.saved.count { state.online[it.uuid] != false }} 台在线"
-                    },
-                    modifier = Modifier.weight(1f),
-                )
-            }
-        },
-    ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(
-                    start = Spacing.lg,
-                    end = Spacing.lg,
-                    bottom = if (queue.nowPlaying != null) 104.dp else Spacing.xl,
-                ),
-                verticalArrangement = Arrangement.spacedBy(Spacing.sm),
-            ) {
-                state.error?.let { err ->
-                    item {
-                        AppCard {
-                            Text(
-                                err,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                        }
-                    }
-                }
+    Column(Modifier.fillMaxSize().padding(horizontal = Spacing.lg)) {
+        VSpace(Spacing.md)
+        SectionTitle(
+            title = "我的音箱",
+            subtitle = when {
+                state.busy -> "正在连接…"
+                state.saved.isEmpty() -> "还没有添加"
+                else -> "${state.saved.count { state.online[it.uuid] != false }} 台在线"
+            },
+        )
+        VSpace(Spacing.md)
 
-                // ---------- 已保存的音箱 ----------
-                if (state.saved.isEmpty()) {
-                    item {
-                        EmptyState(
-                            title = "先添加你的音箱",
-                            hint = "点下面的「添加音箱」搜索，或直接填 IP。添加过一次就会记住，以后打开 App 直接点。",
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = Spacing.xl),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+        ) {
+            state.error?.let { err ->
+                item {
+                    AppCard {
+                        Text(
+                            err,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
                         )
                     }
                 }
+            }
 
-                items(state.saved, key = { it.uuid }) { device ->
-                    val online = state.online[device.uuid]
-                    val palette = remember(device.uuid) { seedOf(device.name, device.ip) }
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(AppShapesExpressive.squircle)
-                            .background(
-                                Brush.linearGradient(
-                                    listOf(palette.top, palette.accent.copy(alpha = 0.35f)),
-                                ),
-                            )
-                            .clickable { onOpenDevice(device) }
-                            .padding(Spacing.lg),
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    device.title,
-                                    style = MaterialTheme.typography.titleLarge,
-                                    color = extras.onBackdrop,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                Text(
-                                    listOfNotNull(
-                                        device.ip,
-                                        device.modelName,
-                                        when (online) {
-                                            true -> "在线"
-                                            false -> "离线"
-                                            null -> null
-                                        },
-                                    ).joinToString(" · "),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = extras.onBackdropMuted,
-                                    maxLines = 1,
-                                )
-                            }
-                            PillTag(
-                                text = if (online == false) "离线" else "打开",
-                                color = if (online == false) StatusColors.error else palette.accent,
-                            )
-                        }
-                    }
-                }
-
-                if (state.saved.isNotEmpty()) {
-                    item {
-                        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
-                            state.saved.forEach { d ->
-                                TextButton(onClick = { forgetTarget = d }) {
-                                    Text("移除 ${d.title}", style = MaterialTheme.typography.labelMedium)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // ---------- 添加设备 ----------
+            if (state.saved.isEmpty()) {
                 item {
-                    VSpace(Spacing.sm)
-                    AppCard(onClick = { showAdd = !showAdd }) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                if (showAdd) "收起" else "添加音箱",
-                                style = MaterialTheme.typography.titleMedium,
-                                modifier = Modifier.weight(1f),
-                            )
-                            Text(if (showAdd) "−" else "+", style = MaterialTheme.typography.titleLarge)
-                        }
-                    }
+                    EmptyState(
+                        title = "先添加你的音箱",
+                        hint = "点下面的「添加音箱」搜索，或直接填 IP。添加一次就会记住，以后打开直接点。",
+                    )
                 }
+            }
 
-                if (showAdd) {
-                    item {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(56.dp)
-                                .clip(AppShapesExpressive.pill)
-                                .background(MaterialTheme.colorScheme.primary)
-                                .clickable(enabled = !state.scanning, onClick = onScan),
-                            contentAlignment = Alignment.Center,
-                        ) {
+            items(state.saved, key = { it.uuid }) { device ->
+                val online = state.online[device.uuid]
+                val palette = remember(device.uuid) { seedOf(device.name, device.ip) }
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(AppShapesExpressive.squircle)
+                        .background(
+                            Brush.linearGradient(
+                                listOf(palette.top, palette.accent.copy(alpha = 0.28f)),
+                            ),
+                        )
+                        .combinedClickable(
+                            onClick = { onOpenDevice(device) },
+                            onLongClick = { forgetTarget = device },
+                        )
+                        .padding(Spacing.lg),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
                             Text(
-                                if (state.scanning) "正在搜索音箱…" else "搜索局域网音箱",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.onPrimary,
+                                device.title,
+                                style = MaterialTheme.typography.titleLarge,
+                                color = extras.onBackdrop,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
-                        }
-                    }
-                    item {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            OutlinedTextField(
-                                value = manualIp,
-                                onValueChange = { manualIp = it },
-                                label = { Text("手动填 IP（如 192.168.99.153）") },
-                                singleLine = true,
-                                modifier = Modifier.weight(1f),
-                            )
-                            Spacer(Modifier.width(Spacing.sm))
-                            Button(onClick = { onAddManual(manualIp); manualIp = "" }) { Text("添加") }
-                        }
-                    }
-                    if (state.filteredOutCount > 0) {
-                        item {
                             Text(
-                                "已忽略 ${state.filteredOutCount} 个非音箱的 UPnP 设备（电视 / 路由 / NAS 等）",
+                                listOfNotNull(
+                                    device.ip,
+                                    device.modelName,
+                                    when (online) {
+                                        true -> "在线"
+                                        false -> "离线"
+                                        null -> null
+                                    },
+                                ).joinToString(" · "),
                                 style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = extras.onBackdropMuted,
+                                maxLines = 1,
                             )
                         }
-                    }
-                    items(state.devices, key = { it.ip }) { d ->
-                        AppCard(onClick = { onAddDiscovered(d) }) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Column(Modifier.weight(1f)) {
-                                    Text(
-                                        d.friendlyName ?: d.friendlySsid ?: d.ip,
-                                        style = MaterialTheme.typography.titleMedium,
-                                    )
-                                    Text(
-                                        d.ip,
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                                Text("添加", color = MaterialTheme.colorScheme.primary)
-                            }
-                        }
-                    }
-                    item {
-                        OutlinedButton(onClick = onProvision, modifier = Modifier.fillMaxWidth()) {
-                            Text("新音箱？走 AP 直连配网")
-                        }
+                        PillTag(
+                            text = if (online == false) "离线" else "打开",
+                            color = if (online == false) StatusColors.error else palette.accent,
+                        )
                     }
                 }
             }
 
-            // ---------- 迷你播放条 ----------
-            if (queue.nowPlaying != null || queue.running) {
-                MiniPlayerBar(
-                    queue = queue,
-                    onOpen = onOpenPlayer,
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(Spacing.lg),
-                )
+            if (state.saved.isNotEmpty()) {
+                item {
+                    Text(
+                        "长按设备卡片可以移除记录",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            item {
+                VSpace(Spacing.sm)
+                AppCard(onClick = { showAdd = !showAdd }) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            if (showAdd) "收起" else "添加音箱",
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(if (showAdd) "−" else "+", style = MaterialTheme.typography.titleLarge)
+                    }
+                }
+            }
+
+            if (showAdd) {
+                item {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(56.dp)
+                            .clip(AppShapesExpressive.pill)
+                            .background(MaterialTheme.colorScheme.primary)
+                            .clickable(enabled = !state.scanning, onClick = onScan),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            if (state.scanning) "正在搜索音箱…" else "搜索局域网音箱",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                        )
+                    }
+                }
+                item {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(
+                            value = manualIp,
+                            onValueChange = { manualIp = it },
+                            label = { Text("手动填 IP（如 192.168.99.153）") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Spacer(Modifier.width(Spacing.sm))
+                        Button(onClick = { onAddManual(manualIp); manualIp = "" }) { Text("添加") }
+                    }
+                }
+                if (state.filteredOutCount > 0) {
+                    item {
+                        Text(
+                            "已忽略 ${state.filteredOutCount} 个非音箱的 UPnP 设备（电视 / 路由 / NAS 等）",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                items(state.devices, key = { it.ip }) { d ->
+                    AppCard(onClick = { onAddDiscovered(d) }) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    d.friendlyName ?: d.friendlySsid ?: d.ip,
+                                    style = MaterialTheme.typography.titleMedium,
+                                )
+                                Text(
+                                    d.ip,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Text("添加", color = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                }
+                item {
+                    OutlinedButton(onClick = onProvision, modifier = Modifier.fillMaxWidth()) {
+                        Text("新音箱？走 AP 直连配网")
+                    }
+                }
             }
         }
     }
@@ -421,10 +530,10 @@ private fun HomeScreen(
 }
 
 /**
- * 迷你播放条：只有「在放什么」和一个可点区域。
+ * 迷你播放条：只显示「在放什么」+ 点开。
  *
- * 这里刻意**不放播放/暂停按钮**：所有控制都在播放页一处（这是本轮改动的主旨），
- * 在迷你条上再放一个控制就意味着两处状态要同步，迟早不一致。
+ * 刻意**不放播放/暂停**：所有控制都在播放页一处。迷你条上再放一个控制，
+ * 就意味着两处状态要同步，迟早不一致。
  */
 @Composable
 private fun MiniPlayerBar(
