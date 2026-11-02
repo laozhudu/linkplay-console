@@ -118,7 +118,12 @@ class QueuePlaybackService : Service() {
         curItems = session.items
         QueueBus.bind(controller)
         val sc = CoroutineScope(SupervisorJob() + Dispatchers.IO).also { scope = it }
-        job = sc.launch { runQueue(ip, location, uuid, loopMode, session.items, baseIndex = 0) }
+        // 从快照里的 index 起播：用户点的是第 5 首，就该从第 5 首开始，
+        // 而不是笨拙地把前 4 首也「过」一遍（那会白投 4 次流，还会出现前奏闪一下）
+        val start = session.index.coerceIn(0, session.items.lastIndex.coerceAtLeast(0))
+        job = sc.launch {
+            runQueue(ip, location, uuid, loopMode, session.items.drop(start), baseIndex = start)
+        }
         return START_NOT_STICKY
     }
 

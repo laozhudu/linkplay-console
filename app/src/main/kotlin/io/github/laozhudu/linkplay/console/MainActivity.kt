@@ -177,8 +177,10 @@ fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
     Scaffold(
         bottomBar = {
             Column {
-                // 有播放内容时，迷你条常驻在导航之上（Spotify 同款位置）
-                if (queue.nowPlaying != null || queue.running) {
+                // 有播放内容时，迷你条常驻在导航之上（Spotify 同款位置）。
+                // **播放页本身不显示**：那里已经有完整控制，再叠一条等于凭空多一层，
+                // 而且它一出现就顶掉播放页的高度 —— 用户说的「点击是多一层」就是这个。
+                if ((queue.nowPlaying != null || queue.running) && tab != Tab.Player) {
                     MiniPlayerBar(
                         queue = queue,
                         onOpen = { tab = Tab.Player },
@@ -389,15 +391,6 @@ private fun HomeScreen(
                 }
             }
 
-            // 多房间放在最上面：它是"我家有几台音箱"的事，属设备层面，
-            // 不是某一台设备的设置项（放设置页里就得先点进设备才看得见全局）
-            if (state.saved.size >= 2 || state.groupMembers.size > 1) {
-                item {
-                    MultiroomCard(state = state, vm = vm, onOpenDevice = onOpenDevice)
-                    VSpace(Spacing.sm)
-                }
-            }
-
             if (state.saved.isEmpty()) {
                 item {
                     EmptyState(
@@ -465,6 +458,15 @@ private fun HomeScreen(
                             },
                         )
                     }
+                }
+            }
+
+            // 多房间放在**列表最下方**：这是低频配置（组一次能用很久），
+            // 常看的设备列表应该占屏幕上半部分，不该被配置卡挤下去。
+            if (state.saved.size >= 2 || state.groupMembers.size > 1) {
+                item {
+                    VSpace(Spacing.sm)
+                    MultiroomCard(state = state, vm = vm, onOpenDevice = onOpenDevice)
                 }
             }
 
