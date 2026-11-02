@@ -407,20 +407,31 @@ private fun HomeScreen(
                                 listOfNotNull(
                                     device.ip,
                                     device.modelName,
-                                    when (online) {
-                                        true -> "在线"
-                                        false -> "离线"
-                                        null -> null
-                                    },
+                                    // 入组的从机连不上，但不能说"离线" —— 它正在同步播放
+                                    state.groupedUnder[device.uuid.lowercase()]?.let { "同步播放中 · 属 $it" }
+                                        ?: when (online) {
+                                            true -> "在线"
+                                            false -> "离线"
+                                            null -> null
+                                        },
                                 ).joinToString(" · "),
                                 style = MaterialTheme.typography.labelMedium,
                                 color = extras.onBackdropMuted,
                                 maxLines = 1,
                             )
                         }
+                        val groupedUnder = state.groupedUnder[device.uuid.lowercase()]
                         PillTag(
-                            text = if (online == false) "离线" else "打开",
-                            color = if (online == false) StatusColors.error else palette.accent,
+                            text = when {
+                                groupedUnder != null -> "组内"
+                                online == false -> "离线"
+                                else -> "打开"
+                            },
+                            color = when {
+                                groupedUnder != null -> StatusColors.ok
+                                online == false -> StatusColors.error
+                                else -> palette.accent
+                            },
                         )
                     }
                 }

@@ -75,6 +75,32 @@ class MultiroomChannelTest {
     }
 
     @Test
+    fun joinWithPolling_密码留空时照原厂用getNetwork返回值走WPA2PSK() {
+        // 真机 getNetwork 的真实返回就是这个 JSON，原厂直接把它当密码用，且能组上
+        val http = FakeHttp(
+            mapOf(
+                "getStatusEx" to statusEx,
+                "getNetwork" to """{"securemode":"0",}""",
+                "multiroom:ConnnectAP" to "OK",
+                "multiroom:getSlaveList" to """{ "slaves": 0 }""",
+            ),
+        )
+        var clock = 0L
+        MultiroomClient(http).joinWithPolling(
+            masterIp = "192.168.99.164",
+            masterSsid = "DOSS DS-1831_400C",
+            slaveIp = "192.168.99.153",
+            sleep = { clock += it },
+            now = { clock },
+        )
+        val cmd = http.sent.first { it.second.startsWith("multiroom:ConnnectAP") }.second
+        assertTrue(cmd.contains("auth=WPA2PSK"))
+        assertTrue(cmd.contains("encry=AES"))
+        // pwd 是那段 JSON 的 hex
+        assertTrue(cmd.contains("pwd=7b227365637572656d6f646522"))
+    }
+
+    @Test
     fun 显式信道优先() {
         val http = FakeHttp(
             mapOf(

@@ -214,7 +214,44 @@ multiroom:SlaveMask / SlaveUnMask / SlaveKickout 入组/退组/踢出（参数�
 但一台从机都没出现。所以唯一可信的成功判据是「主机读回来的从机列表真的多了一台」。
 本仓库的 `MultiroomClient.joinWithPolling` 照这个节奏实现（含注入时钟，可单测）。
 
-### 真机实测：卡在哪（诚实记录）
+### 已成组（2026-11-02，用户用原厂 App 成功）
+
+用户用原厂 App 把两台组上之后，主机 `.164` 的真实回报：
+
+```json
+{ "slaves": 1, "slave_list": [ {
+    "name": "doss3", "ssid": "DOSS DS-1831_ADB4", "mask": 0,
+    "volume": 60, "mute": 0, "channel": 0, "battery": 70,
+    "ip": "10.10.10.92",              ← 关键：从机跑到主机 AP 网段了
+    "version": "3.6.5310",
+    "uuid": "uuid:FF31F017-4FE5-C9B2-A2AC-EAE3FF31F017"
+} ] }
+```
+
+由此确认的事实：
+
+| 事实 | 含义 |
+|---|---|
+| 从机 IP 变成 **10.10.10.92** | 主机热点 `ra0=10.10.10.254`，从机真的连上去了；**从路由器侧再也直连不到它** |
+| `multiroom:SlaveVolume:10.10.10.92:30` → OK，回读 `volume:30`，再设 60 → OK | **可以**用主机代控从机音量，实测生效（不是只回 OK） |
+| `multiroom:SlaveChannel:10.10.10.92:1` → OK，回读 `channel:1` | 声道同样可代控 |
+| `multiroom:getGroupInfo` → `OK` | 只有状态词，没有数据 |
+| 主机 `getStatusEx.group` 仍是 `0` | `group` 字段**不是**组 ID，不能拿来判断是否成组 |
+| 直连 `http://10.10.10.92/httpapi.asp` → 不可达 | 不能靠探测从机 IP 判断在线，必须问主机 |
+
+### 我之前为什么没组上（复盘，如实写）
+
+命令格式是对的（`utils.a.b()` 逐字确认就是普通小写 hex），错在 `auth` 这一项：
+
+- 我按 `getStatusEx.securemode=0` 判断"热点无密码"，于是发 `auth=OPEN:encry=NONE`；
+- 原厂 `b.a()` 只看 `pwd` 字符串是否非空，而它的 `pwd` 来自 `getNetwork`，
+  这批固件 `getNetwork` 返回 `{"securemode":"0",}`（非空！），所以原厂走的是
+  **`auth=WPA2PSK:encry=AES:pwd=<那段 JSON 的 hex>`** —— 一条看起来"脏"的命令，但它能组上。
+
+**教训**：协议逆向时要照抄，不要按"合理"去改；`securemode` 说的是 STA 侧链路，不是 AP。
+现在 `MultiroomClient.readJoinPassword()` 就照原厂原样返回 `getNetwork` 的整段内容。
+
+### 真机实测：卡在哪（历史记录，已被上面的成功取代）
 
 两台 DS-1831 同时在线（`.164` fw 3.6.6623 主机 / `.153` fw 3.6.5310 从机）：
 
@@ -238,6 +275,15 @@ com.wifiaudio.a.b.a(this.b, this.c, this.f1415a);   // 再下发 ConnnectAP
 而这两台的 `getNetwork` **只返回 `{"securemode":"0",}`**（不是密码）。
 原厂逻辑把这个 JSON 当密码、并按「密码非空 → WPA2PSK」走，于是 auth 变成 WPA2PSK + 一段 JSON 当密码，
 **必然连不上**。这很可能就是「原厂 App 在这批固件上多房间也不好用」的根因。
+
+### 组网的连带影响（App 必须处理）
+
+入组的从机连不上，直接探活必然判"离线"——那是撒谎。所以：
+
+- `ConsoleUiState.groupedUnder`：探活时顺带读每台可达设备的 `getSlaveList`，
+  记下 `从机 uuid → 主机显示名`；
+- 首页对这类设备显示 **「同步播放中 · 属 xxx」+「组内」标签**，不再显示"离线"；
+- 从机音量/声道下发时，参数用**主机自报的从机 IP**（`10.10.10.x`），不要用保存的旧 IP。
 
 ### 交互不照抄拖拽（这是刻意的）
 
