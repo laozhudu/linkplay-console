@@ -12,13 +12,13 @@ import java.net.URLEncoder
  * `Accept-Language: zh-cn|en-us`。这里保持同一语义，避免设备端行为差异：
  * 单连接（设备是嵌入式 HTTP 服务，并发容易被拒）、短超时、不跟随重定向。
  */
-class DeviceHttpClient(
+open class DeviceHttpClient(
     private val connectTimeoutMs: Int = 5_000,
     private val readTimeoutMs: Int = 15_000,
     private val language: String = "zh-cn",
 ) {
     @Throws(IOException::class)
-    fun get(
+    open fun get(
         deviceIp: String,
         command: String,
         path: String = LinkPlayCommands.HTTP_API_PATH,
