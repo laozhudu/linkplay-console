@@ -39,6 +39,9 @@ object SsdpMessages {
 
     const val ST_MEDIA_RENDERER = "urn:schemas-upnp-org:device:MediaRenderer:1"
 
+    /** DLNA 媒体服务器（NAS 上的 MiniDLNA / fnOS DLNA 等）。 */
+    const val ST_MEDIA_SERVER = "urn:schemas-upnp-org:device:MediaServer:1"
+
     /** 搜索顺序：先私有服务（信息量最大），再标准渲染器，最后 all 兜底老固件。 */
     val DEFAULT_SEARCH_TARGETS = listOf(ST_WIIMU_PLAY_QUEUE, ST_MEDIA_RENDERER, "ssdp:all")
 
