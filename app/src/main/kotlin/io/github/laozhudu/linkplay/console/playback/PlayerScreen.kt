@@ -1,23 +1,24 @@
 package io.github.laozhudu.linkplay.console.playback
 
+import android.graphics.BitmapFactory
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -26,15 +27,13 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -50,17 +49,16 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import android.graphics.BitmapFactory
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
@@ -83,37 +81,40 @@ import io.github.laozhudu.linkplay.protocol.queue.QueueItem
 import io.github.laozhudu.linkplay.protocol.upnp.TransportState
 
 /**
- * 播放页 —— 按 QQ 音乐的结构做，不再自创。
+ * 播放页 —— **单层、不滚动、无浮层**。
  *
- * ## 版式（自上而下）
+ * ## 为什么又重做一次
+ *
+ * 上一版把播放列表做成 `ModalBottomSheet`。用户的原话是
+ * 「点击是多一层，没在原来的播放器层面播放和暂停，导致正在播放时列表等其他功能点不了」。
+ * 也就是说：任何"另开一层"的东西都是错的方向，不管它多像 QQ 音乐。
+ *
+ * 这一版的硬约束：
+ *
+ * 1. **整页不滚动**（`Column` 固定，不用 `verticalScroll`）——
+ *    滚动会抢手势，而且手指一滑控制键就跑到屏幕外；
+ * 2. **没有 Dialog / BottomSheet / 二级页** —— 所有东西都在这一屏里；
+ * 3. **只有底部一个可滚动区域**（内容区），靠一个二选一切换「播放列表 / 投流日志」，
+ *    所以永远不会有"两个滚动轴打架"或"浮层挡着点不到"；
+ * 4. 控制键用 `weight` 分配固定区域，**播放/暂停永远在屏幕内、永远可点**。
+ *
+ * ## 版式
  *
  * ```
- * 设备名 · 状态                          ⋯ 设置
- *
- *         ┌───────────────┐
- *         │   大圆角封面   │   ← 播放时微微放大
- *         └───────────────┘
- *            曲名（大、粗）
- *            歌手
- *     1:23 ─────●──────── 4:56
- *    循环   ⏮   ▶(大)   ⏭    ☰ 列表
- *    🔊 ─────────●──── 60
- *         （折叠）投流与日志
+ * 设备名 · 状态                                ⋯
+ *        ┌────────── 封面（自适应）──────────┐
+ *        曲名
+ *        歌手
+ *   1:23 ───────●──────── 4:56
+ *   循环   ⏮   ▶(72dp)   ⏭   ⟳
+ *   🔊 ──────────●───── 60
+ *   [播放列表 12] [投流与日志]        ← 二选一，不是浮层
+ *   ┌── 这一块是唯一的滚动区 ──┐
+ *   │ 1 ▶  曲名            ✕ │
+ *   │ 2    曲名            ✕ │
+ *   └────────────────────────┘
  * ```
- *
- * 用户的意见是「不符合通用操控」，而通用就是这一个：封面上、歌名中、进度下、
- * 一排控制键居中、音量在最底、列表用右侧按钮弹出。上一版把列表直接铺在页面下方，
- * 歌一多就把控制键挤到屏幕外，等于每次都要滑到下面才能按暂停。
- *
- * ## 三个必须跟手的点
- *
- * 1. **音量**：拖动时立刻改本地值 + 走合并通道下发（[PlaybackViewModel.setVolumeLive]）。
- *    旧实现走 `act()` 的 `busy` 闸门，拖动时第二个请求就被丢掉，松手才生效 —— 这就是「不跟手」的根因。
- * 2. **进度**：拖动时只改本地草稿，松手才 seek（逐像素 seek 会让设备进度反复回弹）。
- * 3. **播放列表**：点一首 → 服务在跑就跳过去，不在跑就直接投这一首；删一首同理，
- *    绝不出现「点了没反应」。
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlayerScreen(
     deviceIp: String,
@@ -136,9 +137,8 @@ fun PlayerScreen(
 
     var scrubDraft by remember { mutableStateOf<Float?>(null) }
     var volDraft by remember { mutableStateOf<Float?>(null) }
-    var showSheet by remember { mutableStateOf(false) }
+    /** 底部内容区显示哪一块。false = 播放列表，true = 投流与日志。 */
     var showAdvanced by remember { mutableStateOf(false) }
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     val playing = state.state == TransportState.PLAYING || state.state == TransportState.TRANSITIONING
     val duration = state.durationSec.coerceAtLeast(0)
@@ -146,17 +146,9 @@ fun PlayerScreen(
     val shownVolume = volDraft ?: (state.volume.toFloat() / 100f)
     val art = state.albumArtUrl?.takeIf { it.isNotBlank() }
         ?: queue.current?.albumArtUrl?.takeIf { it.isNotBlank() }
-    // 服务器不给封面时，用文件里内嵌的（实测 NAS 的 m4a 能读出 59KB JPEG）
     val embeddedCover = remember(state.embeddedCover) {
         state.embeddedCover?.let {
             runCatching { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() }.getOrNull()
-        }
-    }
-    // 换曲后重新读标签（内嵌封面/歌词是跟着文件走的）
-    LaunchedEffect(queue.current?.url) {
-        queue.current?.url?.let {
-            vm.clearEmbeddedTags()
-            vm.loadEmbeddedTags(it)
         }
     }
     val title = state.title ?: queue.current?.title
@@ -167,6 +159,13 @@ fun PlayerScreen(
         val d = scrubDraft ?: return@LaunchedEffect
         if (duration <= 0) return@LaunchedEffect
         vm.seekTo((d * duration).toLong())
+    }
+    // 换曲后重新读内嵌封面/歌词
+    LaunchedEffect(queue.current?.url) {
+        queue.current?.url?.let {
+            vm.clearEmbeddedTags()
+            vm.loadEmbeddedTags(it)
+        }
     }
 
     val artworkScale by animateFloatAsState(
@@ -187,27 +186,25 @@ fun PlayerScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                // 系统栏内边距由外层 Scaffold 统一提供，这里不再重复加（否则顶部会多出一条空白）
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = Spacing.xl),
+                .padding(horizontal = Spacing.lg),
         ) {
             // ---------- 顶栏 ----------
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = Spacing.sm),
+                    .padding(top = Spacing.xs, bottom = Spacing.xs),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (onBack != null) {
                     CircleIcon(onClick = onBack) {
                         BackGlyph(extras.onBackdrop, Modifier.size(GlyphSize.medium))
                     }
-                    Spacer(Modifier.width(Spacing.sm))
+                    Spacer(Modifier.width(Spacing.xs))
                 }
                 Column(Modifier.weight(1f)) {
                     Text(
                         state.friendlyName ?: deviceIp,
-                        style = MaterialTheme.typography.titleMedium,
+                        style = MaterialTheme.typography.titleSmall,
                         color = extras.onBackdrop,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -217,7 +214,7 @@ fun PlayerScreen(
                             append(if (playing) "正在播放" else state.channel ?: "连接中")
                             state.sourceLabel?.let { append(" · ").append(it) }
                         },
-                        style = MaterialTheme.typography.labelMedium,
+                        style = MaterialTheme.typography.labelSmall,
                         color = extras.onBackdropMuted,
                         maxLines = 1,
                     )
@@ -227,51 +224,59 @@ fun PlayerScreen(
                 }
             }
 
-            // ---------- 封面 ----------
-            Spacer(Modifier.height(Spacing.sm))
-            Box(
+            // ---------- 封面（吃掉剩余空间，保持正方形）----------
+            // 用 BoxWithConstraints 取「宽高较小者」当边长：
+            // 直接 aspectRatio 在窄屏上会把封面撑出父容器（横向溢出、被裁掉一角）
+            BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(1f)
-                    .graphicsLayer {
-                        scaleX = artworkScale
-                        scaleY = artworkScale
-                    }
-                    .clip(AppShapesExpressive.squircle)
-                    .background(
-                        Brush.linearGradient(listOf(palette.accent.copy(alpha = 0.55f), palette.top)),
-                    ),
+                    .weight(1f),
                 contentAlignment = Alignment.Center,
             ) {
-                if (art != null) {
-                    AsyncImage(
-                        model = art,
-                        contentDescription = "专辑封面",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                } else if (embeddedCover != null) {
-                    Image(
-                        bitmap = embeddedCover,
-                        contentDescription = "内嵌封面",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                } else {
-                    Text(
-                        text = (title ?: "?").take(1).uppercase(),
-                        fontSize = 96.sp,
-                        fontWeight = FontWeight.Black,
-                        color = extras.onBackdrop.copy(alpha = 0.85f),
-                    )
+                val side = if (maxWidth < maxHeight) maxWidth else maxHeight
+                Box(
+                    modifier = Modifier
+                        .size(side)
+                        .graphicsLayer {
+                            scaleX = artworkScale
+                            scaleY = artworkScale
+                        }
+                        .clip(AppShapesExpressive.squircle)
+                        .background(
+                            Brush.linearGradient(listOf(palette.accent.copy(alpha = 0.55f), palette.top)),
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (art != null) {
+                        AsyncImage(
+                            model = art,
+                            contentDescription = "专辑封面",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    } else if (embeddedCover != null) {
+                        Image(
+                            bitmap = embeddedCover,
+                            contentDescription = "内嵌封面",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    } else {
+                        Text(
+                            text = (title ?: "?").take(1).uppercase(),
+                            fontSize = 64.sp,
+                            fontWeight = FontWeight.Black,
+                            color = extras.onBackdrop.copy(alpha = 0.85f),
+                        )
+                    }
                 }
             }
 
             // ---------- 曲名 / 歌手 ----------
-            Spacer(Modifier.height(Spacing.lg))
+            Spacer(Modifier.height(Spacing.sm))
             Text(
                 text = title ?: "未在播放",
-                style = MaterialTheme.typography.headlineSmall,
+                style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
                 color = extras.onBackdrop,
                 maxLines = 1,
@@ -279,11 +284,10 @@ fun PlayerScreen(
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
             )
-            Spacer(Modifier.height(4.dp))
             Text(
                 text = artist
-                    ?: if (state.state == TransportState.NO_MEDIA_PRESENT) "投一首歌试试" else deviceIp,
-                style = MaterialTheme.typography.bodyMedium,
+                    ?: if (state.state == TransportState.NO_MEDIA_PRESENT) "去媒体库点一首" else deviceIp,
+                style = MaterialTheme.typography.bodySmall,
                 color = extras.onBackdropMuted,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -291,42 +295,7 @@ fun PlayerScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
 
-            // ---------- 歌词（文件里真的带才出现，不放假按钮）----------
-            state.lyrics?.takeIf { it.isNotBlank() }?.let { lyrics ->
-                Spacer(Modifier.height(Spacing.sm))
-                var showLyrics by remember { mutableStateOf(false) }
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(AppShapesExpressive.pill)
-                        .background(Color.White.copy(alpha = 0.08f))
-                        .clickable { showLyrics = !showLyrics }
-                        .padding(vertical = Spacing.sm, horizontal = Spacing.md),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        if (showLyrics) "收起歌词" else "查看歌词",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = extras.onBackdrop,
-                    )
-                }
-                if (showLyrics) {
-                    Spacer(Modifier.height(Spacing.xs))
-                    Text(
-                        lyrics,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = extras.onBackdropMuted,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 220.dp)
-                            .verticalScroll(rememberScrollState()),
-                    )
-                }
-            }
-
             // ---------- 进度 ----------
-            Spacer(Modifier.height(Spacing.md))
             WaveProgressSlider(
                 value = progress,
                 onValueChange = { scrubDraft = it },
@@ -336,7 +305,7 @@ fun PlayerScreen(
                 inactiveColor = extras.onBackdropMuted.copy(alpha = 0.28f),
                 thumbColor = palette.accent,
                 animated = scrubDraft == null,
-                height = 22.dp,
+                height = 20.dp,
             )
             Row(Modifier.fillMaxWidth()) {
                 Text(
@@ -352,8 +321,7 @@ fun PlayerScreen(
                 )
             }
 
-            // ---------- 主控：循环 · 上一首 · 播放 · 下一首 · 列表 ----------
-            Spacer(Modifier.height(Spacing.md))
+            // ---------- 主控：永远在屏幕内 ----------
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceEvenly,
@@ -366,35 +334,31 @@ fun PlayerScreen(
                         modifier = Modifier.size(GlyphSize.medium),
                     )
                 }
-                CircleIcon(onClick = vm::previous, size = 52.dp) {
-                    SkipGlyph(extras.onBackdrop, forward = false, modifier = Modifier.size(30.dp))
+                CircleIcon(onClick = vm::previous, size = 48.dp) {
+                    SkipGlyph(extras.onBackdrop, forward = false, modifier = Modifier.size(28.dp))
                 }
                 Box(
                     modifier = Modifier
-                        .size(76.dp)
+                        .size(68.dp)
                         .clip(CircleShape)
                         .background(extras.onBackdrop)
                         .clickable { if (playing) vm.pause() else vm.play() },
                     contentAlignment = Alignment.Center,
                 ) {
-                    if (playing) PauseGlyph(palette.top, Modifier.size(32.dp))
-                    else PlayGlyph(palette.top, Modifier.size(32.dp))
+                    if (playing) PauseGlyph(palette.top, Modifier.size(28.dp))
+                    else PlayGlyph(palette.top, Modifier.size(28.dp))
                 }
-                CircleIcon(onClick = vm::next, size = 52.dp) {
-                    SkipGlyph(extras.onBackdrop, forward = true, modifier = Modifier.size(30.dp))
+                CircleIcon(onClick = vm::next, size = 48.dp) {
+                    SkipGlyph(extras.onBackdrop, forward = true, modifier = Modifier.size(28.dp))
                 }
-                CircleIcon(onClick = { showSheet = true }, size = 44.dp) {
-                    PlaylistGlyph(
-                        color = if (queue.items.isEmpty()) extras.onBackdropMuted else extras.onBackdrop,
-                        modifier = Modifier.size(GlyphSize.medium),
-                    )
+                CircleIcon(onClick = vm::stop, size = 44.dp) {
+                    Text("■", style = MaterialTheme.typography.titleSmall, color = extras.onBackdropMuted)
                 }
             }
 
-            // ---------- 音量 ----------
-            Spacer(Modifier.height(Spacing.md))
+            // ---------- 音量（拖动跟手）----------
             Row(verticalAlignment = Alignment.CenterVertically) {
-                CircleIcon(onClick = vm::toggleMute, size = 36.dp) {
+                CircleIcon(onClick = vm::toggleMute, size = 32.dp) {
                     VolumeGlyph(
                         color = if (state.mute) extras.onBackdropMuted else extras.onBackdrop,
                         muted = state.mute,
@@ -404,7 +368,6 @@ fun PlayerScreen(
                 Spacer(Modifier.width(Spacing.xs))
                 WaveProgressSlider(
                     value = shownVolume,
-                    // 拖动中：本地值跟着手走，同时限速下发，松手不停顿
                     onValueChange = {
                         volDraft = it
                         vm.setVolumeLive((it * 100).toInt())
@@ -415,141 +378,124 @@ fun PlayerScreen(
                     inactiveColor = extras.onBackdropMuted.copy(alpha = 0.28f),
                     thumbColor = palette.accent,
                     animated = false,
-                    height = 20.dp,
+                    height = 18.dp,
                 )
-                Spacer(Modifier.width(Spacing.sm))
+                Spacer(Modifier.width(Spacing.xs))
                 Text(
                     if (state.mute) "静音" else state.volume.toString(),
-                    style = MaterialTheme.typography.labelMedium,
+                    style = MaterialTheme.typography.labelSmall,
                     color = extras.onBackdropMuted,
                     textAlign = TextAlign.End,
-                    modifier = Modifier.width(34.dp),
+                    modifier = Modifier.width(32.dp),
                 )
             }
 
             (state.error ?: state.unavailableReason)?.let { msg ->
-                Spacer(Modifier.height(Spacing.sm))
-                Text(msg, style = MaterialTheme.typography.bodySmall, color = StatusColors.error)
+                Text(
+                    msg,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = StatusColors.error,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
 
-            // ---------- 高级（折叠）----------
-            Spacer(Modifier.height(Spacing.md))
+            // ---------- 底部内容区：二选一，不是浮层 ----------
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(AppShapesExpressive.pill)
-                    .clickable { showAdvanced = !showAdvanced }
-                    .padding(vertical = Spacing.sm, horizontal = Spacing.md),
+                    .padding(vertical = Spacing.xs),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    if (showAdvanced) "收起" else "投流地址与设备日志",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = extras.onBackdropMuted,
-                    modifier = Modifier.weight(1f),
+                SegmentChip(
+                    text = if (queue.items.isEmpty()) "播放列表" else "播放列表 ${queue.items.size}",
+                    selected = !showAdvanced,
+                    onClick = { showAdvanced = false },
                 )
-                Text(
-                    if (showAdvanced) "−" else "+",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = extras.onBackdropMuted,
-                )
+                SegmentChip(text = "投流与日志", selected = showAdvanced, onClick = { showAdvanced = true })
+                Spacer(Modifier.weight(1f))
+                if (queue.items.isEmpty() && !showAdvanced) {
+                    Text(
+                        "从媒体库点歌",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = extras.onBackdropMuted,
+                    )
+                }
             }
 
-            if (showAdvanced) {
-                CastSection(state = state, vm = vm, onOpenNas = onOpenNas, onOpenLocalQueue = onOpenLocalQueue)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(0.85f)
+                    .clip(RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp))
+                    .background(Color.White.copy(alpha = 0.06f)),
+            ) {
+                if (showAdvanced) {
+                    CastPanel(
+                        state = state,
+                        vm = vm,
+                        onOpenNas = onOpenNas,
+                        onOpenLocalQueue = onOpenLocalQueue,
+                    )
+                } else if (queue.items.isEmpty()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(Spacing.md),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        Text(
+                            "队列是空的",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = extras.onBackdrop,
+                        )
+                        Spacer(Modifier.height(Spacing.sm))
+                        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                            TextButton(onClick = onOpenNas) { Text("NAS 音乐") }
+                            TextButton(onClick = onOpenLocalQueue) { Text("手机音乐") }
+                            TextButton(onClick = onOpenLibrary) { Text("音乐库") }
+                        }
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(bottom = Spacing.md),
+                    ) {
+                        itemsIndexed(queue.items) { index, item ->
+                            PlaylistRow(
+                                index = index,
+                                item = item,
+                                playing = index == queue.index && queue.running,
+                                current = index == queue.index,
+                                onClick = { vm.playQueueItem(index) },
+                                onRemove = { vm.removeQueueItem(index) },
+                            )
+                        }
+                    }
+                }
             }
-
-            Spacer(Modifier.height(Spacing.xxl))
-        }
-    }
-
-    // ---------- 播放列表：从底部升起的整块面板 ----------
-    if (showSheet) {
-        ModalBottomSheet(
-            onDismissRequest = { showSheet = false },
-            sheetState = sheetState,
-            containerColor = MaterialTheme.colorScheme.surface,
-        ) {
-            PlaylistSheet(
-                queue = queue,
-                onPlay = { index ->
-                    vm.playQueueItem(index)
-                    showSheet = false
-                },
-                onRemove = vm::removeQueueItem,
-                onOpenNas = { showSheet = false; onOpenNas() },
-                onOpenLocalQueue = { showSheet = false; onOpenLocalQueue() },
-                onOpenLibrary = { showSheet = false; onOpenLibrary() },
-            )
         }
     }
 }
 
-/** 播放列表面板：单列表，不与外层抢手势。 */
 @Composable
-private fun PlaylistSheet(
-    queue: QueueRunState,
-    onPlay: (Int) -> Unit,
-    onRemove: (Int) -> Unit,
-    onOpenNas: () -> Unit,
-    onOpenLocalQueue: () -> Unit,
-    onOpenLibrary: () -> Unit,
-) {
-    Column(Modifier.fillMaxWidth().fillMaxSize(0.75f)) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "播放列表",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.weight(1f),
+private fun SegmentChip(text: String, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .clip(AppShapesExpressive.pill)
+            .background(
+                if (selected) Color.White.copy(alpha = 0.20f) else Color.White.copy(alpha = 0.07f),
             )
-            Text(
-                if (queue.items.isEmpty()) "空" else "${queue.items.size} 首",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-
-        if (queue.items.isEmpty()) {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(Spacing.lg),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text(
-                    "还没有队列。先从下面挑一个来源，点一首歌就会进来。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                )
-                Spacer(Modifier.height(Spacing.md))
-                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                    TextButton(onClick = onOpenNas) { Text("NAS 音乐") }
-                    TextButton(onClick = onOpenLocalQueue) { Text("手机音乐") }
-                    TextButton(onClick = onOpenLibrary) { Text("音乐库") }
-                }
-            }
-        } else {
-            LazyColumn(
-                modifier = Modifier.fillMaxWidth(),
-                contentPadding = PaddingValues(bottom = Spacing.xl),
-            ) {
-                itemsIndexed(queue.items) { index, item ->
-                    PlaylistRow(
-                        index = index,
-                        item = item,
-                        playing = index == queue.index && queue.running,
-                        current = index == queue.index,
-                        onClick = { onPlay(index) },
-                        onRemove = { onRemove(index) },
-                    )
-                }
-            }
-        }
+            .clickable(onClick = onClick)
+            .padding(horizontal = Spacing.md, vertical = 6.dp),
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.labelSmall,
+            color = LocalExtraColors.current.onBackdrop,
+        )
     }
 }
 
@@ -562,32 +508,32 @@ private fun PlaylistRow(
     onClick: () -> Unit,
     onRemove: () -> Unit,
 ) {
-    val accent = MaterialTheme.colorScheme.primary
+    val extras = LocalExtraColors.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = Spacing.lg, vertical = 10.dp),
+            .padding(start = Spacing.md, end = Spacing.xs, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.width(28.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.width(26.dp), contentAlignment = Alignment.Center) {
             if (playing) {
-                EqualizerBars(accent)
+                EqualizerBars(extras.onBackdrop)
             } else {
                 Text(
                     "${index + 1}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = if (current) accent else MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (current) extras.onBackdrop else extras.onBackdropMuted,
                 )
             }
         }
-        Spacer(Modifier.width(Spacing.sm))
+        Spacer(Modifier.width(Spacing.xs))
         Column(Modifier.weight(1f)) {
             Text(
                 item.title,
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodySmall,
                 fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal,
-                color = if (current) accent else MaterialTheme.colorScheme.onSurface,
+                color = if (current) extras.onBackdrop else extras.onBackdropMuted,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -595,31 +541,27 @@ private fun PlaylistRow(
                 Text(
                     it,
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = extras.onBackdropMuted,
                     maxLines = 1,
                 )
             }
         }
         Box(
             modifier = Modifier
-                .size(36.dp)
+                .size(34.dp)
                 .clip(CircleShape)
                 .clickable(onClick = onRemove),
             contentAlignment = Alignment.Center,
         ) {
-            Text(
-                "✕",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Text("✕", style = MaterialTheme.typography.labelSmall, color = extras.onBackdropMuted)
         }
     }
 }
 
-/** 正在播的小均衡器条：比一个静态三角更符合播放器习惯。 */
+/** 正在播的小均衡器条。 */
 @Composable
 private fun EqualizerBars(color: Color) {
-    Canvas(Modifier.size(width = 14.dp, height = 16.dp)) {
+    Canvas(Modifier.size(width = 13.dp, height = 14.dp)) {
         val barW = size.width / 5
         listOf(0.55f, 1f, 0.7f).forEachIndexed { i, h ->
             val bh = size.height * h
@@ -635,33 +577,6 @@ private fun EqualizerBars(color: Color) {
     }
 }
 
-/** 播放列表图标（三条横线 + 小三角）：手绘，省掉 material-icons 的 3MB。 */
-@Composable
-private fun PlaylistGlyph(color: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier) {
-        val w = size.width
-        val h = size.height
-        val sw = w * 0.09f
-        listOf(0.26f, 0.5f, 0.74f).forEachIndexed { i, y ->
-            val endX = if (i == 0) w * 0.74f else w * 0.58f
-            drawLine(
-                color = color,
-                start = Offset(w * 0.12f, h * y),
-                end = Offset(endX, h * y),
-                strokeWidth = sw,
-                cap = StrokeCap.Round,
-            )
-        }
-        val p = Path().apply {
-            moveTo(w * 0.74f, h * 0.33f)
-            lineTo(w * 0.74f, h * 0.67f)
-            lineTo(w * 0.95f, h * 0.5f)
-            close()
-        }
-        drawPath(p, color)
-    }
-}
-
 @Composable
 private fun CircleIcon(size: Dp = 40.dp, onClick: () -> Unit, content: @Composable () -> Unit) {
     Box(
@@ -673,9 +588,9 @@ private fun CircleIcon(size: Dp = 40.dp, onClick: () -> Unit, content: @Composab
     ) { content() }
 }
 
-/** 投流与日志（折叠区）。功能不变，只是不再占据主界面。 */
+/** 投流与日志。占用底部内容区，不弹出新层。 */
 @Composable
-private fun CastSection(
+private fun CastPanel(
     state: PlaybackUiState,
     vm: PlaybackViewModel,
     onOpenNas: () -> Unit,
@@ -684,24 +599,22 @@ private fun CastSection(
     val extras = LocalExtraColors.current
     Column(
         modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
-            .background(Color.White.copy(alpha = 0.06f))
-            .padding(Spacing.md)
-            .imePadding(),
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(Spacing.md),
     ) {
         OutlinedTextField(
             value = state.castUrl,
             onValueChange = vm::setCastUrl,
             label = { Text("要投的音频地址") },
             singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
             modifier = Modifier.fillMaxWidth(),
         )
-        Spacer(Modifier.height(Spacing.xs))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 "这条链接需要 Referer（自动转发）",
-                style = MaterialTheme.typography.labelMedium,
+                style = MaterialTheme.typography.labelSmall,
                 color = extras.onBackdropMuted,
                 modifier = Modifier.weight(1f),
             )
@@ -716,11 +629,23 @@ private fun CastSection(
                 modifier = Modifier.fillMaxWidth(),
             )
         }
-        Spacer(Modifier.height(Spacing.sm))
         Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
             TextButton(onClick = vm::cast, enabled = !state.busy) { Text("投流") }
             TextButton(onClick = onOpenNas) { Text("从 NAS 选") }
             TextButton(onClick = onOpenLocalQueue) { Text("手机音乐") }
+        }
+        if (state.lyrics != null) {
+            Text(
+                "歌词",
+                style = MaterialTheme.typography.labelSmall,
+                color = extras.onBackdrop,
+            )
+            Text(
+                state.lyrics!!,
+                style = MaterialTheme.typography.labelSmall,
+                color = extras.onBackdropMuted,
+                modifier = Modifier.heightIn(max = 200.dp),
+            )
         }
         if (state.log.isNotEmpty()) {
             Spacer(Modifier.height(Spacing.xs))

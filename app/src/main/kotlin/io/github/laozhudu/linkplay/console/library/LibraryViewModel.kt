@@ -8,8 +8,12 @@ import io.github.laozhudu.linkplay.protocol.LinkPlayDevice
 import io.github.laozhudu.linkplay.protocol.library.LibrarySearch
 import io.github.laozhudu.linkplay.protocol.library.SearchHit
 import io.github.laozhudu.linkplay.console.playback.QueueBus
+import io.github.laozhudu.linkplay.console.playback.QueuePlaybackService
 import io.github.laozhudu.linkplay.protocol.library.TrackRecord
+import io.github.laozhudu.linkplay.protocol.queue.PlayFromList
 import io.github.laozhudu.linkplay.protocol.queue.QueueItem
+import io.github.laozhudu.linkplay.protocol.queue.ClientSideQueue
+import io.github.laozhudu.linkplay.protocol.session.PlaybackSession
 import io.github.laozhudu.linkplay.protocol.radio.RadioStation
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -123,42 +127,60 @@ class LibraryViewModel(
 
     // ---- 播放 ----
 
-    fun play(track: TrackRecord) {
+    /**
+     * 点一首 → **从这首开始播整个列表**。
+     *
+     * 为什么不再只投一首：原厂 App（以及所有音乐 App）的行为都是
+     * 「点第 5 首，列表里 5 高亮，播完自动第 6 首」。只投一首的话，
+     * 播完就断，用户还得回列表再点——这就是用户说的「媒体库逻辑不对」。
+     *
+     * 队列来源按当前分区取：搜索结果是 hits，收藏是 favorites，最近是 recents。
+     * 设备侧不能自己排队（固件 CreateQueue 只收空 Tracks，实测），
+     * 所以队列交给 [QueuePlaybackService] 逐首投流。
+     */
+    fun play(track: TrackRecord, siblings: List<TrackRecord>? = null) {
         if (_state.value.busy) return
+        val list = (siblings ?: currentList().ifEmpty { listOf(track) })
+            .ifEmpty { listOf(track) }
+        val start = PlayFromList.startIndex(list, track.dedupeKey) { it.dedupeKey }
         _state.update { it.copy(busy = true, error = null) }
         viewModelScope.launch {
             try {
-                val url = withContext(Dispatchers.IO) { resolvePlayableUrl(track) }
-                val ok = withContext(Dispatchers.IO) {
-                    val device = LinkPlayDevice.open(deviceIp, location)
-                    val engine = device.playback()
-                        ?: throw IllegalStateException("这台设备没有可用的播放通道")
-                    engine.playUrl(url, track.title)
-                    true
-                }
-                if (ok) {
-                    // 单曲播放也要进队列：播放页的「播放列表」读的就是 QueueBus，
-                    // 不写进去用户就会看到「在播歌但列表是空的」
-                    val item = QueueItem(
-                        url = url,
-                        title = track.title,
-                        artist = track.displayArtist,
-                        album = null,
-                        durationSec = track.durationSec,
-                        mimeType = "audio/mpeg",
-                        albumArtUrl = track.albumArtUri,
-                    )
-                    QueueBus.begin(listOf(item))
-                    QueueBus.playing(track.title, 0)
-                    val recent = withContext(Dispatchers.IO) {
-                        store.recents.record(track.copy(playUri = url), System.currentTimeMillis())
-                        store.recents.recent()
+                // 先把整条列表的地址都解析出来：本机文件要登记到 LocalMediaServer 才有可投的 URL
+                val items = withContext(Dispatchers.IO) {
+                    list.mapNotNull { t ->
+                        runCatching { resolvePlayableUrl(t) }.getOrNull()?.let { url ->
+                            QueueItem(
+                                url = url,
+                                title = t.title,
+                                artist = t.displayArtist,
+                                durationSec = t.durationSec,
+                                mimeType = "audio/mpeg",
+                                albumArtUrl = t.albumArtUri,
+                            )
+                        }
                     }
-                    _state.update {
-                        it.copy(busy = false, nowPlaying = track.displayName, recents = recent)
-                    }
-                    log("正在播放：${track.displayName}")
                 }
+                if (items.isEmpty()) throw IllegalStateException("这些曲目都没有可播的地址")
+
+                val session = PlaybackSession(
+                    deviceUuid = deviceLabel ?: deviceIp,
+                    deviceIp = deviceIp,
+                    items = items,
+                    index = start.coerceIn(0, items.lastIndex),
+                    loopMode = ClientSideQueue.LOOP_ALL,
+                )
+                withContext(Dispatchers.IO) {
+                    QueuePlaybackService.start(getApplication(), location, session)
+                }
+                val recent = withContext(Dispatchers.IO) {
+                    store.recents.record(track, System.currentTimeMillis())
+                    store.recents.recent()
+                }
+                _state.update {
+                    it.copy(busy = false, nowPlaying = track.displayName, recents = recent)
+                }
+                log(if (items.size > 1) "从「${track.displayName}」开始播放 ${items.size} 首" else "正在播放：${track.displayName}")
             } catch (t: Throwable) {
                 _state.update { it.copy(busy = false, error = t.message) }
                 log("播放失败：${t.message}")
@@ -166,7 +188,13 @@ class LibraryViewModel(
         }
     }
 
-    /** 本地曲目要先把手机 HTTP 服务拉起来，网络流直接用原地址。 */
+    /** 当前分区里的曲目列表（点一首时要连带推它所在的那一屏）。 */
+    private fun currentList(): List<TrackRecord> = when (_state.value.tab) {
+        LibraryTab.SEARCH -> _state.value.hits.map { it.track }
+        LibraryTab.FAVORITES -> _state.value.favorites
+        LibraryTab.RECENT -> _state.value.recents
+    }
+
     private fun resolvePlayableUrl(track: TrackRecord): String {
         if (track.sourceType != TrackRecord.SOURCE_LOCAL) return track.playUri
         val ctx = getApplication<Application>()

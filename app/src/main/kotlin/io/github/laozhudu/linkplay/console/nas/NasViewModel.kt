@@ -8,6 +8,7 @@ import io.github.laozhudu.linkplay.discovery.SsdpDiscovery
 import io.github.laozhudu.linkplay.protocol.DeviceHttpClient
 import io.github.laozhudu.linkplay.protocol.LinkPlayCommands
 import io.github.laozhudu.linkplay.protocol.queue.ClientSideQueue
+import io.github.laozhudu.linkplay.protocol.queue.PlayFromList
 import io.github.laozhudu.linkplay.protocol.recovery.RendererHealth
 import io.github.laozhudu.linkplay.protocol.recovery.RendererProbe
 import io.github.laozhudu.linkplay.protocol.recovery.RendererRecovery
@@ -333,12 +334,26 @@ class NasViewModel(
     /**
      * 点一首就播这一首。
      *
-     * 为什么要这个：原来听一首歌要「勾选 → 加入队列 → 推出」三步，
-     * 而人的预期是「点哪首放哪首」。多选只用于「攒一批再播」，是次要用法。
+     * 点一首就播 —— **并且把所在整个列表一起推进队列**。
+     *
+     * 为什么改这里：原来只推被点的那一首，播完就断了，用户点下一首又得回到列表。
+     * 原厂 App 的行为是「点哪首，从这首开始把整个列表连着放」，
+     * 这也是所有音乐 App 的共识（点第 5 首，列表里第 5 首高亮，播完自动第 6 首）。
+     *
+     * 设备侧不能自己排队（固件 CreateQueue 只收空 Tracks，实测），
+     * 所以队列由客户端持有：[QueuePlaybackService] 逐首投流，UI 侧看到的是完整列表。
      */
     fun playNow(entry: BrowseEntry) {
         if (entry.isContainer || entry.url == null) return
-        pushQueue(listOf(toQueueItem(entry)))
+        val list = _state.value.entries.filter { !it.isContainer && it.url != null }
+        val start = PlayFromList.startIndex(list, entry.id) { it.id }
+        if (start == 0 && list.none { it.id == entry.id }) {
+            // 兜底：列表里找不到（比如刚刷新过）就只播这一首，不能什么都不做
+            pushQueue(listOf(toQueueItem(entry)))
+            return
+        }
+        log("从「${entry.title}」开始播放本目录 ${list.size} 首")
+        pushQueue(list.map(::toQueueItem), startIndex = start)
     }
 
     /** 多选模式：长按进入，避免平时每行都挂一个勾选框。 */
@@ -375,7 +390,7 @@ class NasViewModel(
      * 这里只负责「攒队列 + 落快照 + 起服务」，不持有播放循环——
      * 之前循环挂在 ViewModel 上，退出页面就断，锁屏几分钟音乐就停。
      */
-    private fun pushQueue(items: List<QueueItem>) {
+    private fun pushQueue(items: List<QueueItem>, startIndex: Int = 0) {
         if (items.isEmpty()) {
             _state.update { it.copy(error = "没有可播放的曲目") }
             return
@@ -383,16 +398,17 @@ class NasViewModel(
         if (QueueBus.state.value.running) return
 
         _state.update { it.copy(playing = true, error = null, playedCount = 0, controlLost = false) }
-        log("开始推送 ${items.size} 首到 $rendererIp")
+        log("开始推送 ${items.size} 首（从第 ${startIndex + 1} 首起）到 $rendererIp")
 
+        val start = startIndex.coerceIn(0, items.lastIndex)
         val session = PlaybackSession(
             deviceUuid = deviceUuid ?: rendererIp,
             deviceIp = rendererIp,
             items = items,
-            index = 0,
+            index = start,
             loopMode = _state.value.loopMode,
         )
-        savePlayback(items, 0, _state.value.loopMode)
+        savePlayback(items, start, _state.value.loopMode)
         QueuePlaybackService.start(getApplication(), rendererLocation, session)
     }
 
