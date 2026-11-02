@@ -347,6 +347,33 @@ fun PlayerScreen(
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                         )
+                        // 防盗链开关：默认关。开了才会走本机转发（设备只发裸 GET，
+                        // 带 Referer 校验的链接直投必然 403，见 docs/16）
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            androidx.compose.material3.Checkbox(
+                                checked = state.castNeedsHeaders,
+                                onCheckedChange = { vm.setCastNeedsHeaders(it) },
+                            )
+                            Text(
+                                "这条链接需要 Referer（自动转发）",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = extras.onBackdrop,
+                            )
+                        }
+                        if (state.castNeedsHeaders) {
+                            androidx.compose.material3.OutlinedTextField(
+                                value = state.castReferer,
+                                onValueChange = vm::setCastReferer,
+                                placeholder = { Text("https://music.example.com/") },
+                                label = { Text("Referer") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Spacer(Modifier.height(Spacing.xs))
+                        }
                         Spacer(Modifier.height(Spacing.xs))
                         Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                             androidx.compose.material3.Button(onClick = vm::cast, enabled = !state.busy) {

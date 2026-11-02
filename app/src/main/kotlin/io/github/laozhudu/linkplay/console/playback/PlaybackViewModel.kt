@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.laozhudu.linkplay.protocol.DeviceHttpClient
 import io.github.laozhudu.linkplay.protocol.player.HttpApiPlaybackEngine
+import io.github.laozhudu.linkplay.protocol.media.RelayMediaServer
+import io.github.laozhudu.linkplay.protocol.media.RelayTarget
 import io.github.laozhudu.linkplay.protocol.player.LoopMode
 import io.github.laozhudu.linkplay.protocol.player.PlaybackEngine
 import io.github.laozhudu.linkplay.protocol.player.PlaybackSnapshot
@@ -42,6 +44,9 @@ data class PlaybackUiState(
     val loopMode: LoopMode = LoopMode.OFF,
     val busy: Boolean = false,
     val castUrl: String = "",
+    /** 该链接是否需要我们代补 Referer/Cookie（防盗链）。 */
+    val castNeedsHeaders: Boolean = false,
+    val castReferer: String = "",
     val error: String? = null,
     val log: List<String> = emptyList(),
 ) {
@@ -77,6 +82,14 @@ class PlaybackViewModel(
      * 而它们都是 80 端口、与当前播放通道无关。混进 PlaybackEngine 会污染那个接口的语义。
      */
     private val http = DeviceHttpClient()
+
+    /**
+     * 转发服务：只在「链接需要防盗链头」时才启动。
+     *
+     * 为什么必须由我们转发：实测设备拉流只发 `curl/7.36.0` 的裸 GET，没有 Referer/Cookie
+     * （docs/16 §2），带防盗链的直链设备自己拉必然 403。
+     */
+    private var relay: RelayMediaServer? = null
 
     init {
         viewModelScope.launch { prepare() }
@@ -177,18 +190,69 @@ class PlaybackViewModel(
 
     fun setCastUrl(value: String) = _state.update { it.copy(castUrl = value) }
 
+    fun setCastNeedsHeaders(v: Boolean) = _state.update { it.copy(castNeedsHeaders = v) }
+
+    fun setCastReferer(v: String) = _state.update { it.copy(castReferer = v) }
+
+    /**
+     * 投流。若开启了「需要防盗链头」，先把链接登记到本机转发服务，再把转发地址给音箱。
+     *
+     * 关键在于**给音箱的必须是本机地址**：音箱只会裸 GET，它没法替自己补 Referer。
+     */
     fun cast() {
-        val e = engine ?: return
-        val url = _state.value.castUrl.trim()
-        if (url.isEmpty()) {
-            _state.update { it.copy(error = "先填一条媒体 URL（音箱会自己去拉流）") }
+        val raw = _state.value.castUrl.trim()
+        if (raw.isEmpty()) {
+            _state.update { it.copy(error = "请先填一条音频 URL") }
             return
         }
-        if (!url.startsWith("http://") && !url.startsWith("https://")) {
-            _state.update { it.copy(error = "只支持 http/https 直链；本地文件需要先提供 HTTP 服务") }
-            return
+        val needsHeaders = _state.value.castNeedsHeaders
+        val referer = _state.value.castReferer.trim()
+        act("投流") {
+            val target = if (needsHeaders) {
+                val host = localIpAddress() ?: error("拿不到本机局域网 IP，无法转发")
+                val server = relay ?: RelayMediaServer(advertiseHost = host).also {
+                    it.start()
+                    relay = it
+                }
+                val headers = buildMap {
+                    if (referer.isNotEmpty()) {
+                        put("Referer", referer)
+                        // 不少平台还校验 Origin，一并补上（缺它同样 403）
+                        put("Origin", referer.substringBefore('/', "https://").let { scheme ->
+                            referer.substringBefore("://") + "://" + referer.substringAfter("://").substringBefore('/')
+                        })
+                    }
+                }
+                server.urlFor(RelayTarget(raw, headers), host, extensionOf(raw))
+            } else {
+                raw
+            }
+            engine!!.playUrl(target, null)
+            log(if (needsHeaders) "已转发投流：$target" else "已投流：$target")
         }
-        act("投流") { e.playUrl(url, url.substringAfterLast('/').take(80)) }
+    }
+
+    /** 转发服务占着端口，页面销毁时要还回去。 */
+    override fun onCleared() {
+        relay?.stop()
+        relay = null
+        super.onCleared()
+    }
+
+    private fun localIpAddress(): String? = runCatching {
+        java.net.NetworkInterface.getNetworkInterfaces().toList()
+            .asSequence()
+            .filter { it.isUp && !it.isLoopback }
+            .flatMap { it.inetAddresses.toList().asSequence() }
+            .filterIsInstance<java.net.Inet4Address>()
+            .firstOrNull { !it.isLoopbackAddress }
+            ?.hostAddress
+    }.getOrNull()
+
+    private fun extensionOf(url: String): String {
+        val ext = url.substringBefore('?').substringAfterLast('/', "")
+            .substringAfterLast('.', "").lowercase()
+        return ext.takeIf { it in setOf("mp3", "m4a", "aac", "flac", "ogg", "wav") } ?: "mp3"
     }
 
     fun play() = act("播放") { engine!!.resume() }
