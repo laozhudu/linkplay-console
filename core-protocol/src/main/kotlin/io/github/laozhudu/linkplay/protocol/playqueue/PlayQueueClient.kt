@@ -28,6 +28,12 @@ import io.github.laozhudu.linkplay.protocol.upnp.UpnpXml
  * | `SetQueueLoopMode` | `LoopMode`(ui4) |
  * | `BrowseQueue` | `QueueName` |
  *
+ * **实机纠正（DOSS DS-1831 / 3.6.5310）**：真机 SCPD 暴露了 27 个动作，比这 10 个多出
+ * `ReplaceQueue` / `AppendQueue` / `GetQueueLoopMode` / `SetQueuePolicy` / `SetKeyMapping` /
+ * `GetKeyMapping` / `GetQueueOnline` / `SearchQueueOnline` / 账号族（UserLogin 等）/ `DeleteActionQueue`。
+ * 已把无需新语义的几个补上；账号与在线搜索族按需再加。
+ * 另外：`QueueContext` 不是 DIDL-Lite，而是自定义 `<PlayList>` 方言，见 [PlayListContext]。
+ *
  * 两个必须原样保留的坑：
  * 1. `RangStart` / `RangEnd` 少了字母 `e`（不是 `RangeStart`），是设备端真实参数名；
  * 2. `Direction` 在 SOAP 里排在 `StartIndex` **前面**，尽管构造函数里 StartIndex 先出现。
@@ -43,6 +49,30 @@ class PlayQueueClient(
 
     fun createQueue(queueContext: String): String =
         call("CreateQueue", listOf("QueueContext" to queueContext))
+
+    /** 实机确认存在（2015 APK 里没有）：整队列替换。 */
+    fun replaceQueue(queueContext: String): String =
+        call("ReplaceQueue", listOf("QueueContext" to queueContext))
+
+    /** 实机确认存在：追加一个队列（不是追加曲目）。 */
+    fun appendQueue(queueContext: String): String =
+        call("AppendQueue", listOf("QueueContext" to queueContext))
+
+    /** 实机确认存在：读回当前队列循环模式。 */
+    fun getQueueLoopMode(): Int? {
+        val response = call("GetQueueLoopMode", emptyList())
+        return UpnpXml.value(response, "LoopMode")?.trim()?.toIntOrNull()
+    }
+
+    /** 实机确认存在：设置队列策略（语义未确证，失败会回 501）。 */
+    fun setQueuePolicy(queueName: String): String =
+        call("SetQueuePolicy", listOf("QueueName" to queueName))
+
+    /** 读回设备序列化后的整段队列上下文（排障用；队列不存在时设备回 501）。 */
+    fun browseQueueContext(queueName: String): String? {
+        val response = call("BrowseQueue", listOf("QueueName" to queueName))
+        return UpnpXml.value(response, "QueueContext")
+    }
 
     fun deleteQueue(queueName: String): String =
         call("DeleteQueue", listOf("QueueName" to queueName))

@@ -18,7 +18,7 @@ LinkPlay / WiiMu 方案 Wi-Fi 音箱的**现代化控制台**：Kotlin + Jetpack
 | 多房间从机列表 / 音量 | ✅ 已实现 |
 | 改名 / 输入源切换 / 恢复出厂（二次确认） | ✅ 已实现 |
 | 原始命令控制台 | ✅ 已实现 |
-| 协议层单元测试 | ✅ 150 个用例 |
+| 协议层单元测试 | ✅ 159 个用例 |
 | AP 直连配网（4 步流程 + 结果轮询） | ✅ 已实现 |
 | UPnP 播放控制（投流 / 播放暂停停止 / 跳转 / 音量 / 进度） | ✅ 已实现（1s 轮询，非 GENA） |
 | 本地音乐整列表推送 + 列表循环（私有 PlayQueue） | ✅ 已实现 |
@@ -56,6 +56,14 @@ docs/             协议规格、功能裁剪决策、架构说明
 
 > 播放控制走 UPnP，需要 SSDP 提供的描述地址（LOCATION）。手动输入 IP 的设备没有这个地址，
 > 卡片会说明原因而不是假装能用。
+
+### 真机实测（DOSS DS-1831）
+
+首次真机验证记录见 [docs/08-device-field-report.md](docs/08-device-field-report.md)：
+单曲投流 + 本地 HTTP 服务「音箱真的来拉流」已实测通过；
+整列表推送的方向被推翻（该固件的 `QueueContext` 是自定义 `<PlayList>` 方言，且不接受曲目节点），
+设备还多出一个 QPlay 服务（QQ 音乐通道，被认证挡住）。
+跨 VPN 的可行性调研见 [docs/09-vpn-reachability.md](docs/09-vpn-reachability.md)。
 
 ### 给新音箱配网
 
