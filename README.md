@@ -70,6 +70,12 @@ docs/             协议规格、功能裁剪决策、架构说明
   把音箱放到独立 IoT VLAN/访客网络，禁止其访问主网段与外网。
 - 本 App 不访问任何公网服务，所有请求只发往你输入的设备 IP。
 
+## 生态
+
+这批设备是标准 DLNA 渲染器，因此**能被成熟生态直接控制**（Music Assistant、Lyrion + UPnPBridge、
+Symfonium、OwnTone、Feishin-connect 等），也**能从成熟内容源取歌**（Navidrome/Jellyfin 的 OpenSubsonic API）。
+四套接入路线的取舍、逐项依据与待验证清单见 [docs/04-ecosystem-integration.md](docs/04-ecosystem-integration.md)。
+
 ## 证据与复现
 
 协议事实来自对 `com.wifiaudio.doss` ver1.6.5（2015-11-14 构建，SHA-256
