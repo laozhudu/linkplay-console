@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.laozhudu.linkplay.protocol.DeviceHttpClient
 import io.github.laozhudu.linkplay.protocol.player.HttpApiPlaybackEngine
+import io.github.laozhudu.linkplay.protocol.player.LoopMode
 import io.github.laozhudu.linkplay.protocol.player.PlaybackEngine
 import io.github.laozhudu.linkplay.protocol.player.PlaybackSnapshot
 import io.github.laozhudu.linkplay.protocol.player.UpnpPlaybackEngine
@@ -37,6 +38,8 @@ data class PlaybackUiState(
     val durationSec: Long = 0,
     val volume: Int = 0,
     val mute: Boolean = false,
+    /** 循环模式。设备侧用 `setPlayerCmd:loopmode:<n>`，与 [LoopMode.wire] 一一对应。 */
+    val loopMode: LoopMode = LoopMode.OFF,
     val busy: Boolean = false,
     val castUrl: String = "",
     val error: String? = null,
@@ -65,6 +68,15 @@ class PlaybackViewModel(
 
     private var engine: PlaybackEngine? = null
     private var polling = false
+
+    /**
+     * 同一台设备的 httpapi 客户端。
+     *
+     * 为什么单独留一个：上一首/下一首/循环模式这几条命令**只在 httpapi 上有**
+     * （UPnP 的服务表里没有 Next/Previous 之外的循环控制，私有 PlayQueue 又要另建队列），
+     * 而它们都是 80 端口、与当前播放通道无关。混进 PlaybackEngine 会污染那个接口的语义。
+     */
+    private val http = DeviceHttpClient()
 
     init {
         viewModelScope.launch { prepare() }
@@ -180,6 +192,38 @@ class PlaybackViewModel(
     }
 
     fun play() = act("播放") { engine!!.resume() }
+
+    fun next() = httpAct("下一首", "setPlayerCmd:next")
+
+    fun previous() = httpAct("上一首", "setPlayerCmd:prev")
+
+    /**
+     * 切循环模式。先改本地状态再下发：设备回读 `loop` 有延迟，
+     * 等回读再更新会让按钮「点了不动」，手感很差。
+     */
+    fun cycleLoopMode() {
+        val nextMode = LoopMode.next(_state.value.loopMode)
+        _state.update { it.copy(loopMode = nextMode) }
+        httpAct("循环 ${nextMode.label}", "setPlayerCmd:loopmode:${nextMode.wire}")
+    }
+
+    private fun httpAct(label: String, command: String) {
+        if (engine == null) return
+        _state.update { it.copy(busy = true, error = null) }
+        viewModelScope.launch {
+            val failure = runCatching {
+                withContext(Dispatchers.IO) { http.send(deviceIp, command) }
+            }.exceptionOrNull()
+            if (failure != null) {
+                _state.update { it.copy(busy = false, error = failure.message) }
+                log("$label 失败：${failure.message}")
+            } else {
+                _state.update { it.copy(busy = false) }
+                log("$label ok")
+                refreshOnce(silent = true)
+            }
+        }
+    }
     fun pause() = act("暂停") { engine!!.pause() }
     fun stop() = act("停止") { engine!!.stop() }
     fun seekTo(seconds: Long) = act("跳转") { engine!!.seek(seconds) }

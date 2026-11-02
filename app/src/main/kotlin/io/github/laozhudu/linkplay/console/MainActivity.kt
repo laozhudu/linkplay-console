@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -47,9 +48,16 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import io.github.laozhudu.linkplay.console.library.LibraryScreen
 import io.github.laozhudu.linkplay.console.nas.NasScreen
+import io.github.laozhudu.linkplay.console.playback.PlayerScreen
 import io.github.laozhudu.linkplay.console.ui.theme.LinkPlayTheme
 import io.github.laozhudu.linkplay.console.library.QueueScreen
-import io.github.laozhudu.linkplay.console.playback.PlaybackCard
+import androidx.compose.foundation.background
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import io.github.laozhudu.linkplay.console.ui.theme.LocalExtraColors
+import io.github.laozhudu.linkplay.console.ui.theme.Spacing
+import io.github.laozhudu.linkplay.console.ui.theme.seedOf
+import io.github.laozhudu.linkplay.console.playback.PlaybackSummaryRow
 import io.github.laozhudu.linkplay.console.playback.PlaybackViewModel
 import io.github.laozhudu.linkplay.console.provisioning.ProvisioningScreen
 
@@ -72,6 +80,17 @@ fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
     var showQueue by remember { mutableStateOf(false) }
     var showLibrary by remember { mutableStateOf(false) }
     var showNas by remember { mutableStateOf(false) }
+    var showPlayer by remember { mutableStateOf(false) }
+
+    if (showPlayer) {
+        // 全屏播放页：自己管背景与状态栏留白，所以不用 Scaffold
+        PlayerScreen(
+            deviceIp = state.selectedIp.orEmpty(),
+            deviceLocation = state.selectedLocation,
+            onBack = { showPlayer = false },
+        )
+        return
+    }
 
     if (showProvisioning) {
         Scaffold(
@@ -197,6 +216,7 @@ fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
                     onOpenQueue = { showQueue = true },
                     onOpenLibrary = { showLibrary = true },
                     onOpenNas = { showNas = true },
+                    onOpenPlayer = { showPlayer = true },
                 )
             }
         }
@@ -264,6 +284,7 @@ private fun DeviceDetailScreen(
     onOpenQueue: () -> Unit,
     onOpenLibrary: () -> Unit,
     onOpenNas: () -> Unit,
+    onOpenPlayer: () -> Unit,
 ) {
     var command by remember { mutableStateOf("getNetwork") }
     var newName by remember { mutableStateOf("") }
@@ -281,6 +302,37 @@ private fun DeviceDetailScreen(
             .fillMaxSize()
             .verticalScroll(rememberScrollState()),
     ) {
+        // 播放页入口：做成大卡片而不是普通按钮 —— 这是最常用的动作，应该一眼能找到
+        val entryPalette = remember(playbackVm) { seedOf(null, state.selectedIp) }
+        Card(
+            onClick = onOpenPlayer,
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        Brush.linearGradient(listOf(entryPalette.top, entryPalette.accent.copy(alpha = 0.45f))),
+                    )
+                    .padding(Spacing.lg),
+            ) {
+                Column {
+                    Text(
+                        "播放控制",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = LocalExtraColors.current.onBackdrop,
+                    )
+                    Text(
+                        "进度 · 音量 · 循环 · 上下曲",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = LocalExtraColors.current.onBackdropMuted,
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(Spacing.md))
+
         val status = state.status
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -307,7 +359,12 @@ private fun DeviceDetailScreen(
         }
 
         Spacer(Modifier.height(10.dp))
-        PlaybackCard(playbackVm)
+        // 详情页不再塞整套控制：同一套控制出现在两处必然漂移。
+        // 这里只留「当前在放什么 + 进播放页」一行，控制统一走 PlayerScreen。
+        PlaybackSummaryRow(
+            vm = playbackVm,
+            onOpen = onOpenPlayer,
+        )
         Spacer(Modifier.height(8.dp))
         OutlinedButton(onClick = onOpenQueue, modifier = Modifier.fillMaxWidth()) {
             Text("推送手机本地音乐（整个列表）")
