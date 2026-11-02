@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import io.github.laozhudu.linkplay.console.ui.theme.Spacing
 import io.github.laozhudu.linkplay.protocol.queue.ClientSideQueue
 
 /**
@@ -232,7 +233,7 @@ fun NasScreen(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
                 ) {
-                    Column(Modifier.padding(10.dp)) {
+                    Column(Modifier.padding(Spacing.md)) {
                         Text("继续上次播放", fontWeight = FontWeight.Medium, style = MaterialTheme.typography.bodySmall)
                         Text(
                             "从第 ${saved.index + 1} 首开始，剩余 ${saved.remaining.size} 首：" +
@@ -241,11 +242,11 @@ fun NasScreen(
                         )
                     }
                 }
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(Spacing.sm))
             }
         }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
             Button(
                 onClick = vm::startQueue,
                 enabled = !state.playing && state.picked.isNotEmpty(),

@@ -15,6 +15,8 @@ import io.github.laozhudu.linkplay.protocol.session.NasPathStep
 import io.github.laozhudu.linkplay.protocol.session.NasServerRef
 import io.github.laozhudu.linkplay.protocol.session.NasSession
 import io.github.laozhudu.linkplay.protocol.session.PlaybackSession
+import io.github.laozhudu.linkplay.console.playback.QueueBus
+import io.github.laozhudu.linkplay.console.playback.QueuePlaybackService
 import io.github.laozhudu.linkplay.console.session.SessionStore
 import io.github.laozhudu.linkplay.protocol.queue.QueueItem
 import io.github.laozhudu.linkplay.protocol.queue.QueueTarget
@@ -96,6 +98,7 @@ class NasViewModel(
 
     init {
         restoreMemory()
+        observeQueue()
     }
 
     /** 读出「上次连的 NAS / 停在哪层 / 没播完的队列」，只读一次，不自动连接（避免一进页面就发请求）。 */
@@ -114,9 +117,6 @@ class NasViewModel(
         playback?.let { log("有未播完的队列：${it.remaining.size} 首，可从第 ${it.index + 1} 首继续") }
     }
     private var contentDir: ContentDirectoryClient? = null
-    private var queueJob: Job? = null
-    @Volatile
-    private var stopRequested = false
 
     fun scan() {
         if (_state.value.scanning) return
@@ -309,9 +309,11 @@ class NasViewModel(
     }
 
     fun clearQueue() {
-        stopRequested = true
-        queueJob?.cancel()
-        _state.update { it.copy(picked = emptyList(), playing = false, nowPlaying = null, playedCount = 0) }
+        QueuePlaybackService.stop(getApplication())
+        runCatching { sessions.clearPlayback(memoryKey) }
+        _state.update {
+            it.copy(picked = emptyList(), playing = false, nowPlaying = null, playedCount = 0, resumable = null)
+        }
     }
 
     fun setLoopMode(mode: Int) = _state.update { it.copy(loopMode = mode) }
@@ -333,7 +335,7 @@ class NasViewModel(
             _state.update { it.copy(error = "没有可续播的队列") }
             return
         }
-        if (queueJob?.isActive == true) return
+        if (QueueBus.state.value.running) return
         log("续播：从第 ${saved.index + 1} 首开始，共 ${saved.remaining.size} 首")
         pushQueue(saved.remaining)
     }
@@ -347,79 +349,51 @@ class NasViewModel(
         mimeType = mimeOf(e.protocolInfo),
     )
 
+    /**
+     * 把队列交给前台服务去跑。
+     *
+     * 这里只负责「攒队列 + 落快照 + 起服务」，不持有播放循环——
+     * 之前循环挂在 ViewModel 上，退出页面就断，锁屏几分钟音乐就停。
+     */
     private fun pushQueue(items: List<QueueItem>) {
         if (items.isEmpty()) {
             _state.update { it.copy(error = "没有可播放的曲目") }
             return
         }
-        if (queueJob?.isActive == true) return
+        if (QueueBus.state.value.running) return
 
-        stopRequested = false
-        _state.update { it.copy(playing = true, error = null, playedCount = 0) }
+        _state.update { it.copy(playing = true, error = null, playedCount = 0, controlLost = false) }
         log("开始推送 ${items.size} 首到 $rendererIp")
-        // 先落一份快照：即使这一刻直接杀进程，重启后也知道该从哪首继续
+
+        val session = PlaybackSession(
+            deviceUuid = deviceUuid ?: rendererIp,
+            deviceIp = rendererIp,
+            items = items,
+            index = 0,
+            loopMode = _state.value.loopMode,
+        )
         savePlayback(items, 0, _state.value.loopMode)
+        QueuePlaybackService.start(getApplication(), rendererLocation, session)
+    }
 
-        queueJob = viewModelScope.launch {
-            try {
-                val client = withContext(Dispatchers.IO) {
-                    if (!rendererLocation.isNullOrBlank()) {
-                        val desc = UpnpRendererClient.describe(rendererLocation)
-                        if (desc.avTransportControlUrl != null) UpnpRendererClient(desc)
-                        else UpnpRendererClient.ofDevice(rendererIp)
-                    } else {
-                        UpnpRendererClient.ofDevice(rendererIp)
-                    }
+    /** 订阅服务侧状态：播放进度、控制面掉线都由服务上报。 */
+    private fun observeQueue() {
+        viewModelScope.launch {
+            QueueBus.state.collect { run ->
+                _state.update {
+                    it.copy(
+                        playing = run.running,
+                        nowPlaying = run.nowPlaying ?: it.nowPlaying,
+                        playedCount = if (run.running) run.playedCount else it.playedCount,
+                        controlLost = run.controlLost,
+                    )
                 }
-                val queue = ClientSideQueue(
-                    target = object : QueueTarget {
-                        override fun play(item: QueueItem) {
-                            withContextBlocking {
-                                client.setAvTransportUri(item.url, item.title, item.mimeType)
-                                client.play()
-                            }
-                            // 记录当前是第几首，断点续播靠它
-                            savePlayback(items, items.indexOfFirst { it.url == item.url }.coerceAtLeast(0), _state.value.loopMode)
-                            _state.update { s ->
-                                s.copy(nowPlaying = item.title, playedCount = s.playedCount + 1)
-                            }
-                            log("▶ ${item.title}")
-                        }
-
-                        override fun position(): Pair<Long, Long>? = withContextBlocking {
-                            runCatching {
-                                val p = client.positionInfo()
-                                p.relTimeSec to p.trackDurationSec
-                            }.getOrNull()
-                        }
-
-                        override fun transportState(): String = withContextBlocking {
-                            runCatching { client.transportInfo().state.wire }.getOrDefault("UNKNOWN")
-                        }
-                    },
-                )
-                queue.loopMode = _state.value.loopMode
-                val played = withContext(Dispatchers.IO) {
-                    queue.run(items = items, shouldStop = { stopRequested })
+                if (!run.running && run.nowPlaying != null) {
+                    // 结束后重读快照：正常播完服务会清掉，被中断则保留供「继续上次」
+                    val saved = runCatching { sessions.loadPlayback(memoryKey) }.getOrNull()
+                    _state.update { it.copy(resumable = saved) }
+                    log("队列结束（播到 ${run.nowPlaying}）")
                 }
-                val expected = items.size
-                // 中途停止是用户意图，不算故障；提前结束才说明控制面掉了
-                val dropped = !stopRequested && played < expected
-                _state.update { it.copy(playing = false, controlLost = dropped) }
-                if (!dropped) {
-                    // 正常播完就把快照清掉，否则下次进页面还会提示「继续上次」
-                    runCatching { sessions.clearPlayback(memoryKey) }
-                    _state.update { it.copy(resumable = null) }
-                }
-                if (dropped) {
-                    log("提前中断：只播了 $played/$expected 首 —— 音箱的 UPnP 控制口(49152)掉线了")
-                    log("httpapi 仍可用，说明设备在线；可点「重启音箱」恢复（实测约 40 秒）")
-                } else {
-                    log("结束，共播 $played 首")
-                }
-            } catch (t: Throwable) {
-                _state.update { it.copy(playing = false, error = t.message) }
-                log("推送失败：${t.message}")
             }
         }
     }
@@ -468,7 +442,8 @@ class NasViewModel(
     }.getOrDefault(false)
 
     fun stopQueue() {
-        stopRequested = true
+        QueuePlaybackService.stop(getApplication())
+        // 停止后仍要在音箱侧真正停下：服务只负责不再投新曲
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 runCatching {
@@ -489,10 +464,6 @@ class NasViewModel(
     fun clearError() = _state.update { it.copy(error = null) }
 
     private fun log(line: String) = _state.update { it.copy(log = (it.log + line).takeLast(30)) }
-
-    /** 阻塞桥接：QueueTarget 是同步接口，为保持 core 层纯 JVM 而在这里做转换。 */
-    private fun <T> withContextBlocking(block: suspend () -> T): T =
-        kotlinx.coroutines.runBlocking { block() }
 
     private fun mimeOf(protocolInfo: String?): String =
         protocolInfo?.split(':')?.getOrNull(2)?.takeIf { it.isNotBlank() } ?: "audio/mpeg"
