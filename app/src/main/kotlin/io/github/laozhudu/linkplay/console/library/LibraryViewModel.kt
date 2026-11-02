@@ -19,7 +19,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-enum class LibraryTab { SEARCH, FAVORITES, RECENT, RADIO }
+enum class LibraryTab { SEARCH, FAVORITES, RECENT }
 
 data class LibraryUiState(
     val tab: LibraryTab = LibraryTab.SEARCH,
@@ -188,45 +188,8 @@ class LibraryViewModel(
         }
     }
 
-    // ---- 电台 ----
-
-    fun addRadio(name: String, url: String) {
-        val invalid = RadioStation.validate(name, url)
-        if (invalid != null) {
-            _state.update { it.copy(error = invalid) }
-            return
-        }
-        viewModelScope.launch {
-            withContext(Dispatchers.IO) {
-                store.radios.add(
-                    RadioStation(
-                        name = name.trim(),
-                        url = url.trim(),
-                        deviceName = deviceName(),
-                    ),
-                )
-            }
-            val radios = withContext(Dispatchers.IO) { store.radios.forDevice(deviceName()) }
-            _state.update { it.copy(radios = radios, error = null) }
-            log("已添加电台：$name")
-        }
-    }
-
-    fun removeRadio(id: Long) {
-        viewModelScope.launch {
-            withContext(Dispatchers.IO) { store.radios.remove(id) }
-            val radios = withContext(Dispatchers.IO) { store.radios.forDevice(deviceName()) }
-            _state.update { it.copy(radios = radios) }
-        }
-    }
-
-    fun playRadio(station: RadioStation) = play(
-        TrackRecord(
-            playUri = station.url,
-            title = station.name,
-            sourceType = TrackRecord.SOURCE_RADIO,
-        ),
-    )
+    // 电台已迁到 radio/RadioViewModel（独立的媒体库二级页）。
+    // 这里保留 `radios` 字段只用于日志统计，不再承担增删改——两套实现一定会漂移。
 
     // ---- 预设键 ----
 

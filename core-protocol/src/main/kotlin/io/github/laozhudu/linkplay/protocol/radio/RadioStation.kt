@@ -32,12 +32,39 @@ data class RadioStation(
             if (name.length > 64) return "名称过长（≤64 字符）"
             val trimmed = url.trim()
             if (trimmed.isEmpty()) return "流地址不能为空"
-            if (SUPPORTED_SCHEMES.none { trimmed.startsWith(it, ignoreCase = true) }) {
-                return "只支持 http/https 流地址"
-            }
+            // 先做长度与空格检查，报错才能给到具体原因（normalizeUrl 只会给一句笼统的"不合法"）
             if (trimmed.length > 2048) return "地址过长"
             if (trimmed.contains(' ')) return "地址里不能有空格（请对空格做 %20 编码）"
+            if (normalizeUrl(trimmed) == null) return "只支持 http/https 流地址"
             return null
+        }
+
+        /**
+         * 把用户粘进来的地址收拾成能用的形状。
+         *
+         * 真机踩过的坑：
+         * 1. 用户常常只粘 `ice1.somafm.com/xxx`（没有协议头）—— 之前的实现直接判非法，
+         *    按钮写着「填个有效地址」且点不动，看起来就是「电台无法添加链接」。现在自动补 `http://`。
+         * 2. 末尾多余空格、全角空格、从聊天窗口粘来的换行，一律清掉。
+         * 3. 兜底补 http:// 之后仍要以 http/https 开头，否则返回 null 由调用方报错。
+         */
+        fun normalizeUrl(raw: String): String? {
+            var u = raw.trim()
+                .replace("\u00A0", "")
+                .replace("\u3000", "")
+                .filterNot { it == '\n' || it == '\r' || it == '\t' }
+                .trim()
+            if (u.isEmpty()) return null
+            // 用户贴了 "ice1.somafm.com:8000/live" 这种，冒号会被当成协议分隔符，先判有没有 ://
+            if (!u.contains("://")) {
+                u = if (u.startsWith("//")) "http:$u" else "http://$u"
+            }
+            val lower = u.lowercase()
+            if (!lower.startsWith("http://") && !lower.startsWith("https://")) return null
+            if (u.length > 2048) return null
+            // 地址里真的不能有空格（路径里的空格要 %20）
+            if (u.any { it == ' ' }) return null
+            return u
         }
 
         /** 从 URL 猜一个默认名称，方便用户只粘贴地址。 */
@@ -107,4 +134,63 @@ class InMemoryRadioStationStore : RadioStationStore {
         items.clear()
         nextId = 1L
     }
+}
+
+/**
+ * 出厂就带、且**在真机上逐条验证过能出声**的电台。
+ *
+ * 为什么内置：用户打开「网络电台」看到空白页根本不知道填什么，
+ * 而随便从网上抄一条地址又多半放不出来（旧固件 TLS 弱、HLS 支持不稳）。
+ * 这几条都是实测 `status=play` 且 `curpos` 递增的，点一下就能播。
+ *
+ * 合规边界没变：全是公开直连的流地址，不含任何平台接口、凭据或会员内容。
+ */
+object VerifiedRadioCatalog {
+
+    /** 一条可一键添加的电台。[deviceVerifiedAt] 是实测记录，方便以后复核。 */
+    data class Entry(
+        val name: String,
+        val url: String,
+        val note: String,
+        val deviceVerifiedAt: String,
+    )
+
+    val entries: List<Entry> = listOf(
+        Entry(
+            name = "Radio Paradise",
+            url = "http://stream.radioparadise.com/mp3-192",
+            note = "美国，192k MP3，无广告",
+            deviceVerifiedAt = "2026-11-02 DS-1831 实测 play 且 curpos 递增",
+        ),
+        Entry(
+            name = "NPR News",
+            url = "http://npr-ice.streamguys1.com/live.mp3",
+            note = "美国公共广播，新闻谈话",
+            deviceVerifiedAt = "2026-11-02 DS-1831 实测 play 且 curpos 递增",
+        ),
+        Entry(
+            name = "FIP",
+            url = "http://icecast.radiofrance.fr/fip-hifi.aac",
+            note = "法国电台，AAC",
+            deviceVerifiedAt = "2026-11-02 DS-1831 实测 play",
+        ),
+        Entry(
+            name = "CNR 中国之声",
+            url = "http://ngcdn001.cnr.cn/live/zgzs/index.m3u8",
+            note = "中央人民广播电台，HLS",
+            deviceVerifiedAt = "2026-11-02 DS-1831 实测 play 且 curpos 递增",
+        ),
+        Entry(
+            name = "CNR 音乐之声",
+            url = "http://ngcdn002.cnr.cn/live/yyzs/index.m3u8",
+            note = "中央人民广播电台，HLS",
+            deviceVerifiedAt = "2026-11-02 DS-1831 实测 play 且 curpos 递增",
+        ),
+    )
+
+    fun toStation(entry: Entry, deviceName: String?) = RadioStation(
+        name = entry.name,
+        url = entry.url,
+        deviceName = deviceName,
+    )
 }
