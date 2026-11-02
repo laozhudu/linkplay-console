@@ -23,6 +23,8 @@ data class ConsoleUiState(
     val scanning: Boolean = false,
     val devices: List<DiscoveredDevice> = emptyList(),
     val selectedIp: String? = null,
+    /** 该设备的 UPnP 描述地址（SSDP 的 LOCATION）；手动输入 IP 时为 null。 */
+    val selectedLocation: String? = null,
     val status: LinkPlayStatus? = null,
     val slaves: List<SlaveDevice> = emptyList(),
     val log: List<String> = emptyList(),
@@ -74,7 +76,10 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun select(ip: String) {
-        _state.update { it.copy(selectedIp = ip, status = null, slaves = emptyList()) }
+        val location = _state.value.devices.firstOrNull { it.ip == ip }?.location
+        _state.update {
+            it.copy(selectedIp = ip, selectedLocation = location, status = null, slaves = emptyList())
+        }
         refreshStatus()
     }
 

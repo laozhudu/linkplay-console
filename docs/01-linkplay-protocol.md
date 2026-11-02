@@ -235,6 +235,26 @@ hex 不是 Base64——原厂实现是逐字节 `toHexString(b & 0xFF)`、不足
 「当前音量/播放状态」。**播放控制只有这条路径**——`httpapi.asp` 里没有
 `setPlayerCmd:play/pause/vol`，`setPlayerCmd` 只用于 `switchmode`（输入源）。
 
+### 7.1 控制点必须实现的 SOAP 细节
+
+- `POST` 到 `controlURL`，头必须带 `SOAPACTION: "<serviceType>#<action>"`（含引号），
+  body 是 SOAP 1.1 信封，参数名大小写敏感（`InstanceID`、`Channel`、`DesiredVolume`…）。
+- `controlURL` 是**相对路径**，必须按 SSDP 的 `LOCATION` 解析成绝对地址，
+  否则请求会打到错误的主机/端口（这批设备常在 49152 端口）。
+- `Seek` 的 `Target` 是 `H:MM:SS` 文本，不是秒数；`REL_TIME` 表示按绝对时间跳。
+- 失败时 HTTP 是 500，body 里带 `<errorCode>`（如 `701 Transition not available`），
+  不要只看状态码。
+- `SetAVTransportURI` 的 `CurrentURIMetaData` 建议给最小 DIDL-Lite（`dc:title` +
+  `upnp:class` + `res protocolInfo`），部分固件缺这两项就拒播。
+
+### 7.2 本项目为什么不做 GENA 订阅
+
+GENA 要求控制点在手机上跑一个可被设备回调的 HTTP 服务（SUBSCRIBE → NOTIFY）。
+代价：常驻监听端口、移动网络/休眠下回调丢失、设备重连后要重订阅、无法在纯 JVM 层单测。
+收益仅是「状态变化推送更快」。本项目选**每秒轮询** `GetTransportInfo` + `GetPositionInfo`：
+行为可预测、无后台服务、纯函数可测，嵌入式 renderer 上这点开销可忽略。
+副作用：UI 上看到的状态最多滞后约 1 秒。
+
 ## 8. 固件升级（音箱侧）
 
 ```
