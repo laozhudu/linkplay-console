@@ -15,7 +15,11 @@ jobs:
     timeout-minutes: 30
 
     steps:
+      # fetch-depth: 0 是必需的，不要改成默认的 1。
+      # versionCode 取自 git 提交数，浅克隆下永远是 1，包版本不会递增，覆盖安装再次失效。
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -26,11 +30,44 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # 固定签名密钥：不配置这一步，runner 会现造 ~/.android/debug.keystore，
+      # 每个包的签名都不同，Android 会拒绝覆盖安装（INSTALL_FAILED_UPDATE_INCOMPATIBLE）。
+      - name: Restore signing keystore
+        if: ${{ secrets.LINKPLAY_KEYSTORE_B64 != '' }}
+        env:
+          KEYSTORE_B64: ${{ secrets.LINKPLAY_KEYSTORE_B64 }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/keys"
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/keys/release.jks"
+          test -s "$RUNNER_TEMP/keys/release.jks" || { echo "keystore 解码为空"; exit 1; }
+          echo "LINKPLAY_KEYSTORE=$RUNNER_TEMP/keys/release.jks" >> "$GITHUB_ENV"
+
       - name: Protocol unit tests
+        env:
+          LINKPLAY_STORE_PASSWORD: ${{ secrets.LINKPLAY_STORE_PASSWORD }}
+          LINKPLAY_KEY_ALIAS: ${{ secrets.LINKPLAY_KEY_ALIAS }}
+          LINKPLAY_KEY_PASSWORD: ${{ secrets.LINKPLAY_KEY_PASSWORD }}
         run: ./gradlew --no-daemon :core-protocol:test
 
       - name: Assemble debug APK
+        env:
+          LINKPLAY_STORE_PASSWORD: ${{ secrets.LINKPLAY_STORE_PASSWORD }}
+          LINKPLAY_KEY_ALIAS: ${{ secrets.LINKPLAY_KEY_ALIAS }}
+          LINKPLAY_KEY_PASSWORD: ${{ secrets.LINKPLAY_KEY_PASSWORD }}
         run: ./gradlew --no-daemon :app:assembleDebug
+
+      # 把「包身份」写进构建日志：以后排查覆盖安装问题时，
+      # 一眼就能看出两次构建的签名指纹是否一致、版本号是否递增。
+      - name: Report APK identity
+        run: |
+          APK=$(ls app/build/outputs/apk/debug/*.apk | head -1)
+          BT=$(ls -d "$ANDROID_SDK_ROOT"/build-tools/* 2>/dev/null | sort -V | tail -1)
+          echo "### APK 身份" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          "$BT/aapt2" dump badging "$APK" | grep -E "^package:" | tee -a "$GITHUB_STEP_SUMMARY"
+          "$BT/apksigner" verify --print-certs "$APK" \
+            | grep -E "certificate (DN|SHA-256)" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
