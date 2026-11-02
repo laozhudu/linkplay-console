@@ -277,8 +277,13 @@ class MultiroomClient(
                     ip = ip,
                     uuid = o.string("uuid"),
                     name = o.string("name") ?: o.string("DeviceName"),
-                    volume = o.string("vol")?.toIntOrNull() ?: o.int("vol"),
-                    inGroup = (o.string("group") ?: o.string("mask"))?.let { it != "0" } ?: true,
+                    // 真机字段名是 "volume"（不是文档里常见的 "vol"），两个都认
+                    volume = (o.string("volume") ?: o.string("vol"))?.toIntOrNull()
+                        ?: o.int("volume") ?: o.int("vol"),
+                    // 出现在 slave_list 里就是"在本机这一组"。
+                    // 注意 **不能** 用 `mask` 推断 —— 真机上成组后 mask 仍是 0（已实测），
+                    // 它表达的是"有没有被屏蔽"，与是否入组无关。
+                    inGroup = true,
                 )
             }
         }
