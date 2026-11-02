@@ -47,6 +47,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -55,6 +56,13 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import io.github.laozhudu.linkplay.console.ui.components.AppShapesExpressive
 import io.github.laozhudu.linkplay.console.ui.components.BackGlyph
 import io.github.laozhudu.linkplay.console.ui.components.ChevronGlyph
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.TextButton
+import io.github.laozhudu.linkplay.console.ui.components.EmptyState
+import io.github.laozhudu.linkplay.console.ui.components.VSpace
 import io.github.laozhudu.linkplay.console.ui.components.GlyphSize
 import io.github.laozhudu.linkplay.console.ui.components.LoopGlyph
 import io.github.laozhudu.linkplay.console.ui.components.PauseGlyph
@@ -85,17 +93,24 @@ import io.github.laozhudu.linkplay.protocol.upnp.TransportState
  * - 进度用波浪条：拖动时振幅变大，播放中相位持续流动。
  * - 进度与音量都是**拖动只改本地、松手才下发**：设备侧 seek 会打断缓冲，连发会让曲子一直卡。
  */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun PlayerScreen(
     deviceIp: String,
     deviceLocation: String?,
     onBack: () -> Unit,
+    /** 设备设置：改名/输入源/多房间/诊断都在那边，本页只做播放。 */
+    onOpenSettings: () -> Unit = {},
+    onOpenNas: () -> Unit = {},
+    onOpenLibrary: () -> Unit = {},
+    onOpenLocalQueue: () -> Unit = {},
 ) {
     val vm: PlaybackViewModel = viewModel(
         key = "player-$deviceIp",
         factory = viewModelFactory { initializer { PlaybackViewModel(deviceIp, deviceLocation) } },
     )
     val state by vm.state.collectAsState()
+    val queue by QueueBus.state.collectAsState()
 
     val palette = remember(state.title, state.artist) { seedOf(state.title, state.artist) }
     val extras = LocalExtraColors.current
@@ -103,6 +118,7 @@ fun PlayerScreen(
     var scrubbing by remember { mutableStateOf<Float?>(null) }
     var volumeDraft by remember { mutableStateOf<Float?>(null) }
     var showDetails by remember { mutableStateOf(false) }
+    var showQueue by remember { mutableStateOf(false) }
 
     val playing = state.state == TransportState.PLAYING || state.state == TransportState.TRANSITIONING
     val duration = state.durationSec.coerceAtLeast(0)
@@ -172,19 +188,19 @@ fun PlayerScreen(
                         color = extras.onBackdropMuted,
                     )
                 }
-                // 右上角：循环模式（花形小键，状态用颜色区分）
+                // 右上角：设备设置入口（低频动作，但需要一个明确出口）
                 Box(
                     modifier = Modifier
                         .size(44.dp)
                         .clip(AppShapesExpressive.smallScallop)
                         .background(extras.onBackdrop.copy(alpha = 0.10f))
-                        .clickable(onClick = vm::cycleLoopMode),
+                        .clickable(onClick = onOpenSettings),
                     contentAlignment = Alignment.Center,
                 ) {
-                    LoopGlyph(
-                        color = if (state.loopMode == LoopMode.OFF) extras.onBackdropMuted else palette.accent,
-                        mode = state.loopMode.wire,
-                        modifier = Modifier.size(GlyphSize.medium),
+                    Text(
+                        "⋯",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = extras.onBackdrop,
                     )
                 }
             }
@@ -356,6 +372,42 @@ fun PlayerScreen(
                 }
             }
 
+            // ---- 播放列表 + 添加来源：市面播放器都把「队列」放在播放页里 ----
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(44.dp)
+                        .clip(AppShapesExpressive.pill)
+                        .background(extras.onBackdrop.copy(alpha = 0.10f))
+                        .clickable { showQueue = true },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        if (queue.items.isEmpty()) "播放列表 · 空"
+                        else "播放列表 · ${queue.total} 首（第 ${queue.index + 1}）",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = extras.onBackdrop,
+                        maxLines = 1,
+                    )
+                }
+                Spacer(Modifier.width(Spacing.sm))
+                Box(
+                    modifier = Modifier
+                        .height(44.dp)
+                        .clip(AppShapesExpressive.pill)
+                        .background(extras.onBackdrop.copy(alpha = 0.10f))
+                        .clickable(onClick = onOpenNas)
+                        .padding(horizontal = Spacing.md),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("＋ 添加", style = MaterialTheme.typography.labelMedium, color = extras.onBackdrop)
+                }
+            }
+
             (state.error ?: state.unavailableReason)?.let {
                 Spacer(Modifier.height(Spacing.sm))
                 Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
@@ -444,6 +496,135 @@ fun PlayerScreen(
                 }
             }
             Spacer(Modifier.height(Spacing.xxl))
+        }
+
+        // ---------- 播放列表弹层 ----------
+        // 用 ModalBottomSheet 而不是在页面里再塞一个列表：这个页面已经有纵向滚动，
+        // 再套一层列表就是两层滚动抢手势（上一轮刚从别处清掉这种结构）。
+        if (showQueue) {
+            ModalBottomSheet(
+                onDismissRequest = { showQueue = false },
+                containerColor = MaterialTheme.colorScheme.surface,
+            ) {
+                PlaylistSheet(
+                    queue = queue,
+                    onSkip = { i ->
+                        QueueBus.skipTo(i)
+                        showQueue = false
+                    },
+                    onRemove = { i -> QueueBus.removeAt(i) },
+                    onAddSources = {
+                        showQueue = false
+                        onOpenNas()
+                    },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 播放列表：当前队列 + 点某首跳过去 + 删除。
+ *
+ * 为什么放在播放页而不是独立页面：主流播放器（Spotify / Apple Music / 网易云）都是
+ * 「播放页 → 点队列按钮 → 当前队列」，返回即回到播放页。独立页面会让「我现在放的是第几首、
+ * 下一首是什么」这种问题需要多跳两次。
+ */
+@Composable
+private fun PlaylistSheet(
+    queue: QueueRunState,
+    onSkip: (Int) -> Unit,
+    onRemove: (Int) -> Unit,
+    onAddSources: () -> Unit,
+) {
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.lg),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("播放列表", style = MaterialTheme.typography.titleLarge)
+                Text(
+                    if (queue.items.isEmpty()) "队列为空"
+                    else "${queue.total} 首 · 正在播第 ${queue.index + 1} 首",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            TextButton(onClick = onAddSources) { Text("添加曲目") }
+        }
+        VSpace(Spacing.sm)
+
+        if (queue.items.isEmpty()) {
+            EmptyState(
+                title = "还没有曲目",
+                hint = "从 NAS 媒体库或手机本地音乐里点一首，或者长按多选一批加进来。",
+                modifier = Modifier.padding(horizontal = Spacing.lg),
+            )
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(horizontal = Spacing.lg, vertical = Spacing.xs),
+                verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+            ) {
+                itemsIndexed(queue.items) { index, item ->
+                    val current = index == queue.index
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(AppShapesExpressive.squircle)
+                            .background(
+                                if (current) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                                else Color.Transparent,
+                            )
+                            .clickable { onSkip(index) }
+                            .padding(start = Spacing.md, end = Spacing.xs, top = Spacing.sm, bottom = Spacing.sm),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            if (current) "▶" else "${index + 1}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (current) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.width(28.dp),
+                        )
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                item.title,
+                                style = MaterialTheme.typography.titleMedium,
+                                color = if (current) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            item.artist?.takeIf { it.isNotBlank() }?.let {
+                                Text(
+                                    it,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                )
+                            }
+                        }
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .clickable { onRemove(index) },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                "✕",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+                item { Spacer(Modifier.height(Spacing.xl)) }
+            }
         }
     }
 }

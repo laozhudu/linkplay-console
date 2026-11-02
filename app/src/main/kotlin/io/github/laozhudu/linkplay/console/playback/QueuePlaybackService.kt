@@ -39,6 +39,53 @@ class QueuePlaybackService : Service() {
     private var scope: CoroutineScope? = null
     private var job: Job? = null
 
+    /** 当前这一轮的参数与队列，skipTo / removeAt 需要用它重启一次编排。 */
+    @Volatile private var curIp: String = ""
+    @Volatile private var curLocation: String? = null
+    @Volatile private var curUuid: String = ""
+    @Volatile private var curLoop: Int = 2
+    @Volatile private var curItems: List<QueueItem> = emptyList()
+
+    /** 队列操作面：播放页的「播放列表」点某首/删某首都走这里。 */
+    private val controller = object : QueueController {
+        override fun skipTo(index: Int) {
+            val items = curItems
+            if (items.isEmpty() || index !in items.indices) return
+            // 直接跳到目标位置：取消当前循环，从剩余部分重新编排。
+            // 比给 ClientSideQueue 内部加游标更简单，而重投一次流本来就是设备的正常操作。
+            restart(items, index)
+        }
+
+        override fun removeAt(index: Int) {
+            val items = curItems
+            if (items.isEmpty() || index !in items.indices) return
+            val next = items.toMutableList().apply { removeAt(index) }
+            if (next.isEmpty()) {
+                stopQueue()
+                QueueBus.clear()
+                return
+            }
+            // 删掉的是当前曲或更前面的曲：从当前位置（或删后同位）继续；否则只更新列表
+            val target = when {
+                index < QueueBus.state.value.index -> QueueBus.state.value.index - 1
+                index == QueueBus.state.value.index -> index
+                else -> -1
+            }
+            curItems = next
+            QueueBus.playing((next.getOrNull(QueueBus.state.value.index)?.title ?: ""), QueueBus.state.value.index.coerceAtLeast(0), next)
+            if (target >= 0) restart(next, target.coerceIn(0, next.size - 1))
+        }
+    }
+
+    private fun restart(items: List<QueueItem>, fromIndex: Int) {
+        job?.cancel()
+        val sc = scope ?: CoroutineScope(SupervisorJob() + Dispatchers.IO).also { scope = it }
+        job = sc.launch {
+            // 从 fromIndex 开始跑；QueueBus 的 index 以原队列为准，所以这里单独记账
+            runQueue(curIp, curLocation, curUuid, curLoop, items.drop(fromIndex), baseIndex = fromIndex)
+        }
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -64,19 +111,30 @@ class QueuePlaybackService : Service() {
 
         // 重复 start 时先把上一轮停掉，避免两个循环同时往音箱投流
         job?.cancel()
+        curIp = ip
+        curLocation = location
+        curUuid = uuid
+        curLoop = loopMode
+        curItems = session.items
+        QueueBus.bind(controller)
         val sc = CoroutineScope(SupervisorJob() + Dispatchers.IO).also { scope = it }
-        job = sc.launch { runQueue(ip, location, uuid, loopMode, session.items) }
+        job = sc.launch { runQueue(ip, location, uuid, loopMode, session.items, baseIndex = 0) }
         return START_NOT_STICKY
     }
 
+    /**
+     * @param items 从当前要播的那首开始（重启时是 `drop(fromIndex)`）
+     * @param baseIndex 这些 item 在原队列里的起始下标，用于 QueueBus 显示「第几首」
+     */
     private suspend fun runQueue(
         ip: String,
         location: String?,
         uuid: String,
         loopMode: Int,
         items: List<QueueItem>,
+        baseIndex: Int = 0,
     ) {
-        QueueBus.begin(items)
+        if (baseIndex == 0) QueueBus.begin(items) else QueueBus.playing(items.firstOrNull()?.title ?: "", baseIndex, curItems)
         val sessions = SessionStore.of(this)
         try {
             val client = describeClient(ip, location)
@@ -85,16 +143,16 @@ class QueuePlaybackService : Service() {
                     override fun play(item: QueueItem) {
                         client.setAvTransportUri(item.url, item.title, item.mimeType)
                         client.play()
-                        val index = items.indexOfFirst { it.url == item.url }.coerceAtLeast(0)
-                        QueueBus.playing(item.title, index)
+                        val index = baseIndex + items.indexOfFirst { it.url == item.url }.coerceAtLeast(0)
+                        QueueBus.playing(item.title, index, curItems)
                         // 每切一首就更新快照：被杀进程时最多丢一首的进度
                         runCatching {
                             sessions.savePlayback(
                                 uuid.ifBlank { ip },
-                                PlaybackSession(uuid.ifBlank { ip }, ip, items, index, loopMode),
+                                PlaybackSession(uuid.ifBlank { ip }, ip, curItems, index, loopMode),
                             )
                         }
-                        updateNotification(item.title, index + 1, items.size)
+                        updateNotification(item.title, index + 1, curItems.size.coerceAtLeast(items.size))
                     }
 
                     override fun position(): Pair<Long, Long>? = runCatching {
@@ -138,6 +196,7 @@ class QueuePlaybackService : Service() {
     }
 
     override fun onDestroy() {
+        QueueBus.bind(null)
         scope?.cancel()
         scope = null
         super.onDestroy()

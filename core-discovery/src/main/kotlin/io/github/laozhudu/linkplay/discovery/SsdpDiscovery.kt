@@ -31,6 +31,8 @@ data class DiscoveredDevice(
     val friendlySsid: String? = null,
     /** 设备 uuid，用于「IP 变了也能认回来」。 */
     val uuid: String? = null,
+    /** 来自设备描述的 friendlyName（SSDP 头里没有，要拉描述才知道）。 */
+    val friendlyName: String? = null,
 )
 
 class SsdpDiscovery(
@@ -46,6 +48,36 @@ class SsdpDiscovery(
         discoverUnicast(hosts, timeoutMs, SsdpMessages.ST_MEDIA_SERVER)
 
     suspend fun discover(): List<DiscoveredDevice> = discoverWithTargets(SEARCH_TARGETS)
+
+    /**
+     * 只发现 LinkPlay 系（DOSS/WiiMu/Arylic 这一族）播放设备。
+     *
+     * 为什么单独一个方法而不是在调用处过滤：判据要**先拉描述**才能确定（SSDP 头里
+     * 真机的 SERVER 是 `Linux/3.x UPnP/1.0`，没有任何品牌字样，见 LinkPlayIdentity 的测试），
+     * 而拉描述是网络请求 —— 放在 UI 层做会让每个页面各写一份、且容易漏。
+     *
+     * 返回的 [DiscoveredDevice.friendlyName] 已填好设备名，可直接用于首页展示。
+     */
+    suspend fun discoverLinkPlayDevices(): List<DiscoveredDevice> = withContext(Dispatchers.IO) {
+        discover()
+            .filter { it.location != null }
+            .mapNotNull { device ->
+                val location = device.location ?: return@mapNotNull null
+                val desc = runCatching {
+                    io.github.laozhudu.linkplay.protocol.upnp.UpnpRendererClient.describe(location)
+                }.getOrNull() ?: return@mapNotNull null
+
+                if (!io.github.laozhudu.linkplay.protocol.identity.LinkPlayIdentity.isLinkPlayFamily(desc)) {
+                    return@mapNotNull null
+                }
+                device.copy(
+                    friendlySsid = desc.friendlyName,
+                    uuid = device.uuid ?: desc.udn,
+                    friendlyName = desc.friendlyName,
+                )
+            }
+            .distinctBy { it.uuid ?: it.ip }
+    }
 
     private suspend fun discoverWithTargets(targets: List<String>): List<DiscoveredDevice> = withContext(Dispatchers.IO) {
         val found = LinkedHashMap<String, DiscoveredDevice>()

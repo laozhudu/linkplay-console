@@ -156,6 +156,24 @@ NONE, STATION-NETWORK, SONGLIST-NETWORK, SONGLIST-LOCAL, SONGLIST-LOCAL_TF, THIR
 | **多房间** | 只有一台音箱，`slaves:0` 无法验证从机行为 |
 | **灯效** | 走 `uart_pass_port:8899` 的 MCU 直通帧，原 APK 三套 OEM 帧已反推但未验证 |
 
+## 4.6 设备识别与记忆（本轮新增）
+
+首页只认 DOSS/LinkPlay 系，判据写在 `LinkPlayIdentity`（纯 JVM，9 个单测）：
+
+| 判据 | 强度 | 实测 |
+|---|---|---|
+| 描述里含 `urn:schemas-wiimu-com:service:PlayQueue:1` 或 QPlay | **铁证** | 真机 `.153` 两条都有 |
+| manufacturer/modelName/friendlyName 含 wiimu/LinkPlay/DOSS | 强 | `manufacturer: DOSS 1010` |
+| PlayQueue + AVTransport + RenderingControl 同时具备 | 中（需三者同时，否则电视也算进来） | 真机成立 |
+
+反例已用真机数据验证：NAS `.223` 只有 ContentDirectory + ConnectionManager +
+`X_MS_MediaReceiverRegistrar`，**不含任何私有服务**，因此被正确排除。
+
+为什么不靠 SSDP 头筛：真机 `SERVER` 是 `Linux/3.x UPnP/1.0`，没有任何品牌字样（单测里锁住了这条）。
+
+识别后的设备写进 `tb_session` 的 `devices` 键，按 **uuid** 排序（最近用过在前）。
+`getStatusEx` 探活时如果发现 IP 变了，会把新 IP 写回 —— 真机从 `.164` 漂到 `.153` 就是这么处理的。
+
 ## 5. 建议的挖掘顺序（性价比）
 
 1. **httpapi 投流兜底**（已在 §0.1 验证）→ 立刻把 `PlaybackEngine` 里的「UPnP 掉线就 reboot」改成「先降级 httpapi」
