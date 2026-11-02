@@ -1,6 +1,8 @@
 package io.github.laozhudu.linkplay.console
 
 import android.os.Bundle
+import android.view.KeyEvent
+import androidx.activity.viewModels
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -66,6 +68,7 @@ import io.github.laozhudu.linkplay.console.ui.components.SectionTitle
 import io.github.laozhudu.linkplay.console.ui.components.VSpace
 import io.github.laozhudu.linkplay.console.ui.theme.LinkPlayTheme
 import io.github.laozhudu.linkplay.console.ui.theme.LocalExtraColors
+import io.github.laozhudu.linkplay.console.ui.theme.OnDarkPalette
 import io.github.laozhudu.linkplay.console.ui.theme.Spacing
 import io.github.laozhudu.linkplay.console.ui.theme.StatusColors
 import io.github.laozhudu.linkplay.console.ui.theme.seedOf
@@ -73,13 +76,42 @@ import io.github.laozhudu.linkplay.discovery.DiscoveredDevice
 import io.github.laozhudu.linkplay.protocol.session.SavedDevice
 
 class MainActivity : ComponentActivity() {
+
+    /**
+     * 提到 Activity 层是为了接实体音量键 —— 按键事件来自 Activity，不在 Compose 树里。
+     */
+    private val consoleVm: ConsoleViewModel by viewModels()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             LinkPlayTheme {
-                ConsoleApp()
+                ConsoleApp(consoleVm)
             }
         }
+    }
+
+    /**
+     * 手机音量键 → 音箱音量（原厂 App 的行为）。
+     *
+     * 两个容易踩的点：
+     * 1. **必须在 dispatchKeyEvent 拦**，不能只拦 onKeyDown：系统在 ACTION_UP 上也会调音量；
+     * 2. DOWN 和 UP 必须给出**同一个判断结果**，否则会出现"按下改音箱、抬起改手机"。
+     *    所以两者都问 [ConsoleViewModel.canHandleVolumeKey]，而不是各自判断。
+     *
+     * 没选设备/设备离线时一律不拦，让系统照常调手机音量 —— 不能把用户的手机变成砖。
+     */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val isVolUp = event.keyCode == KeyEvent.KEYCODE_VOLUME_UP
+        val isVolDown = event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
+        if ((isVolUp || isVolDown) && consoleVm.canHandleVolumeKey()) {
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                consoleVm.adjustVolumeByKey(if (isVolUp) 1 else -1)
+            }
+            // DOWN 与 UP 都吞掉，系统就不会再去动手机自己的媒体音量
+            return true
+        }
+        return super.dispatchKeyEvent(event)
     }
 }
 
@@ -423,7 +455,9 @@ private fun HomeScreen(
                             Text(
                                 device.title,
                                 style = MaterialTheme.typography.titleLarge,
-                                color = extras.onBackdrop,
+                                // 卡片底是派生深色渐变，文字必须恒定白：
+                                // 跟着主题变会在浅色模式下变成"深字压深底"
+                                color = OnDarkPalette.text,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
@@ -440,7 +474,7 @@ private fun HomeScreen(
                                         },
                                 ).joinToString(" · "),
                                 style = MaterialTheme.typography.labelMedium,
-                                color = extras.onBackdropMuted,
+                                color = OnDarkPalette.muted,
                                 maxLines = 1,
                             )
                         }
@@ -458,15 +492,6 @@ private fun HomeScreen(
                             },
                         )
                     }
-                }
-            }
-
-            // 多房间放在**列表最下方**：这是低频配置（组一次能用很久），
-            // 常看的设备列表应该占屏幕上半部分，不该被配置卡挤下去。
-            if (state.saved.size >= 2 || state.groupMembers.size > 1) {
-                item {
-                    VSpace(Spacing.sm)
-                    MultiroomCard(state = state, vm = vm, onOpenDevice = onOpenDevice)
                 }
             }
 
@@ -556,6 +581,15 @@ private fun HomeScreen(
                     OutlinedButton(onClick = onProvision, modifier = Modifier.fillMaxWidth()) {
                         Text("新音箱？走 AP 直连配网")
                     }
+                }
+            }
+
+            // 多房间放在整个列表**最底部**（添加音箱之后）：
+            // 组网是组一次管很久的低频配置，不该占据首屏；设备列表与添加入口优先。
+            if (state.saved.size >= 2 || state.groupMembers.size > 1) {
+                item {
+                    VSpace(Spacing.lg)
+                    MultiroomCard(state = state, vm = vm, onOpenDevice = onOpenDevice)
                 }
             }
         }

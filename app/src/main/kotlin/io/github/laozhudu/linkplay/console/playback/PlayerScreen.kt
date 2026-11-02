@@ -73,6 +73,7 @@ import io.github.laozhudu.linkplay.console.ui.components.SkipGlyph
 import io.github.laozhudu.linkplay.console.ui.components.VolumeGlyph
 import io.github.laozhudu.linkplay.console.ui.components.WaveProgressSlider
 import io.github.laozhudu.linkplay.console.ui.theme.LocalExtraColors
+import io.github.laozhudu.linkplay.console.ui.theme.OnDarkPalette
 import io.github.laozhudu.linkplay.console.ui.theme.Spacing
 import io.github.laozhudu.linkplay.console.ui.theme.StatusColors
 import io.github.laozhudu.linkplay.console.ui.theme.seedOf
@@ -177,9 +178,12 @@ fun PlayerScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
+            // 播放页**永远是深色底**（暂停时也深一档）：
+            // 1) 封面/派生色都是按深底设计的；2) 浅色主题下深底更耐看；
+            // 3) 换来一组恒定文字色，不必为两种主题各调一遍对比度。
             .background(
                 Brush.verticalGradient(
-                    listOf(if (playing) palette.top else extras.backdropTop, palette.bottom),
+                    listOf(palette.top, palette.bottom),
                 ),
             ),
     ) {
@@ -197,7 +201,7 @@ fun PlayerScreen(
             ) {
                 if (onBack != null) {
                     CircleIcon(onClick = onBack) {
-                        BackGlyph(extras.onBackdrop, Modifier.size(GlyphSize.medium))
+                        BackGlyph(OnDarkPalette.text, Modifier.size(GlyphSize.medium))
                     }
                     Spacer(Modifier.width(Spacing.xs))
                 }
@@ -205,7 +209,7 @@ fun PlayerScreen(
                     Text(
                         state.friendlyName ?: deviceIp,
                         style = MaterialTheme.typography.titleSmall,
-                        color = extras.onBackdrop,
+                        color = OnDarkPalette.text,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -215,12 +219,12 @@ fun PlayerScreen(
                             state.sourceLabel?.let { append(" · ").append(it) }
                         },
                         style = MaterialTheme.typography.labelSmall,
-                        color = extras.onBackdropMuted,
+                        color = OnDarkPalette.muted,
                         maxLines = 1,
                     )
                 }
                 CircleIcon(onClick = onOpenSettings) {
-                    Text("⋯", style = MaterialTheme.typography.headlineSmall, color = extras.onBackdrop)
+                    Text("⋯", style = MaterialTheme.typography.headlineSmall, color = OnDarkPalette.text)
                 }
             }
 
@@ -266,7 +270,7 @@ fun PlayerScreen(
                             text = (title ?: "?").take(1).uppercase(),
                             fontSize = 64.sp,
                             fontWeight = FontWeight.Black,
-                            color = extras.onBackdrop.copy(alpha = 0.85f),
+                            color = OnDarkPalette.text.copy(alpha = 0.85f),
                         )
                     }
                 }
@@ -278,7 +282,7 @@ fun PlayerScreen(
                 text = title ?: "未在播放",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
-                color = extras.onBackdrop,
+                color = OnDarkPalette.text,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center,
@@ -288,7 +292,7 @@ fun PlayerScreen(
                 text = artist
                     ?: if (state.state == TransportState.NO_MEDIA_PRESENT) "去媒体库点一首" else deviceIp,
                 style = MaterialTheme.typography.bodySmall,
-                color = extras.onBackdropMuted,
+                color = OnDarkPalette.muted,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center,
@@ -301,8 +305,8 @@ fun PlayerScreen(
                 onValueChange = { scrubDraft = it },
                 onValueChangeFinished = { scrubDraft = null },
                 modifier = Modifier.fillMaxWidth(),
-                activeColor = extras.onBackdrop,
-                inactiveColor = extras.onBackdropMuted.copy(alpha = 0.28f),
+                activeColor = OnDarkPalette.text,
+                inactiveColor = OnDarkPalette.muted.copy(alpha = 0.28f),
                 thumbColor = palette.accent,
                 animated = scrubDraft == null,
                 height = 20.dp,
@@ -311,13 +315,13 @@ fun PlayerScreen(
                 Text(
                     PlaybackViewModel.format((progress * duration).toLong()),
                     style = MaterialTheme.typography.labelSmall,
-                    color = extras.onBackdropMuted,
+                    color = OnDarkPalette.muted,
                 )
                 Spacer(Modifier.weight(1f))
                 Text(
                     PlaybackViewModel.format(duration),
                     style = MaterialTheme.typography.labelSmall,
-                    color = extras.onBackdropMuted,
+                    color = OnDarkPalette.muted,
                 )
             }
 
@@ -329,19 +333,19 @@ fun PlayerScreen(
             ) {
                 CircleIcon(onClick = vm::cycleLoopMode, size = 44.dp) {
                     LoopGlyph(
-                        color = if (state.loopMode == LoopMode.OFF) extras.onBackdropMuted else palette.accent,
+                        color = if (state.loopMode == LoopMode.OFF) OnDarkPalette.muted else palette.accent,
                         mode = state.loopMode.wire,
                         modifier = Modifier.size(GlyphSize.medium),
                     )
                 }
                 CircleIcon(onClick = vm::previous, size = 48.dp) {
-                    SkipGlyph(extras.onBackdrop, forward = false, modifier = Modifier.size(28.dp))
+                    SkipGlyph(OnDarkPalette.text, forward = false, modifier = Modifier.size(28.dp))
                 }
                 Box(
                     modifier = Modifier
                         .size(68.dp)
                         .clip(CircleShape)
-                        .background(extras.onBackdrop)
+                        .background(OnDarkPalette.text)
                         .clickable { if (playing) vm.pause() else vm.play() },
                     contentAlignment = Alignment.Center,
                 ) {
@@ -349,10 +353,10 @@ fun PlayerScreen(
                     else PlayGlyph(palette.top, Modifier.size(28.dp))
                 }
                 CircleIcon(onClick = vm::next, size = 48.dp) {
-                    SkipGlyph(extras.onBackdrop, forward = true, modifier = Modifier.size(28.dp))
+                    SkipGlyph(OnDarkPalette.text, forward = true, modifier = Modifier.size(28.dp))
                 }
                 CircleIcon(onClick = vm::stop, size = 44.dp) {
-                    Text("■", style = MaterialTheme.typography.titleSmall, color = extras.onBackdropMuted)
+                    Text("■", style = MaterialTheme.typography.titleSmall, color = OnDarkPalette.muted)
                 }
             }
 
@@ -360,7 +364,7 @@ fun PlayerScreen(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 CircleIcon(onClick = vm::toggleMute, size = 32.dp) {
                     VolumeGlyph(
-                        color = if (state.mute) extras.onBackdropMuted else extras.onBackdrop,
+                        color = if (state.mute) OnDarkPalette.muted else OnDarkPalette.text,
                         muted = state.mute,
                         modifier = Modifier.size(GlyphSize.small),
                     )
@@ -374,8 +378,8 @@ fun PlayerScreen(
                     },
                     onValueChangeFinished = { volDraft = null },
                     modifier = Modifier.weight(1f),
-                    activeColor = extras.onBackdrop,
-                    inactiveColor = extras.onBackdropMuted.copy(alpha = 0.28f),
+                    activeColor = OnDarkPalette.text,
+                    inactiveColor = OnDarkPalette.muted.copy(alpha = 0.28f),
                     thumbColor = palette.accent,
                     animated = false,
                     height = 18.dp,
@@ -384,7 +388,7 @@ fun PlayerScreen(
                 Text(
                     if (state.mute) "静音" else state.volume.toString(),
                     style = MaterialTheme.typography.labelSmall,
-                    color = extras.onBackdropMuted,
+                    color = OnDarkPalette.muted,
                     textAlign = TextAlign.End,
                     modifier = Modifier.width(32.dp),
                 )
@@ -419,7 +423,7 @@ fun PlayerScreen(
                     Text(
                         "从媒体库点歌",
                         style = MaterialTheme.typography.labelSmall,
-                        color = extras.onBackdropMuted,
+                        color = OnDarkPalette.muted,
                     )
                 }
             }
@@ -429,7 +433,7 @@ fun PlayerScreen(
                     .fillMaxWidth()
                     .weight(0.85f)
                     .clip(RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp))
-                    .background(Color.White.copy(alpha = 0.06f)),
+                    .background(OnDarkPalette.chip),
             ) {
                 if (showAdvanced) {
                     CastPanel(
@@ -449,7 +453,7 @@ fun PlayerScreen(
                         Text(
                             "队列是空的",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = extras.onBackdrop,
+                            color = OnDarkPalette.text,
                         )
                         Spacer(Modifier.height(Spacing.sm))
                         Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
@@ -486,7 +490,7 @@ private fun SegmentChip(text: String, selected: Boolean, onClick: () -> Unit) {
         modifier = Modifier
             .clip(AppShapesExpressive.pill)
             .background(
-                if (selected) Color.White.copy(alpha = 0.20f) else Color.White.copy(alpha = 0.07f),
+                if (selected) Color(0x33FFFFFF) else OnDarkPalette.chip,
             )
             .clickable(onClick = onClick)
             .padding(horizontal = Spacing.md, vertical = 6.dp),
@@ -518,12 +522,12 @@ private fun PlaylistRow(
     ) {
         Box(Modifier.width(26.dp), contentAlignment = Alignment.Center) {
             if (playing) {
-                EqualizerBars(extras.onBackdrop)
+                EqualizerBars(OnDarkPalette.text)
             } else {
                 Text(
                     "${index + 1}",
                     style = MaterialTheme.typography.labelSmall,
-                    color = if (current) extras.onBackdrop else extras.onBackdropMuted,
+                    color = if (current) OnDarkPalette.text else OnDarkPalette.muted,
                 )
             }
         }
@@ -533,7 +537,7 @@ private fun PlaylistRow(
                 item.title,
                 style = MaterialTheme.typography.bodySmall,
                 fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal,
-                color = if (current) extras.onBackdrop else extras.onBackdropMuted,
+                color = if (current) OnDarkPalette.text else OnDarkPalette.muted,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -541,7 +545,7 @@ private fun PlaylistRow(
                 Text(
                     it,
                     style = MaterialTheme.typography.labelSmall,
-                    color = extras.onBackdropMuted,
+                    color = OnDarkPalette.muted,
                     maxLines = 1,
                 )
             }
@@ -553,7 +557,7 @@ private fun PlaylistRow(
                 .clickable(onClick = onRemove),
             contentAlignment = Alignment.Center,
         ) {
-            Text("✕", style = MaterialTheme.typography.labelSmall, color = extras.onBackdropMuted)
+            Text("✕", style = MaterialTheme.typography.labelSmall, color = OnDarkPalette.muted)
         }
     }
 }
@@ -615,7 +619,7 @@ private fun CastPanel(
             Text(
                 "这条链接需要 Referer（自动转发）",
                 style = MaterialTheme.typography.labelSmall,
-                color = extras.onBackdropMuted,
+                color = OnDarkPalette.muted,
                 modifier = Modifier.weight(1f),
             )
             Switch(checked = state.castNeedsHeaders, onCheckedChange = vm::setCastNeedsHeaders)
@@ -638,12 +642,12 @@ private fun CastPanel(
             Text(
                 "歌词",
                 style = MaterialTheme.typography.labelSmall,
-                color = extras.onBackdrop,
+                color = OnDarkPalette.text,
             )
             Text(
                 state.lyrics!!,
                 style = MaterialTheme.typography.labelSmall,
-                color = extras.onBackdropMuted,
+                color = OnDarkPalette.muted,
                 modifier = Modifier.heightIn(max = 200.dp),
             )
         }
@@ -652,7 +656,7 @@ private fun CastPanel(
             Text(
                 state.log.takeLast(8).joinToString("\n"),
                 style = MaterialTheme.typography.labelSmall,
-                color = extras.onBackdropMuted,
+                color = OnDarkPalette.muted,
             )
         }
     }
