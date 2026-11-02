@@ -40,10 +40,20 @@ SHA-256: DC:3F:1F:24:40:E7:3E:EE:F5:1A:93:8A:79:4A:34:13:AD:D2:88:0C:F9:02:10:3E
 
 ### 2. `versionCode` 随提交递增
 
-`versionCode = git 提交数`，`versionName = 0.9.<提交数>`。这样本地构建与 CI 构建算出来的数字天然一致。
+`versionCode = git 提交数`，`versionName = 0.9.<提交数>`。本地与 CI 算出来的数字天然一致。
 
-> CI 的 checkout 必须 `fetch-depth: 0`。浅克隆下 `git rev-list --count HEAD` 永远返回 1，
-> 版本号不再递增，覆盖安装会重新失效——这是最容易踩回去的坑。
+两个必须知道的前提（都踩过）：
+
+> **CI 的 checkout 必须 `fetch-depth: 0`。** 浅克隆下 `git rev-list --count HEAD` 永远返回 1，
+> 版本号不再递增，覆盖安装会重新失效。
+
+> **PR 构建的版本号要取目标分支的提交数，不能用分支自己的。** squash 合并会把 PR 上的多个提交
+> 压成 main 上的 1 个，于是 PR 分支的提交数比合并后的 main 大。如果两者都直接取 HEAD，
+> 装了 PR 产物再装 main 产物就成了**降级安装**（`INSTALL_FAILED_VERSION_DOWNGRADE`）。
+> 所以 CI 通过 `LINKPLAY_VERSION_CODE` 环境变量传入：PR = `origin/main` 的提交数（与 main 同号，
+> 可互相覆盖），main 分支 = 自身提交数（每次合并 +1，单调递增）。
+
+日常只需要装 **main 分支的 CI 产物**，PR 产物仅供审查。
 
 ## 一次性操作（只做这一次）
 
