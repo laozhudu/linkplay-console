@@ -59,6 +59,32 @@ class SessionStore private constructor(context: Context) : SQLiteOpenHelper(
     /** 播完/主动清空时调用，避免下次还提示「继续上次」。 */
     fun clearPlayback(deviceUuid: String) = delete(KIND_PLAYBACK, deviceUuid)
 
+    // ---- 记住的音箱 ----
+
+    /**
+     * 已保存设备清单。
+     *
+     * 存成一段 JSON 而不是一张表：设备数量是个位数，而且「顺序 = 最近使用」
+     * 本身就是排序语义，用表反而要维护一个 order 字段。
+     */
+    fun savedDevices(): List<io.github.laozhudu.linkplay.protocol.session.SavedDevice> =
+        io.github.laozhudu.linkplay.protocol.session.DeviceList.decode(get(KIND_DEVICES, SUBJECT_ALL))
+
+    fun saveDevices(list: List<io.github.laozhudu.linkplay.protocol.session.SavedDevice>) =
+        put(KIND_DEVICES, SUBJECT_ALL, io.github.laozhudu.linkplay.protocol.session.DeviceList.encode(list))
+
+    fun upsertDevice(device: io.github.laozhudu.linkplay.protocol.session.SavedDevice): List<io.github.laozhudu.linkplay.protocol.session.SavedDevice> {
+        val next = io.github.laozhudu.linkplay.protocol.session.DeviceList.upsert(savedDevices(), device)
+        saveDevices(next)
+        return next
+    }
+
+    fun removeDevice(uuid: String): List<io.github.laozhudu.linkplay.protocol.session.SavedDevice> {
+        val next = io.github.laozhudu.linkplay.protocol.session.DeviceList.remove(savedDevices(), uuid)
+        saveDevices(next)
+        return next
+    }
+
     // ---- KV 原语 ----
 
     private fun put(kind: String, subject: String, payload: String) {
@@ -81,6 +107,8 @@ class SessionStore private constructor(context: Context) : SQLiteOpenHelper(
         private const val DB_VERSION = 1
         private const val KIND_NAS = "nas"
         private const val KIND_PLAYBACK = "playback"
+        private const val KIND_DEVICES = "devices"
+        private const val SUBJECT_ALL = "all"
 
         @Volatile
         private var instance: SessionStore? = null
