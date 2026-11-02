@@ -25,6 +25,11 @@
 
         <!-- 设备只提供明文 HTTP，必须允许 cleartext；不要扩展到其它域名（见 network_security_config）。 -->
         <service
+            android:name=".playback.QueuePlaybackService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <service
             android:name=".library.MediaServerService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />

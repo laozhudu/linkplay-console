@@ -47,6 +47,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import io.github.laozhudu.linkplay.console.library.LibraryScreen
 import io.github.laozhudu.linkplay.console.nas.NasScreen
+import io.github.laozhudu.linkplay.console.ui.theme.LinkPlayTheme
 import io.github.laozhudu.linkplay.console.library.QueueScreen
 import io.github.laozhudu.linkplay.console.playback.PlaybackCard
 import io.github.laozhudu.linkplay.console.playback.PlaybackViewModel
@@ -56,7 +57,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme()) {
+            LinkPlayTheme {
                 ConsoleApp()
             }
         }
@@ -102,6 +103,7 @@ fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
                     .padding(horizontal = 16.dp),
             ) {
                 NasScreen(
+                    deviceUuid = state.selectedUuid,
                     deviceIp = state.selectedIp.orEmpty(),
                     deviceLocation = state.selectedLocation,
                     onBack = { showNas = false },
