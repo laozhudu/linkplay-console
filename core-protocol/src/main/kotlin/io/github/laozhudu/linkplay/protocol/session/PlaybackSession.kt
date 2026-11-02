@@ -41,6 +41,7 @@ data class PlaybackSession(
                                 it.album?.let { a -> put("album", JsonValue.Str(a)) }
                                 put("dur", JsonValue.Num(it.durationSec.toDouble()))
                                 put("mime", JsonValue.Str(it.mimeType))
+                                it.albumArtUrl?.let { a -> put("art", JsonValue.Str(a)) }
                             },
                         )
                     },
@@ -66,6 +67,7 @@ data class PlaybackSession(
                         album = o.string("album"),
                         durationSec = o.int("dur")?.toLong() ?: 0L,
                         mimeType = o.string("mime") ?: "audio/mpeg",
+                        albumArtUrl = o.string("art"),
                     )
                 }
                 if (items.isEmpty()) return null

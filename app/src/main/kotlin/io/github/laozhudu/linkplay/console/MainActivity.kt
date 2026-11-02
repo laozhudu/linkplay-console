@@ -143,6 +143,7 @@ fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
 
             SubPage.Settings -> DeviceSettingsScreen(
                 state = state,
+                saved = state.saved,
                 vm = vm,
                 onBack = { sub = null },
                 onOpenPlayer = { sub = null; tab = Tab.Player },

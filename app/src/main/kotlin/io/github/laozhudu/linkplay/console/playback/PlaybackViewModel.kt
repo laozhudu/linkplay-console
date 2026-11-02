@@ -7,6 +7,7 @@ import io.github.laozhudu.linkplay.protocol.player.HttpApiPlaybackEngine
 import io.github.laozhudu.linkplay.protocol.media.RelayMediaServer
 import io.github.laozhudu.linkplay.protocol.media.RelayTarget
 import io.github.laozhudu.linkplay.protocol.player.LoopMode
+import io.github.laozhudu.linkplay.protocol.queue.QueueItem
 import io.github.laozhudu.linkplay.protocol.player.PlaybackEngine
 import io.github.laozhudu.linkplay.protocol.player.PlaybackSnapshot
 import io.github.laozhudu.linkplay.protocol.player.UpnpPlaybackEngine
@@ -228,6 +229,17 @@ class PlaybackViewModel(
                 raw
             }
             engine!!.playUrl(target, null)
+            // 投进来的一首也要进队列 —— 否则播放页的列表永远是空的（用户实际遇到的就是这个）
+            QueueBus.begin(
+                listOf(
+                    QueueItem(
+                        url = target,
+                        title = raw.substringAfterLast('/').ifBlank { "投流音频" },
+                        mimeType = "audio/mpeg",
+                    ),
+                ),
+            )
+            QueueBus.playing(raw.substringAfterLast('/').ifBlank { "投流音频" }, 0)
             log(if (needsHeaders) "已转发投流：$target" else "已投流：$target")
         }
     }

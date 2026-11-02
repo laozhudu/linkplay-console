@@ -136,4 +136,6 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
     implementation(libs.kotlinx.coroutines.android)
+    // 封面加载（Apache-2.0）：DLNA 的 albumArtURI 是普通 http 图，Coil 一句 AsyncImage 就够
+    implementation(libs.coil.compose)
 }

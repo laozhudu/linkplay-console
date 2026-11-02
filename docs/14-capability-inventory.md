@@ -174,6 +174,79 @@ NONE, STATION-NETWORK, SONGLIST-NETWORK, SONGLIST-LOCAL, SONGLIST-LOCAL_TF, THIR
 识别后的设备写进 `tb_session` 的 `devices` 键，按 **uuid** 排序（最近用过在前）。
 `getStatusEx` 探活时如果发现 IP 变了，会把新 IP 写回 —— 真机从 `.164` 漂到 `.153` 就是这么处理的。
 
+## 4.7 多房间：原厂「拖拽成组」的真实协议（2026-11 反编译 + 真机实测）
+
+### 命令（逐字取自 `com.wifiaudio.a.b.a(master, slave, apInfo)`）
+
+```
+GET http://<从机IP>/httpapi.asp?command=
+    multiroom:ConnnectAP:<主机IP>:ConnectMasterAp:
+    ssid=<主机自身热点名的小写HEX>:ch=<信道>:auth=<WPA2PSK|OPEN>:encry=<AES|NONE>:pwd=<HEX>:chext=1
+```
+
+三个容易搞错的点（都是读代码读出来的）：
+
+| 点 | 说明 |
+|---|---|
+| 请求发给**从机** | 主机信息放在参数里，不是发给主机让它去拉从机 |
+| `ssid` 用**小写 hex** | 普通配网的 `ConnectMasterAp` 用大写 hex，两者不同 |
+| `chext=1` | 表示「多房间从机接入」，普通配网是 `chext=0` |
+
+### 其他 multiroom 命令
+
+```
+multiroom:getSlaveList                          读从机列表
+multiroom:SlaveVolume:<从机IP>:<0-100>          设从机音量
+multiroom:SlaveChannel:<从机IP>:<声道>           设从机声道
+multiroom:SlaveDeviceName:<从机IP>:<URL编码名>   给从机改名
+multiroom:SlaveMask / SlaveUnMask / SlaveKickout 入组/退组/踢出（参数在 APK 里不透明）
+```
+
+### 原厂 App 的确认机制（重要）
+
+发完 `ConnnectAP` 后，它**不看命令返回值**，而是定时轮询：
+
+- `az`：每 2 秒读一次 `getSlaveList`，超过 **35 秒**判失败
+- `bb`：另一种拖拽（异步播放）用 40 秒超时
+- 成功 → `drag_msg_play_sync_success`；超时 → `drag_msg_play_sync_fail_timeout`
+
+原因很清楚：`multiroom:*` 命令**只要名字认识就回 `OK`**。真机验证过：`SlaveMask` 换各种参数都回 `OK`，
+但一台从机都没出现。所以唯一可信的成功判据是「主机读回来的从机列表真的多了一台」。
+本仓库的 `MultiroomClient.joinWithPolling` 照这个节奏实现（含注入时钟，可单测）。
+
+### 真机实测：卡在哪（诚实记录）
+
+两台 DS-1831 同时在线（`.164` fw 3.6.6623 主机 / `.153` fw 3.6.5310 从机）：
+
+```
+初始:            master.slaves=0
+发 ConnnectAP:   slave 回 OK
+轮询 40 秒:      master.slaves 始终 0，两台都保持在线
+逐信道 1..13 试: 全部 OK、master.slaves 仍 0
+                 （ch=12 时从机掉线数秒后又自己回来 → 命令确实执行了，只是没连上）
+MultiPlaySlaveMask(UPnP): 500 Action Failed，SlaveMask 字段读回仍是 0
+```
+
+关键线索是反编译里的这一行：
+
+```java
+// com.wifiaudio.view.pagesmsccontent.ax.a(String str)   ← str 是 getNetwork 的返回
+this.f1415a.f.n = str;                       // 当成主机热点密码
+com.wifiaudio.a.b.a(this.b, this.c, this.f1415a);   // 再下发 ConnnectAP
+```
+
+而这两台的 `getNetwork` **只返回 `{"securemode":"0",}`**（不是密码）。
+原厂逻辑把这个 JSON 当密码、并按「密码非空 → WPA2PSK」走，于是 auth 变成 WPA2PSK + 一段 JSON 当密码，
+**必然连不上**。这很可能就是「原厂 App 在这批固件上多房间也不好用」的根因。
+
+### 现在的实现与待验证项
+
+- 协议层已实现并单测覆盖（`MultiroomClient` / `joinWithPolling`，6 + 5 个用例）
+- 设置页「多房间」里可手填**信道**与**热点密码**，默认 OPEN + 自动信道
+- **待验证**：需要用户在真机上试一次（从机会短暂离开原 Wi-Fi，失败会自己回来）。
+  若手填正确信道+密码后仍不成功，下一步应怀疑主机热点根本没开
+  （可试 `SSIDStrategy` 相关命令），而不是命令格式问题 —— 格式已由反编译 + `OK` 响应双重确认。
+
 ## 5. 建议的挖掘顺序（性价比）
 
 1. **httpapi 投流兜底**（已在 §0.1 验证）→ 立刻把 `PlaybackEngine` 里的「UPnP 掉线就 reboot」改成「先降级 httpapi」

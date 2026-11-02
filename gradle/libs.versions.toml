@@ -6,6 +6,7 @@ lifecycle = "2.8.7"
 activityCompose = "1.9.3"
 composeBom = "2024.12.01"
 coroutines = "1.9.0"
+coil = "2.7.0"
 junit = "4.13.2"
 
 [libraries]
@@ -19,6 +20,7 @@ androidx-compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling
 androidx-compose-material3 = { module = "androidx.compose.material3:material3" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+coil-compose = { module = "io.coil-kt:coil-compose", version.ref = "coil" }
 junit = { module = "junit:junit", version.ref = "junit" }
 
 [plugins]

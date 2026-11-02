@@ -45,6 +45,7 @@ import io.github.laozhudu.linkplay.console.ui.components.VSpace
 import io.github.laozhudu.linkplay.console.ui.theme.Spacing
 import io.github.laozhudu.linkplay.console.ui.theme.StatusColors
 import io.github.laozhudu.linkplay.protocol.SlaveDevice
+import io.github.laozhudu.linkplay.protocol.session.SavedDevice
 
 /**
  * 设备设置页。
@@ -57,6 +58,7 @@ import io.github.laozhudu.linkplay.protocol.SlaveDevice
 @Composable
 fun DeviceSettingsScreen(
     state: ConsoleUiState,
+    saved: List<SavedDevice>,
     vm: ConsoleViewModel,
     onBack: () -> Unit,
     onOpenPlayer: () -> Unit,
@@ -199,7 +201,7 @@ fun DeviceSettingsScreen(
         VSpace(Spacing.md)
 
         // ---- 多房间 ----
-        MultiroomSection(state = state, vm = vm)
+        MultiroomSection(state = state, saved = saved, vm = vm)
 
         VSpace(Spacing.md)
 
@@ -283,37 +285,121 @@ fun DeviceSettingsScreen(
 }
 
 /**
- * 多房间分组。
+ * 多房间（LinkPlay multiroom）。
  *
- * **状态说明（必须诚实）**：真机只有一台 DS-1831，`getSlaveList` 恒返回 `{"slaves":0}`，
- * 所以「入组/退组」的实际效果**未在真机上验证**。这里的按钮都真实下发了命令，
- * 但因为无从核对，界面不显示「已成功」，只把设备返回写进日志。
+ * ## 这一块为什么长这样
  *
- * 已确认可用的部分：从机列表读取、从机音量（`setSlaveVolume`，原厂 App 也是这条命令）。
+ * 命令格式是从原厂 APK 的 `com.wifiaudio.a.v` 反编译出来的（docs/14 §4.7）：
+ * `SlaveVolume:<从机IP>:<vol>` / `SlaveChannel:<从机IP>:<ch>` /
+ * `SlaveDeviceName:<从机IP>:<name>` / `SlaveMask` / `SlaveUnMask` / `SlaveKickout`。
+ *
+ * 但真机实测：两台 DS-1831 同时在线，各自 `multiroom:getSlaveList` 都回 `{"slaves": 0}`，
+ * `SlaveMask` 回 `OK` 却不生效 —— 说明**两台设备还没互相发现**。
+ * 原厂 App 对应的入口是「按 WPS 键配对」，那一步是硬件动作，软件替代不了。
+ *
+ * 所以这一块的做法是：
+ * - 从机列表真实读取，读到就正常显示并可调音量/踢出；
+ * - 读不到时**明确说明原因**，并给一个「邀请另一台已保存音箱」的按钮去试，
+ *   试完立刻回读，把设备真实反应写进日志 —— 不假装成功。
  */
 @Composable
-private fun MultiroomSection(state: ConsoleUiState, vm: ConsoleViewModel) {
+private fun MultiroomSection(state: ConsoleUiState, saved: List<SavedDevice>, vm: ConsoleViewModel) {
     AppCard {
         SectionTitle(
             "多房间",
-            if (state.slaves.isEmpty()) "还没有其他音箱加入" else "${state.slaves.size} 台从机",
+            when {
+                state.slaves.isNotEmpty() -> "${state.slaves.size} 台从机已入组"
+                saved.size > 1 -> "已保存 ${saved.size} 台，还没组成一组"
+                else -> "只保存了一台音箱"
+            },
         )
         VSpace(Spacing.xs)
-        if (state.slaves.isEmpty()) {
-            Text(
-                "把另一台音箱接到同一 Wi-Fi 后，它会出现在这里。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                "提示：分组与入组命令已接入，但本机只有一台音箱，实际效果尚未在真机验证。",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        } else {
+
+        if (state.slaves.isNotEmpty()) {
             state.slaves.forEach { slave ->
                 SlaveRow(slave = slave, busy = state.busy, vm = vm)
                 HorizontalDivider()
+            }
+            VSpace(Spacing.sm)
+            OutlinedButton(onClick = vm::refreshSlaves, enabled = !state.busy) { Text("重新读取") }
+        } else {
+            Text(
+                "主机：${state.status?.ssid ?: state.selectedIp}",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            VSpace(Spacing.xs)
+            Text(
+                "设备报告 0 台从机。原厂 App 让两台音箱先「互相发现」（按 WPS 配对），" +
+                    "那一步需要在音箱上动手，App 只能发起尝试。",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            VSpace(Spacing.sm)
+
+            val others = saved.filter { it.ip != state.selectedIp }
+            if (others.isEmpty()) {
+                Text(
+                    "先在「设备」页把第二台音箱也添加进来。",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                if (state.multiroomBusy) {
+                    // 轮询等待中：把「已等 X/40 秒」直接显示出来，
+                    // 否则用户会以为按钮没反应（原厂 App 是转圈 + 提示语）
+                    Text(
+                        "正在成组…已等待 ${state.multiroomTick}s / 40s",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    VSpace(Spacing.xs)
+                    OutlinedButton(onClick = vm::cancelMultiroom, modifier = Modifier.fillMaxWidth()) {
+                        Text("停止等待")
+                    }
+                } else {
+                    // 可选参数：默认留空即可（设备 securemode=0 → OPEN）
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(
+                            value = if (state.joinChannel == 0) "" else state.joinChannel.toString(),
+                            onValueChange = { v -> vm.setJoinChannel(v.filter { it.isDigit() }.toIntOrNull() ?: 0) },
+                            label = { Text("主机信道（留空=自动）") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Spacer(Modifier.width(Spacing.sm))
+                        OutlinedTextField(
+                            value = state.joinPassword,
+                            onValueChange = vm::setJoinPassword,
+                            label = { Text("热点密码") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    VSpace(Spacing.xs)
+                    others.forEach { other ->
+                        OutlinedButton(
+                            onClick = { vm.joinSlave(other) },
+                            enabled = !state.busy,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("把「${other.title}」接入本机")
+                        }
+                        VSpace(Spacing.xs)
+                    }
+                    Text(
+                        "原理同原厂 App 的拖拽连接：向从机下发「连到本机热点」，然后每 2 秒确认一次，" +
+                            "40 秒内看到从机出现即成功。",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    VSpace(Spacing.xs)
+                    Text(
+                        "注意：从机会去连本机热点，可能短暂离开原来的 Wi-Fi；失败时它会自己连回去。",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    VSpace(Spacing.xs)
+                    OutlinedButton(onClick = vm::refreshSlaves, enabled = !state.busy) { Text("重新读取从机") }
+                }
             }
         }
     }
@@ -352,6 +438,8 @@ private fun SlaveRow(slave: SlaveDevice, busy: Boolean, vm: ConsoleViewModel) {
             onClick = { vm.setSlaveVolume(slave.ip, (slave.volume ?: 0) + 5) },
             enabled = !busy,
         ) { Text("+") }
+        Spacer(Modifier.width(Spacing.xs))
+        OutlinedButton(onClick = { vm.kickSlave(slave.ip) }, enabled = !busy) { Text("踢出") }
     }
 }
 
