@@ -50,10 +50,12 @@ val AppShapes = Shapes(
 )
 
 object StatusColors {
-    val ok = Color(0xFF66BB6A)
+    // 这三个色都要在深色卡片底（0xFF1B2029 附近）上达到 4.5:1，
+    // 所以比 Material 默认色提亮一档 —— 之前 0x66BB6A 做小字说明时确实偏暗。
+    val ok = Color(0xFF7BD88F)
     /** 需要动手（控制面掉线、需要重启设备）。 */
-    val warn = Color(0xFFFFA726)
-    val error = Color(0xFFEF5350)
+    val warn = Color(0xFFFFC061)
+    val error = Color(0xFFFF8A80)
 }
 
 /**
@@ -71,18 +73,21 @@ data class ExtraColors(
     val onAccent: Color,
 )
 
-private val DarkExtras = ExtraColors(
-    onBackdrop = Color(0xFFF3F4F8),
-    onBackdropMuted = Color(0xB3F3F4F8),
+/** internal 是为了让单测能直接量对比度，不靠肉眼。 */
+internal val DarkExtras = ExtraColors(
+    onBackdrop = Color(0xFFF7F8FC),
+    // 原来 0xB3（70%）压在渐变上只有 ~3.9:1，小字看不清；提到 0xD0 后约 6:1
+    onBackdropMuted = Color(0xD0F7F8FC),
     backdropTop = Color(0xFF1B2230),
     backdropBottom = Color(0xFF0A0C11),
     accent = Color(0xFF9FD3FF),
     onAccent = Color(0xFF06223A),
 )
 
-private val LightExtras = ExtraColors(
-    onBackdrop = Color(0xFF14171C),
-    onBackdropMuted = Color(0x9914171C),
+internal val LightExtras = ExtraColors(
+    onBackdrop = Color(0xFF101318),
+    // 浅色底上 60% 黑只有 ~3.6:1，提到 0xC4（77%）后约 7:1
+    onBackdropMuted = Color(0xC4101318),
     backdropTop = Color(0xFFE8EEF7),
     backdropBottom = Color(0xFFFDFDFF),
     accent = Color(0xFF0B5FA5),
@@ -90,6 +95,24 @@ private val LightExtras = ExtraColors(
 )
 
 val LocalExtraColors = staticCompositionLocalOf { DarkExtras }
+
+/**
+ * 恒定压在「深色底」上的文字色。
+ *
+ * 为什么需要一组不随主题变的色：首页设备卡与播放页的背景是 [seedOf] 派生的**深色渐变**
+ * （hsl 亮度 0.24，永远深），而 `ExtraColors` 会跟系统主题走 ——
+ * 浅色主题下 `onBackdrop` 变成近黑，压在深渐变上等于隐形。
+ * 这就是「文字与背景对比不够」最严重的一处，只在浅色模式暴露。
+ */
+object OnDarkPalette {
+    val text = Color(0xFFF7F8FC)
+    /** 次要文字：0xD0 不透明度，压在深渐变上约 10:1。 */
+    val muted = Color(0xD0F7F8FC)
+    val faint = Color(0x99F7F8FC)
+    /** 深色屏上的浮起面板/胶囊底。 */
+    val panel = Color(0xFF1B2230)
+    val chip = Color(0x1FFFFFFF)
+}
 
 private val AppTypography = Typography(
     displaySmall = TextStyle(
@@ -134,11 +157,21 @@ private val AppTypography = Typography(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Medium,
         fontSize = 12.sp,
-        letterSpacing = 0.3.sp,
+        lineHeight = 16.sp,
+        letterSpacing = 0.2.sp,
+    ),
+    // 默认的 labelSmall 是 11sp / 常规字重，压在深色卡片上几乎看不见。
+    // 这里升到 12sp + Medium，并明确行高 —— 小字也更耐读。
+    labelSmall = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.Medium,
+        fontSize = 12.sp,
+        lineHeight = 16.sp,
+        letterSpacing = 0.2.sp,
     ),
 )
 
-private val DarkColors = darkColorScheme(
+internal val DarkColors = darkColorScheme(
     primary = Color(0xFF9FD3FF),
     onPrimary = Color(0xFF06223A),
     primaryContainer = Color(0xFF16324A),
@@ -150,23 +183,37 @@ private val DarkColors = darkColorScheme(
     tertiary = Color(0xFFFFC48A),
     onTertiary = Color(0xFF2A1600),
     background = Color(0xFF0A0C11),
-    onBackground = Color(0xFFE7E9EF),
-    surface = Color(0xFF11151C),
-    onSurface = Color(0xFFE7E9EF),
-    surfaceVariant = Color(0xFF1B2029),
-    onSurfaceVariant = Color(0xFFC2C7D2),
-    outline = Color(0xFF3A4150),
+    onBackground = Color(0xFFF2F4F9),
+    surface = Color(0xFF12161E),
+    onSurface = Color(0xFFF2F4F9),
+    // 卡片底比原来亮一档、正文比原来亮一档：这一对是"看不清"投诉的直接来源
+    surfaceVariant = Color(0xFF232A36),
+    onSurfaceVariant = Color(0xFFDCE1EA),
+    outline = Color(0xFF5A6474),
     error = Color(0xFFFFB4AB),
     onError = Color(0xFF690005),
 )
 
-private val LightColors = lightColorScheme(
+internal val LightColors = lightColorScheme(
     primary = Color(0xFF0B5FA5),
     onPrimary = Color(0xFFFFFFFF),
     primaryContainer = Color(0xFFD3E7FA),
     onPrimaryContainer = Color(0xFF001D33),
-    secondary = Color(0xFF4A6B33),
-    tertiary = Color(0xFF8C5000),
+    secondary = Color(0xFF3F5C2B),
+    onSecondary = Color(0xFFFFFFFF),
+    secondaryContainer = Color(0xFFDCEBCB),
+    onSecondaryContainer = Color(0xFF14200A),
+    tertiary = Color(0xFF7A4500),
+    onTertiary = Color(0xFFFFFFFF),
+    background = Color(0xFFF7F9FC),
+    onBackground = Color(0xFF101318),
+    surface = Color(0xFFFFFFFF),
+    onSurface = Color(0xFF101318),
+    surfaceVariant = Color(0xFFE6EBF3),
+    onSurfaceVariant = Color(0xFF3B4250),
+    outline = Color(0xFF8891A0),
+    error = Color(0xFFB3261E),
+    onError = Color(0xFFFFFFFF),
 )
 
 /**

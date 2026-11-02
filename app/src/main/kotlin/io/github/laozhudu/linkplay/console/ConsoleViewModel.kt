@@ -16,6 +16,7 @@ import io.github.laozhudu.linkplay.protocol.identity.LinkPlayIdentity
 import io.github.laozhudu.linkplay.protocol.multiroom.MultiroomClient
 import io.github.laozhudu.linkplay.console.playback.VolumeBus
 import io.github.laozhudu.linkplay.protocol.player.PlayerStatus
+import io.github.laozhudu.linkplay.protocol.player.VolumeStep
 import io.github.laozhudu.linkplay.protocol.session.SavedDevice
 import io.github.laozhudu.linkplay.protocol.upnp.UpnpRendererClient
 import kotlinx.coroutines.Dispatchers
@@ -118,6 +119,16 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     private val groupVolumeChannel = kotlinx.coroutines.channels.Channel<Pair<GroupMember, Int>>(
         kotlinx.coroutines.channels.Channel.CONFLATED,
     )
+    /**
+     * 「直接给某台设备设音量」的合并通道（键位 ip、值 0-100）。
+     *
+     * 为什么和 [groupVolumeChannel] 分开：那个通道的语义是"组内成员"，
+     * 发送时要靠 groupMasterIp 中转；而手机音量键调的是**当前设备**，
+     * 跟有没有组无关。两条路径混在一起就会出现"没组网时按键没反应"。
+     */
+    private val deviceVolumeChannel = kotlinx.coroutines.channels.Channel<Pair<String, Int>>(
+        kotlinx.coroutines.channels.Channel.CONFLATED,
+    )
     private val _state = MutableStateFlow(ConsoleUiState())
     val state: StateFlow<ConsoleUiState> = _state.asStateFlow()
 
@@ -136,6 +147,15 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                         VolumeBus.publish(masterIp, st.volume, st.mute)
                     }
                 }
+            }
+        }
+        viewModelScope.launch {
+            for ((ip, v) in deviceVolumeChannel) {
+                withContext(Dispatchers.IO) {
+                    runCatching { client.send(ip, LinkPlayCommands.playerVolume(v)) }
+                        .onFailure { log("调音量失败：${it.message}") }
+                }
+                delay(60)
             }
         }
         viewModelScope.launch {
@@ -459,7 +479,11 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
             st.copy(groupMembers = st.groupMembers.map { if (it.ip == member.ip) it.copy(volume = v) else it })
         }
         // 主机音量写进全站总线，播放页那一侧同一帧就跟着动
-        if (member.isMaster) VolumeBus.publishVolume(master, v)
+        if (member.isMaster) {
+            VolumeBus.publishVolume(master, v)
+            deviceVolumeChannel.trySend(master to v)
+            return
+        }
         // 主机的音量是它自己的；从机必须由主机代转（从机在主机热点网段，直连不可达）
         groupVolumeChannel.trySend(member to v)
     }
@@ -482,6 +506,43 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                     .onFailure { log("调声道失败：${it.message}") }
             }
         }
+    }
+
+    /**
+     * 手机实体音量键 → 音箱音量（原厂 App 就是这个行为）。
+     *
+     * @return true 表示"这一下我处理了，别让系统再调手机自己的音量"
+     *
+     * 为什么必须吞掉事件：不吞的话按一次键会同时改手机媒体音量和音箱音量，
+     * 用户会看到手机上的人声/铃声变了，而音箱只动了一点点，非常困惑。
+     *
+     * 步长按手机惯例 15 档换算成 0-100：每按一下 5，长按连续按也不至于跳变。
+     */
+    fun adjustVolumeByKey(delta: Int): Boolean {
+        val ip = _state.value.selectedIp ?: return false
+        if (_state.value.online[ip] == false) return false
+        val current = VolumeBus.volumeOf(ip)?.volume
+            ?: _state.value.groupMembers.firstOrNull { it.ip == ip }?.volume
+            ?: return false
+        val next = VolumeStep.next(current, delta) ?: return false
+        if (!VolumeStep.shouldConsume(current, delta)) return false
+        if (next == current) return true          // 已经到顶/到底，仍然吞掉事件
+        VolumeBus.publishVolume(ip, next)
+        deviceVolumeChannel.trySend(ip to next)
+        log("音量键 → $next")
+        return true
+    }
+
+    /**
+     * 现在能不能接管音量键。
+     *
+     * 活动必须在 ACTION_DOWN 与 ACTION_UP 上给出**一致的**答案，
+     * 否则会出现"按下改了音箱、抬起又改了手机"的双重响应。
+     */
+    fun canHandleVolumeKey(): Boolean {
+        val ip = _state.value.selectedIp ?: return false
+        if (_state.value.online[ip] == false) return false
+        return VolumeBus.volumeOf(ip) != null || _state.value.groupMembers.any { it.ip == ip }
     }
 
     /** 把某台从机移出组。 */

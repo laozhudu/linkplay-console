@@ -1,6 +1,7 @@
 package io.github.laozhudu.linkplay.console.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -67,6 +68,12 @@ fun AppCard(
         .fillMaxWidth()
         .clip(AppShapesExpressive.squircle)
         .background(MaterialTheme.colorScheme.surfaceVariant)
+        // 卡底与页面底只差一档，没有描边时整屏看不出边界，显得"字黏在背景上"
+        .border(
+            width = 1.dp,
+            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
+            shape = AppShapesExpressive.squircle,
+        )
     Box(if (onClick != null) base.clickable(onClick = onClick) else base) {
         Column(Modifier.padding(Spacing.md)) { content() }
     }
@@ -139,8 +146,9 @@ fun PillTag(
     Box(
         modifier = modifier
             .clip(AppShapesExpressive.pill)
-            .background(color.copy(alpha = 0.16f))
-            .padding(horizontal = Spacing.sm, vertical = Spacing.xxs),
+            .background(color.copy(alpha = 0.22f))
+            .border(1.dp, color.copy(alpha = 0.45f), AppShapesExpressive.pill)
+            .padding(horizontal = Spacing.sm, vertical = 3.dp),
     ) {
         Text(
             text,
