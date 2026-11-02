@@ -283,3 +283,53 @@ GET /httpapi.asp?command=getMvRomBurnPrecent        → 烧写进度（原厂拼
 - `getMvRomBurnPrecent` 之外的烧写阶段命令（如写入完成回调）。
 - MCU 帧的完整字段表（只确证了 light 相关的 5 条）。
 - 部分老固件是否要求 `chext` 参数（当前样本中恒出现）。
+
+---
+
+## 11. 与 WiiM 官方 HTTP API 的对照（重要修正）
+
+原本本文件基于 2015 年那台 DOSS App 的静态分析，得出「httpapi 只有设备管理命令，播放控制只能走 UPnP」。
+查 **WiiM 官方文档《HTTP API for WiiM PRODUCTS》v1.2**（wiimhome.com/pdf/HTTP%20API%20for%20WiiM%20Products.pdf）后需要修正：
+
+> 平台本来就有完整的播放控制 API。**2015 那批固件/App 没有使用这些命令**，
+> 不能据此推断平台不具备。凡「本样本未用到」都要区分成 ⚠️ 平台可能支持、未实测，而不是 ❌ 不存在。
+
+官方文档（v1.2）里与本项目相关的能力：
+
+| 类别 | 命令 | 说明 |
+|---|---|---|
+| 播放状态 | `getPlayerStatus` | JSON，字段全为**字符串**：`status`、`curpos`(ms)、`totlen`(ms)、`vol`、`mute`、`mode`、`loop` |
+| 播放 | `setPlayerCmd:play:<url>` | 直接播音频流，响应固定 `OK` |
+| | `setPlayerCmd:playlist:<url>:<index>` | 播 m3u/asx 列表；另有 `hex_playlist`（URL 需 hex） |
+| | `setPlayerCmd:pause` / `resume` / `onepause` / `stop` | `onepause` 为暂停/继续切换 |
+| | `setPlayerCmd:next` / `prev` | 上下曲 |
+| | `setPlayerCmd:seek:<秒>` | **单位是秒**，不是毫秒 |
+| 音量 | `setPlayerCmd:vol:<0-100>`、`setPlayerCmd:mute:<0\|1>` | 编组时会同时作用于从机 |
+| 循环 | `setPlayerCmd:loopmode:<n>` | 0 顺序不循环 / 1 单曲 / 2 随机循环 / -1 顺序循环 |
+| 元数据 | `getMetaInfo` | `metaData.{title,artist,album,albumArtURI,sampleRate,bitDepth}` |
+| 输入源 | `setPlayerCmd:switchmode:<mode>` | `line-in`/`bluetooth`/`optical`/`udisk`/`wifi` |
+| EQ | `EQOn`/`EQOff`/`EQGetStat`/`EQGetList`/`EQLoad:<name>` | 预设名列表由 `EQGetList` 返回 |
+| 预设键 | `MCUKeyShortClick:<1-12>`、`getPresetInfo` | 12 个预设，含 name/url/source/picurl |
+| 设备 | `reboot`、`setShutdown:<秒>`、`getShutdown` | `setShutdown:0` 立即关机、`-1` 取消 |
+| 时钟/闹钟 | `timeSync:YYYYMMDDHHMMSS`、`setAlarmClock:...`、`getAlarmClock:<n>`、`alarmStop` | 最多 3 组闹钟，时间 UTC |
+
+同时 `getStatusEx` 的字段语义也得到了校正（2015 固件与 2022 文档存在出入，解析时要两种都容忍）：
+
+| 字段 | 官方语义 | 我们代码里的处理 |
+|---|---|---|
+| `MAC` / `ETH_MAC` | Wi-Fi / 有线 MAC | 用于设备标识 |
+| `apcli0` / `ra0` | 设备当前 **IPv4 地址** | 不作 MAC 使用 |
+| `essid` | 上游 SSID，**HEX 编码**（如 `4C6966656E67...` = `LifeOfOffice_5G`） | 解码后展示 |
+| `internet` | `"1"` 为已联网（字符串） | 兼容字符串与数字 |
+| `group` | 0 主机 / 1 编组从机 | 多房间判断 |
+
+**工程结论**：播放控制做成双通道——UPnP 优先（字段规范、能投任意 URL），
+httpapi `setPlayerCmd:*` 兜底（老/精简固件可能只支持这个）。
+两条都属**探测式使用**：先探通再用，不通就明确告知，不假设。
+
+### 11.1 一个来自生态的实践提示
+
+Music Assistant 的 DLNA 播放器文档里有个开关 **"Replace Pause with Stop"**，专门给
+「忽略 pause 命令的老 UPnP 播放器」用。这说明**老固件上 `Pause` 可能无效**，
+客户端要准备「暂停退化为停止」的兜底（本项目尚未实现，列入待验证清单）。
+
