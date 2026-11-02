@@ -37,7 +37,17 @@ class SsdpDiscovery(
     private val timeoutMs: Int = 3_000,
     private val maxDevices: Int = 64,
 ) {
-    suspend fun discover(): List<DiscoveredDevice> = withContext(Dispatchers.IO) {
+    /** 发现 DLNA 媒体服务器（NAS）。用与设备相同的扫描逻辑，只是把 ST 换成 MediaServer。 */
+    suspend fun discoverMediaServers(): List<DiscoveredDevice> =
+        discoverWithTargets(listOf(SsdpMessages.ST_MEDIA_SERVER, "ssdp:all"))
+
+    /** 单播找媒体服务器：已知 NAS IP 时用（组播被隔离/VPN 场景）。 */
+    suspend fun discoverMediaServersUnicast(hosts: List<String>, timeoutMs: Int = 1_500): List<DiscoveredDevice> =
+        discoverUnicast(hosts, timeoutMs, SsdpMessages.ST_MEDIA_SERVER)
+
+    suspend fun discover(): List<DiscoveredDevice> = discoverWithTargets(SEARCH_TARGETS)
+
+    private suspend fun discoverWithTargets(targets: List<String>): List<DiscoveredDevice> = withContext(Dispatchers.IO) {
         val found = LinkedHashMap<String, DiscoveredDevice>()
         val address = InetAddress.getByName(MULTICAST_ADDRESS)
         DatagramSocket().use { socket ->
@@ -45,7 +55,7 @@ class SsdpDiscovery(
             socket.soTimeout = 500
             socket.broadcast = true
 
-            SEARCH_TARGETS.forEach { st ->
+            targets.forEach { st ->
                 val message = buildMSearch(st)
                 val packet = DatagramPacket(
                     message.toByteArray(Charsets.UTF_8),
@@ -98,14 +108,18 @@ class SsdpDiscovery(
      * 为什么需要：组播不过 VPN/不同网段，而实机（DOSS DS-1831）确认对单播 M-SEARCH 也回 200。
      * 因此「IP 已知但组播不通」的场景（跨网段、AP 隔离、VPN）用这个方法。
      */
-    suspend fun discoverUnicast(hosts: List<String>, timeoutMs: Int = 1_500): List<DiscoveredDevice> =
+    suspend fun discoverUnicast(
+        hosts: List<String>,
+        timeoutMs: Int = 1_500,
+        searchTarget: String = SsdpMessages.ST_MEDIA_RENDERER,
+    ): List<DiscoveredDevice> =
         withContext(Dispatchers.IO) {
             val found = LinkedHashMap<String, DiscoveredDevice>()
             hosts.forEach { host ->
                 runCatching {
                     DatagramSocket().use { socket ->
                         socket.soTimeout = timeoutMs
-                        val msg = SsdpMessages.buildMSearch(SsdpMessages.ST_MEDIA_RENDERER).toByteArray()
+                        val msg = SsdpMessages.buildMSearch(searchTarget).toByteArray()
                         socket.send(DatagramPacket(msg, msg.size, InetSocketAddress(host, SsdpMessages.PORT)))
                         val buf = ByteArray(4096)
                         val packet = DatagramPacket(buf, buf.size)

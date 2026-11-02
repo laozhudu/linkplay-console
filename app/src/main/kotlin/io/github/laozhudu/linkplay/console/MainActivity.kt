@@ -46,6 +46,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import io.github.laozhudu.linkplay.console.library.LibraryScreen
+import io.github.laozhudu.linkplay.console.nas.NasScreen
 import io.github.laozhudu.linkplay.console.library.QueueScreen
 import io.github.laozhudu.linkplay.console.playback.PlaybackCard
 import io.github.laozhudu.linkplay.console.playback.PlaybackViewModel
@@ -69,6 +70,7 @@ fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
     var showProvisioning by remember { mutableStateOf(false) }
     var showQueue by remember { mutableStateOf(false) }
     var showLibrary by remember { mutableStateOf(false) }
+    var showNas by remember { mutableStateOf(false) }
 
     if (showProvisioning) {
         Scaffold(
@@ -83,6 +85,26 @@ fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
                 ProvisioningScreen(
                     onDone = { showProvisioning = false },
                     onBack = { showProvisioning = false },
+                )
+            }
+        }
+        return
+    }
+
+    if (showNas) {
+        Scaffold(
+            topBar = { TopAppBar(title = { Text("NAS 媒体库", fontWeight = FontWeight.SemiBold) }) },
+        ) { padding ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .padding(horizontal = 16.dp),
+            ) {
+                NasScreen(
+                    deviceIp = state.selectedIp.orEmpty(),
+                    deviceLocation = state.selectedLocation,
+                    onBack = { showNas = false },
                 )
             }
         }
@@ -172,6 +194,7 @@ fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
                     vm = vm,
                     onOpenQueue = { showQueue = true },
                     onOpenLibrary = { showLibrary = true },
+                    onOpenNas = { showNas = true },
                 )
             }
         }
@@ -238,6 +261,7 @@ private fun DeviceDetailScreen(
     vm: ConsoleViewModel,
     onOpenQueue: () -> Unit,
     onOpenLibrary: () -> Unit,
+    onOpenNas: () -> Unit,
 ) {
     var command by remember { mutableStateOf("getNetwork") }
     var newName by remember { mutableStateOf("") }
@@ -289,6 +313,10 @@ private fun DeviceDetailScreen(
         Spacer(Modifier.height(8.dp))
         OutlinedButton(onClick = onOpenLibrary, modifier = Modifier.fillMaxWidth()) {
             Text("音乐库：搜索 / 收藏 / 最近 / 电台")
+        }
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(onClick = onOpenNas, modifier = Modifier.fillMaxWidth()) {
+            Text("NAS 媒体库：浏览并推送整列表")
         }
         Spacer(Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

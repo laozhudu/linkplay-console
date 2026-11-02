@@ -187,6 +187,25 @@ class UpnpRendererClient(
             DeviceDescription.parse(location, transport.get(location))
 
         /**
+         * 没有 LOCATION 时（手输 IP、或 SSDP 被隔离）按已知路径探测描述文件。
+         *
+         * 依据：DOSS DS-1831 实测描述在 `http://<ip>:49152/description.xml`
+         * （SSDP 回的 LOCATION 就是它）。LinkPlay 系设备这个端口/路径基本一致，
+         * 失败就返回 null 由调用方提示，不猜别的端口。
+         */
+        fun probeDescription(ip: String, transport: UpnpTransport = HttpUpnpTransport()): DeviceDescription? =
+            runCatching { describe("http://$ip:49152/description.xml", transport) }.getOrNull()
+
+        /** 便捷构造：先按已知路径探测描述，失败时抛带说明的异常。 */
+        fun ofDevice(ip: String, transport: UpnpTransport = HttpUpnpTransport()): UpnpRendererClient {
+            val desc = probeDescription(ip, transport)
+                ?: throw IllegalStateException(
+                    "无法从 $ip:49152/description.xml 读到设备描述；请先用 SSDP 搜索进入（手动 IP 时拿不到控制地址）",
+                )
+            return UpnpRendererClient(desc, transport)
+        }
+
+        /**
          * 生成最小 DIDL-Lite。多数 renderer 对 metadata 宽容，但部分固件要求 `upnp:class`
          * 与 `res protocolInfo` 同时存在才会播放，所以两者都给。
          */
