@@ -17,10 +17,10 @@
 | 列表循环 | `SetQueueLoopMode(LoopMode)` | 🚧 |
 | 定位到第 N 首 | `PlayQueueWithIndex(QueueName, Index)` | 🚧 |
 | 队列增删查 | `RemoveTracksInQueue` / `GetQueueIndex` / `BrowseQueue` / `BackUpQueue` / `DeleteQueue` | 🚧 客户端已实现全部动作 |
-| 音乐文件夹维度 | `tb_music_folder(folder_name)` | ❌ |
+| 音乐文件夹维度 | `tb_music_folder(folder_name)` | ⚠️ 只存了 folder 字段用于搜索，未做文件夹浏览页 |
 | 专辑维度 | `tb_album_info(playuri,title,album,creator,artist,albumarturi,duration,folder_name,source_type,song_id)` | ❌ |
-| 收藏 | `tb_music_collection(playuri)` | ❌ |
-| 最近播放（保留 100 条） | `tb_last_played(...)` + `order by first_played_time desc limit 100` | ❌ |
+| 收藏 | `tb_music_collection(playuri)` | ✅ |
+| 最近播放（保留 100 条） | `tb_last_played(...)` + `order by first_played_time desc limit 100` | ✅（去重，重播只更新时间） |
 
 ### 2. 设备侧内容
 
@@ -40,7 +40,7 @@
 | 音量/静音 | UPnP RenderingControl + `setPlayerCmd:vol/mute` | ✅ |
 | 播放进度与时长 | `GetPositionInfo` / `getPlayerStatus` | ✅ |
 | 输入源切换 | `setPlayerCmd:switchmode` | ✅ |
-| 6 个预设键 | 布局 `vpreset`~`vpreset6` + `MCUKeyShortClick:n` | ❌ **漏掉** |
+| 6 个预设键 | 布局 `vpreset`~`vpreset6` + `MCUKeyShortClick:n` | ✅ |
 | 均衡器 EQ | 本样本 **0 命中**（`EQOn/EQOff/EQLoad` 全无）——是后来固件才有的；官方 API v1.2 有 | ❌ 本机固件可能无 |
 | 定时关机 | 本样本仅 `getShutdownView` 一处，无 `setShutdown` | ❌ 基本无 |
 | 闹钟 | `view.alarm.AlarmSettingMainActivity` + Cling alarm 相关类 | ❌ |
@@ -57,7 +57,7 @@
 | EasyLink 声波配网 | `smartlinkver2` + `libEasylinkControllerVer2.so` | ⏸ 需 32 位 so，主动不做 |
 | WPS 一键配对 | `SlaveSpeakerAddWPSActivity` | ❌ |
 | 扫描周边 AP | `wlanGetApListEx` → `{"aplist":[...]}` | ✅ |
-| 网络电台（自定义 URL + 每设备记忆） | `tb_net_radio(isKept,isPlaying,soundName,soundUrl,invalid,deviceName)` | ❌ **漏掉** |
+| 网络电台（自定义 URL + 每设备记忆） | `tb_net_radio(isKept,isPlaying,soundName,soundUrl,invalid,deviceName)` | ✅ |
 
 ### 5. UI / 交互 / 系统集成
 
@@ -67,7 +67,7 @@
 | 通知栏控制 | `RemoteViews` | ❌ 未做 MediaSession |
 | 语音控制（唤醒词 + 识别 + 合成） | 讯飞 `Wakeuper`（21 处）、`SpeechRecognizer`、`SpeechSynthesizer`、`view.dlg.voicesearch.*` | ❌ **漏掉且体量大** |
 | 搜索（多源 + 历史） | `tb_search_history(search_key,search_date,search_type)` | ❌ |
-| 拼音首字母搜索 | `pinyin4j` + `tb_pinyin(hanzi,pinyin)` | ❌ **中文曲库必需** |
+| 拼音首字母搜索 | `pinyin4j` + `tb_pinyin(hanzi,pinyin)` | ✅（纯 JVM，无依赖，只给首字母） |
 | 新手引导 | `pagesTurtorsViewActivity` | ❌ 非阻塞 |
 | App 自升级 | `tb_softupgrade` + 明文 HTTP `.ini` | 🚫 主动砍掉（安全） |
 | 用户反馈/上报页 | `view.ReportPage` | 🚫 无后端 |
@@ -85,7 +85,7 @@
 | 优先级 | 功能 | 工作量 | 理由 |
 |---|---|---|---|
 | P0 | 本地播放列表 + 循环（本次） | 已完成 | 原 App 最高频用法 |
-| P0 | 收藏 / 最近播放 | 小（Room 两张表） | 没有它就没有「固定入口」 |
+| P0 | 收藏 / 最近播放 | 已完成 | 没有它就没有「固定入口」 |
 | P1 | 网络电台（自定义 URL） | 小 | 老音箱最实用的在线内容，且完全合规 |
 | P1 | 拼音首字母搜索 | 中 | 中文曲库不解决这个等于没法搜 |
 | P1 | 预设键 1-6 | 小（`MCUKeyShortClick:n`） | 硬件按键联动，成本极低 |
@@ -117,3 +117,17 @@ done
 
 代码级检索用同 jar 的 `search_classes_by_keyword`（`search_in=code`），
 脚本见技能 `rea-deployment/scripts/jadx_mcp.py`。
+
+
+## 四、本轮（0.5.0）补齐情况
+
+| 项 | 状态 | 实现位置 |
+|---|---|---|
+| 收藏 | ✅ | `LibraryStore.favorites`（表名沿用 `tb_music_collection`） |
+| 最近播放 | ✅ 去重版 | `LibraryStore.recents`（重播只更新时间，原厂会插重复行） |
+| 网络电台 | ✅ | `RadioStation` + `LibraryStore.radios`（`tb_net_radio`） |
+| 拼音首字母搜索 | ✅ 无依赖 | `PinyinInitials`（GB2312 区位表）+ `LibrarySearch` |
+| 预设键 1-6 | ✅ | `LinkPlayDevice.pressPreset` + 音乐库页按钮 |
+| 音乐库页 | ✅ | `LibraryScreen`（搜索/收藏/最近/电台四分区） |
+| 文件夹浏览页 | ⚠️ 未做 | 字段已存，缺 UI |
+| 专辑维度 | ⚠️ 部分 | 只参与搜索，无专辑页 |

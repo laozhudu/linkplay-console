@@ -18,13 +18,15 @@ LinkPlay / WiiMu 方案 Wi-Fi 音箱的**现代化控制台**：Kotlin + Jetpack
 | 多房间从机列表 / 音量 | ✅ 已实现 |
 | 改名 / 输入源切换 / 恢复出厂（二次确认） | ✅ 已实现 |
 | 原始命令控制台 | ✅ 已实现 |
-| 协议层单元测试 | ✅ 113 个用例 |
+| 协议层单元测试 | ✅ 150 个用例 |
 | AP 直连配网（4 步流程 + 结果轮询） | ✅ 已实现 |
 | UPnP 播放控制（投流 / 播放暂停停止 / 跳转 / 音量 / 进度） | ✅ 已实现（1s 轮询，非 GENA） |
 | 本地音乐整列表推送 + 列表循环（私有 PlayQueue） | ✅ 已实现 |
 | 手机本地媒体 HTTP 服务（Range/HEAD） | ✅ 已实现 |
 | MCU 灯效 / 音箱固件 OTA | 🚧 待做 |
-| 网络电台 / 收藏 / 最近播放 / 拼音搜索 | 🚧 见 docs/05 优先级 |
+| 搜索 / 收藏 / 最近播放 / 网络电台 | ✅ 已实现（音乐库页） |
+| 拼音首字母搜索 | ✅ 已实现（纯 JVM，无第三方依赖） |
+| 设备预设键 1-6 | ✅ 已实现 |
 
 ## 模块
 
@@ -81,6 +83,12 @@ Symfonium、OwnTone、Feishin-connect 等），也**能从成熟内容源取歌*
 
 功能对照（原 App 有什么、我们有什么、漏了什么）见 [docs/05-feature-parity.md](docs/05-feature-parity.md)；
 音源方案（能否参考洛雪 LX Music）见 [docs/06-music-sources.md](docs/06-music-sources.md)。
+
+## 给其他项目复用
+
+`core-protocol` 是**纯 JVM**（无 Android 依赖），可发布成 `linkplay-protocol` JAR；
+`core-discovery` 是 Android AAR。入口是 `LinkPlayDevice` 门面（探测能力 → 自动选通道）。
+对接方式、Python 侧语义契约、真机联调清单见 [docs/07-integration-guide.md](docs/07-integration-guide.md)。
 
 ## 证据与复现
 
