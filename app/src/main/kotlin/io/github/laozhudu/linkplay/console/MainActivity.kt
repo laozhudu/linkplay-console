@@ -42,6 +42,11 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
+import io.github.laozhudu.linkplay.console.playback.PlaybackCard
+import io.github.laozhudu.linkplay.console.playback.PlaybackViewModel
 import io.github.laozhudu.linkplay.console.provisioning.ProvisioningScreen
 
 class MainActivity : ComponentActivity() {
@@ -183,6 +188,13 @@ private fun DeviceDetailScreen(state: ConsoleUiState, vm: ConsoleViewModel) {
     var newName by remember { mutableStateOf("") }
     var confirmReset by remember { mutableStateOf(false) }
 
+    val playbackVm: PlaybackViewModel = viewModel(
+        key = "playback-${state.selectedIp}",
+        factory = viewModelFactory {
+            initializer { PlaybackViewModel(state.selectedIp.orEmpty(), state.selectedLocation) }
+        },
+    )
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -213,6 +225,8 @@ private fun DeviceDetailScreen(state: ConsoleUiState, vm: ConsoleViewModel) {
             }
         }
 
+        Spacer(Modifier.height(10.dp))
+        PlaybackCard(playbackVm)
         Spacer(Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = vm::refreshStatus, enabled = !state.busy) { Text("刷新") }
