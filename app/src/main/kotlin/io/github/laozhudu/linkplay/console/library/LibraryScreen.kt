@@ -7,39 +7,27 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.style.TextOverflow
-import io.github.laozhudu.linkplay.console.ui.components.AppShapesExpressive
-import io.github.laozhudu.linkplay.console.ui.components.PageHeader
-import io.github.laozhudu.linkplay.console.ui.components.VSpace
-import io.github.laozhudu.linkplay.console.ui.theme.Spacing
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -47,20 +35,47 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import androidx.compose.ui.platform.LocalContext
+import io.github.laozhudu.linkplay.console.ui.components.AppCard
+import io.github.laozhudu.linkplay.console.ui.components.AppShapesExpressive
+import io.github.laozhudu.linkplay.console.ui.components.EmptyState
+import io.github.laozhudu.linkplay.console.ui.components.PageHeader
+import io.github.laozhudu.linkplay.console.ui.components.PillTag
+import io.github.laozhudu.linkplay.console.ui.components.SectionTitle
+import io.github.laozhudu.linkplay.console.ui.components.VSpace
+import io.github.laozhudu.linkplay.console.ui.theme.Spacing
+import io.github.laozhudu.linkplay.console.ui.theme.StatusColors
 import io.github.laozhudu.linkplay.protocol.library.TrackRecord
+import io.github.laozhudu.linkplay.protocol.radio.RadioStation
 
 /**
- * 音乐库页：搜索 / 收藏 / 最近 / 电台 + 预设键。
+ * 音乐库：搜索 / 收藏 / 最近 / 电台 + 预设键。
  *
- * 布局取舍：四个分区用顶部一排按钮切换而不是 TabRow——屏幕宽度有限，
- * 搜索框要占满一行，TabRow 会把内容挤到第二屏。
+ * ## 这一版改了什么（对齐首页）
+ *
+ * 之前这页是「一堆裸 Text + 6dp 间距 + 底部一个『返回』按钮 + 直接把调试日志铺在页尾」，
+ * 和首页的卡片风格完全是两个 App。现在：
+ *
+ * - 页头用统一的 [PageHeader]（与设备设置、NAS、手机音乐同一套尺寸）；
+ * - 四个分区的内容都装在 [AppCard] 里，间距只用 [Spacing]；
+ * - 删掉页尾那个「返回」按钮 —— 页头已经有返回箭头，两个入口等于承认自己没想清楚；
+ * - 调试日志收进「诊断」折叠区，不再是页面正文。
+ *
+ * ## 电台为什么重做
+ *
+ * 原先是两个裸文本框 + 「添加」按钮常驻在页面上，用户根本不知道
+ * 「流地址」要填什么、格式是什么、填错了会怎样 —— 用户原话「无从下手配置」。
+ * 现在改成：默认只有一句说明 + 一个「添加电台」按钮；点开是一个对话框，
+ * 里面有**可直接点的示例**、格式说明、实时校验（不是 http/https 直接标红不让你提交）。
  */
 @Composable
 fun LibraryScreen(
@@ -84,22 +99,38 @@ fun LibraryScreen(
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         if (it) vm.refreshAll()
     }
-    // 不在进入页面时就请求媒体权限：用户可能只是来看收藏/电台。
-    // 只有搜索页真正要用本机曲库时才请求（见下面的搜索区）。
+    // 不在进入页面时就请求媒体权限：用户可能只是来看收藏/电台
     var askedPermission by remember { mutableStateOf(false) }
+    var showDiagnostics by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState()),
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = Spacing.lg),
     ) {
         PageHeader(
             title = "音乐库",
-            subtitle = "搜索 · 收藏 · 最近播放 · 网络电台",
+            subtitle = deviceLabel ?: deviceIp,
+            onBack = onBack,
         )
-        VSpace(Spacing.xs)
 
-        // 分区用可横滚的 pill 而不是一排按钮：4 个按钮在窄屏会换行，且按钮形状让「切换」看起来像「提交」
+        state.error?.let {
+            AppCard {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = vm::clearError) { Text("知道了") }
+                }
+            }
+            VSpace(Spacing.sm)
+        }
+
+        // ---------- 分区切换 ----------
         Row(
             modifier = Modifier.horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
@@ -131,46 +162,34 @@ fun LibraryScreen(
             }
         }
 
-        state.error?.let {
-            Spacer(Modifier.height(6.dp))
-            Text("· $it", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-            TextButton(onClick = vm::clearError) { Text("知道了") }
-        }
+        VSpace(Spacing.md)
 
-        state.capabilities?.let { caps ->
-            Spacer(Modifier.height(4.dp))
-            Text(caps.summary(), style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace)
-            if (!caps.canPushQueue) {
-                Text(
-                    "提示：这台设备不支持整列表推送，只能单曲播放。",
-                    style = MaterialTheme.typography.labelSmall,
-                )
-            }
-        }
-
-        state.nowPlaying?.let {
-            Spacer(Modifier.height(4.dp))
-            Text("正在播放：$it", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
-        }
-
-        Spacer(Modifier.height(8.dp))
         when (state.tab) {
             LibraryTab.SEARCH -> SearchSection(
                 state, vm,
-                onRequestPermission = { if (!askedPermission) { askedPermission = true; launcher.launch(permission) } },
+                onRequestPermission = {
+                    if (!askedPermission) {
+                        askedPermission = true
+                        launcher.launch(permission)
+                    }
+                },
             )
             LibraryTab.FAVORITES -> TrackList(
                 title = "收藏",
+                subtitle = "${state.favorites.size} 首",
                 tracks = state.favorites,
-                emptyHint = "还没有收藏。搜索结果里点 ☆ 添加。",
+                emptyTitle = "还没有收藏",
+                emptyHint = "搜索结果里点 ★ 就收藏了。",
                 onPlay = vm::play,
                 onToggleFav = vm::toggleFavorite,
                 favoriteKeys = state.favorites.map { it.dedupeKey }.toSet(),
             )
             LibraryTab.RECENT -> TrackList(
                 title = "最近播放",
+                subtitle = "${state.recents.size} 首",
                 tracks = state.recents,
-                emptyHint = "还没有播放记录。",
+                emptyTitle = "还没有播放记录",
+                emptyHint = "投一首歌给音箱，这里就会自动记下来。",
                 onPlay = vm::play,
                 onToggleFav = vm::toggleFavorite,
                 favoriteKeys = state.favorites.map { it.dedupeKey }.toSet(),
@@ -178,23 +197,63 @@ fun LibraryScreen(
             LibraryTab.RADIO -> RadioSection(state, vm)
         }
 
-        Spacer(Modifier.height(10.dp))
-        Text("设备预设键（1-6）", style = MaterialTheme.typography.labelSmall)
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            (1..6).forEach { index ->
-                OutlinedButton(onClick = { vm.pressPreset(index) }) { Text("$index") }
+        VSpace(Spacing.md)
+        PresetCard(vm = vm)
+
+        // ---------- 诊断（折叠，不再是页面正文）----------
+        VSpace(Spacing.sm)
+        AppCard(onClick = { showDiagnostics = !showDiagnostics }) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (showDiagnostics) "收起诊断" else "诊断：设备能力与日志",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    if (showDiagnostics) "−" else "+",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        if (showDiagnostics) {
+            VSpace(Spacing.xs)
+            AppCard {
+                state.capabilities?.let { caps ->
+                    Text(caps.summary(), style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace)
+                    if (!caps.canPushQueue) {
+                        Text(
+                            "这台设备不支持整列表推送，只能单曲播放。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    VSpace(Spacing.xs)
+                }
+                Text(
+                    if (state.log.isEmpty()) "暂无日志" else state.log.takeLast(8).joinToString("\n"),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
 
-        state.log.asReversed().take(5).forEach {
-            Text(it, style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace)
+        state.nowPlaying?.let {
+            VSpace(Spacing.sm)
+            Text(
+                "正在播放：$it",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
 
-        Spacer(Modifier.height(10.dp))
-        TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("返回") }
-        Spacer(Modifier.height(24.dp))
+        VSpace(Spacing.xxl)
     }
 }
+
+// ---------------------------------------------------------------- 搜索
 
 @Composable
 private fun SearchSection(
@@ -203,94 +262,121 @@ private fun SearchSection(
     /** 请求媒体权限的入口：进页面不自动弹，用户真正要搜本机曲库时才要。 */
     onRequestPermission: () -> Unit,
 ) {
-    OutlinedTextField(
-        value = state.query,
-        onValueChange = vm::setQuery,
-        label = { Text("搜索：标题 / 艺术家 / 拼音首字母（试试 zjl）") },
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
-    )
-    Spacer(Modifier.height(8.dp))
-    if (state.query.isBlank()) {
-        Text(
-            "支持拼音首字母：输入 `zj` 找「周杰伦」，输入 `yq` 找「夜曲」。",
-            style = MaterialTheme.typography.bodySmall,
-        )
-        // 用户要搜本机曲库时才要权限，不在进页面时弹框
-        Spacer(Modifier.height(Spacing.sm))
-        OutlinedButton(onClick = onRequestPermission) { Text("读取本机音乐库") }
-        return
-    }
-    if (state.hits.isEmpty()) {
-        Text("没有匹配", style = MaterialTheme.typography.bodySmall)
-        return
-    }
     val favKeys = state.favorites.map { it.dedupeKey }.toSet()
-    // 不再用内层 LazyColumn：外层已是 verticalScroll，两根滚动轴会抢手势。
-    // 限 50 条 + 提示缩小范围，比让用户在一个 340dp 的小窗里滑 1900 首更好用。
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-        Column(Modifier.padding(vertical = Spacing.xs)) {
-            state.hits.take(50).forEach { hit ->
-                TrackRow(
-                    track = hit.track,
-                    isFavorite = hit.track.dedupeKey in favKeys,
-                    onPlay = { vm.play(hit.track) },
-                    onToggleFav = { vm.toggleFavorite(hit.track) },
-                )
-            }
-            if (state.hits.size > 50) {
-                Text(
-                    "只显示前 50 条（共 ${state.hits.size} 条），输入更多关键词缩小范围",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(Spacing.md),
-                )
-            }
+
+    // 大胶囊搜索框：与首页搜索同一形状，触控高度 56dp
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(56.dp)
+            .clip(AppShapesExpressive.pill)
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(horizontal = Spacing.md),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        OutlinedTextField(
+            value = state.query,
+            onValueChange = vm::setQuery,
+            placeholder = { Text("搜标题 / 歌手 / 拼音首字母（试 zjl）") },
+            singleLine = true,
+            colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = androidx.compose.ui.graphics.Color.Transparent,
+                unfocusedBorderColor = androidx.compose.ui.graphics.Color.Transparent,
+                focusedContainerColor = androidx.compose.ui.graphics.Color.Transparent,
+                unfocusedContainerColor = androidx.compose.ui.graphics.Color.Transparent,
+            ),
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+
+    VSpace(Spacing.sm)
+
+    if (state.query.isBlank()) {
+        AppCard {
+            SectionTitle("怎么找歌", "支持拼音首字母：zj → 周杰伦，yq → 夜曲")
+            VSpace(Spacing.xs)
+            Text(
+                "搜索范围是本机曲库 + 收藏 + 最近播放。要从 NAS 上找，请去「NAS 音乐」。",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            VSpace(Spacing.sm)
+            PillButton("读取本机音乐库", filled = true, onClick = onRequestPermission)
+        }
+        return
+    }
+
+    if (state.hits.isEmpty()) {
+        AppCard {
+            Text("没有匹配「${state.query}」", style = MaterialTheme.typography.bodyMedium)
+            VSpace(Spacing.xs)
+            Text(
+                "换个关键词，或只输入拼音首字母。",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        return
+    }
+
+    AppCard {
+        SectionTitle("搜索结果", "共 ${state.hits.size} 条，最多显示 50 条")
+        state.hits.take(50).forEach { hit ->
+            TrackRow(
+                track = hit.track,
+                isFavorite = hit.track.dedupeKey in favKeys,
+                onPlay = { vm.play(hit.track) },
+                onToggleFav = { vm.toggleFavorite(hit.track) },
+            )
+        }
+        if (state.hits.size > 50) {
+            Text(
+                "只显示前 50 条，输入更多关键词缩小范围",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
 
+// ---------------------------------------------------------------- 曲目列表
+
 @Composable
 private fun TrackList(
     title: String,
+    subtitle: String,
     tracks: List<TrackRecord>,
+    emptyTitle: String,
     emptyHint: String,
     onPlay: (TrackRecord) -> Unit,
     onToggleFav: (TrackRecord) -> Unit,
     favoriteKeys: Set<String>,
 ) {
     if (tracks.isEmpty()) {
-        Text(emptyHint, style = MaterialTheme.typography.bodySmall)
+        EmptyState(title = emptyTitle, hint = emptyHint)
         return
     }
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-        Column(Modifier.padding(vertical = Spacing.xs)) {
-            tracks.take(80).forEach { track ->
-                TrackRow(
-                    track = track,
-                    isFavorite = track.dedupeKey in favoriteKeys,
-                    onPlay = { onPlay(track) },
-                    onToggleFav = { onToggleFav(track) },
-                )
-            }
-            if (tracks.size > 80) {
-                Text(
-                    "只显示前 80 条（共 ${tracks.size} 条）",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(Spacing.md),
-                )
-            }
+    AppCard {
+        SectionTitle(title, subtitle)
+        tracks.take(80).forEach { track ->
+            TrackRow(
+                track = track,
+                isFavorite = track.dedupeKey in favoriteKeys,
+                onPlay = { onPlay(track) },
+                onToggleFav = { onToggleFav(track) },
+            )
+        }
+        if (tracks.size > 80) {
+            Text(
+                "只显示前 80 条（共 ${tracks.size} 条）",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
 
-/**
- * 一行曲目。**整行点击 = 播放这一首**。
- *
- * 原来是「标题 + ☆ + 播（按钮）」，用户得先看清「播」这个小按钮在哪，还容易点到星标。
- * 改成整行可点之后，收藏做成独立的 40dp 触控区放在行尾，两个动作互不干扰。
- */
+/** 一行曲目：**整行点击 = 播放**；收藏是行尾独立的 40dp 触控区，两者不打架。 */
 @Composable
 private fun TrackRow(
     track: TrackRecord,
@@ -303,13 +389,13 @@ private fun TrackRow(
             .fillMaxWidth()
             .clip(AppShapesExpressive.squircle)
             .clickable(onClick = onPlay)
-            .padding(start = Spacing.md, end = Spacing.xs, top = Spacing.xs, bottom = Spacing.xs),
+            .padding(start = Spacing.sm, end = Spacing.xs, top = Spacing.xs, bottom = Spacing.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
             Text(
                 track.title,
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.bodyLarge,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -337,87 +423,228 @@ private fun TrackRow(
     }
 }
 
+// ---------------------------------------------------------------- 电台
+
+/** 几条**公开可直连**的流，用来演示"流地址长什么样"。不内置任何平台接口或凭据。 */
+private val radioExamples = listOf(
+    "SomaFM Groove Salad" to "https://ice1.somafm.com/groovesalad-128-mp3",
+    "SomaFM Drone Zone" to "https://ice1.somafm.com/dronezone-128-mp3",
+    "Radio Paradise" to "https://stream.radioparadise.com/mp3-192",
+)
+
 @Composable
 private fun RadioSection(state: LibraryUiState, vm: LibraryViewModel) {
-    var name by remember { mutableStateOf("") }
-    var url by remember { mutableStateOf("") }
-    var pendingDeleteId by remember { mutableStateOf<Long?>(null) }
+    var showAdd by remember { mutableStateOf(false) }
+    var pendingDelete by remember { mutableStateOf<RadioStation?>(null) }
 
-    OutlinedTextField(
-        value = url,
-        onValueChange = {
-            url = it
-            if (name.isBlank()) name = io.github.laozhudu.linkplay.protocol.radio.RadioStation.suggestName(it)
-        },
-        label = { Text("流地址（http/https，如 http://host/live.m3u8）") },
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
-    )
-    Spacer(Modifier.height(6.dp))
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        OutlinedTextField(
-            value = name,
-            onValueChange = { name = it },
-            label = { Text("电台名称") },
-            singleLine = true,
-            modifier = Modifier.weight(1f),
-        )
-        Spacer(Modifier.width(8.dp))
-        Button(onClick = {
-            vm.addRadio(name, url)
-            name = ""
-            url = ""
-        }) { Text("添加") }
-    }
-
-    Spacer(Modifier.height(8.dp))
     if (state.radios.isEmpty()) {
-        Text("还没有电台。粘一条流地址即可（本 App 不内置任何平台接口）。", style = MaterialTheme.typography.bodySmall)
+        EmptyState(
+            title = "还没有电台",
+            hint = "点下面的「添加电台」，粘一条流地址就行。不知道填什么？对话框里有可点的示例。",
+        )
+        VSpace(Spacing.sm)
+        PillButton("＋ 添加电台", filled = true, onClick = { showAdd = true })
         return
     }
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-        Column(Modifier.padding(vertical = Spacing.xs)) {
-            state.radios.forEach { station ->
-                Row(
+
+    AppCard {
+        SectionTitle("我的电台", "${state.radios.size} 个 · 点一行即播")
+        state.radios.forEach { station ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(AppShapesExpressive.squircle)
+                    .clickable { vm.playRadio(station) }
+                    .padding(start = Spacing.sm, end = Spacing.xs, top = Spacing.xs, bottom = Spacing.xs),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(AppShapesExpressive.squircle)
-                        // 整行点击 = 播放，与曲目行保持一致
-                        .clickable { vm.playRadio(station) }
-                        .padding(start = Spacing.md, end = Spacing.xs, top = Spacing.xs, bottom = Spacing.xs),
-                    verticalAlignment = Alignment.CenterVertically,
+                        .size(38.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)),
+                    contentAlignment = Alignment.Center,
                 ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(station.name, style = MaterialTheme.typography.titleMedium, maxLines = 1)
-                        Text(
-                            station.url,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    // 删除要二次确认：误触就得重新找一条流地址
-                    if (pendingDeleteId == station.id) {
-                        Button(onClick = { vm.removeRadio(station.id); pendingDeleteId = null }) { Text("确认删") }
-                        OutlinedButton(onClick = { pendingDeleteId = null }) { Text("取消") }
-                    } else {
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .clickable { pendingDeleteId = station.id },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                "✕",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
+                    Text("◉", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+                }
+                Spacer(Modifier.width(Spacing.sm))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        station.name,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        station.url,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .clickable { pendingDelete = station },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("✕", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
+    }
+    VSpace(Spacing.sm)
+    PillButton("＋ 添加电台", filled = false, onClick = { showAdd = true })
+
+    if (showAdd) {
+        AddRadioDialog(
+            onDismiss = { showAdd = false },
+            onAdd = { name, url ->
+                vm.addRadio(name, url)
+                showAdd = false
+            },
+        )
+    }
+
+    pendingDelete?.let { station ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("删掉「${station.name}」？") },
+            text = { Text("只是从本机列表移除，不影响电台本身。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.removeRadio(station.id)
+                    pendingDelete = null
+                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } },
+        )
+    }
+}
+
+/**
+ * 添加电台的对话框。
+ *
+ * 为什么要有示例和实时校验：用户面对"流地址"这个输入框时，
+ * 不知道该填 URL、m3u8 还是 IP。给三条能直接点的公开流 + 边输边校验，
+ * 比一句「请输入流地址」有用得多。
+ */
+@Composable
+private fun AddRadioDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Unit) {
+    var url by remember { mutableStateOf("") }
+    var name by remember { mutableStateOf("") }
+    val trimmed = url.trim()
+    val valid = trimmed.startsWith("http://") || trimmed.startsWith("https://")
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("添加网络电台") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = {
+                        url = it
+                        if (name.isBlank()) name = RadioStation.suggestName(it)
+                    },
+                    label = { Text("流地址") },
+                    placeholder = { Text("https://…") },
+                    singleLine = true,
+                    isError = trimmed.isNotEmpty() && !valid,
+                    supportingText = {
+                        Text(
+                            if (trimmed.isEmpty()) "必须是 http/https 开头的直链流；m3u8、mp3 流都行"
+                            else if (valid) "格式没问题" else "必须以 http:// 或 https:// 开头",
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                VSpace(Spacing.xs)
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("名称（留空会自动取域名）") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                VSpace(Spacing.sm)
+                Text(
+                    "试试这些（公开可直连）：",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                radioExamples.forEach { (label, demoUrl) ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(AppShapesExpressive.squircle)
+                            .clickable { url = demoUrl; name = label }
+                            .padding(vertical = Spacing.xs, horizontal = Spacing.xs),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        PillTag(text = "示例", color = MaterialTheme.colorScheme.secondary)
+                        Spacer(Modifier.width(Spacing.xs))
+                        Text(label, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = valid,
+                onClick = { onAdd(name.ifBlank { RadioStation.suggestName(trimmed) }, trimmed) },
+            ) { Text(if (valid) "添加" else "填个有效地址") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
+}
+
+// ---------------------------------------------------------------- 预设键
+
+@Composable
+private fun PresetCard(vm: LibraryViewModel) {
+    AppCard {
+        SectionTitle("设备预设键", "相当于按机身或遥控器上的 1-6")
+        VSpace(Spacing.xs)
+        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+            (1..6).forEach { index ->
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .clickable { vm.pressPreset(index) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("$index", style = MaterialTheme.typography.titleMedium)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PillButton(text: String, filled: Boolean, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .clip(AppShapesExpressive.pill)
+            .background(
+                if (filled) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.surfaceVariant,
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = Spacing.lg, vertical = 10.dp),
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.labelLarge,
+            color = if (filled) MaterialTheme.colorScheme.onPrimary
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }

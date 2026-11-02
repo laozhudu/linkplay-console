@@ -14,6 +14,7 @@ import io.github.laozhudu.linkplay.protocol.LinkPlayStatus
 import io.github.laozhudu.linkplay.protocol.SlaveDevice
 import io.github.laozhudu.linkplay.protocol.identity.LinkPlayIdentity
 import io.github.laozhudu.linkplay.protocol.multiroom.MultiroomClient
+import io.github.laozhudu.linkplay.console.playback.VolumeBus
 import io.github.laozhudu.linkplay.protocol.player.PlayerStatus
 import io.github.laozhudu.linkplay.protocol.session.SavedDevice
 import io.github.laozhudu.linkplay.protocol.upnp.UpnpRendererClient
@@ -124,6 +125,19 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         // 首页一进来就有内容：读已保存设备，并后台探活（不清空界面、不阻塞）
         reloadSaved()
         probeSaved()
+        // 首页多房间卡片的低频心跳：不在播放页时也能跟上设备侧/遥控器的音量变化
+        viewModelScope.launch {
+            while (true) {
+                delay(2500)
+                val masterIp = _state.value.groupMasterIp ?: continue
+                withContext(Dispatchers.IO) {
+                    runCatching {
+                        val st = PlayerStatus.parse(client.send(masterIp, "getPlayerStatus"))
+                        VolumeBus.publish(masterIp, st.volume, st.mute)
+                    }
+                }
+            }
+        }
         viewModelScope.launch {
             for ((member, v) in groupVolumeChannel) {
                 withContext(Dispatchers.IO) {
@@ -197,8 +211,11 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                     // 主机自己的音量在 getPlayerStatus 里（getStatusEx 没有这个字段）
                     val masterVolume = withContext(Dispatchers.IO) {
                         runCatching {
-                            PlayerStatus.parse(client.send(d.ip, "getPlayerStatus")).volume
-                        }.getOrNull()
+                            PlayerStatus.parse(client.send(d.ip, "getPlayerStatus")).let { st ->
+                                VolumeBus.publish(d.ip, st.volume, st.mute)
+                                st.volume
+                            }
+                        }.getOrNull() ?: VolumeBus.volumeOf(d.ip)?.volume
                     }
                     members = listOf(
                         GroupMember(ip = d.ip, name = d.title, uuid = d.uuid, volume = masterVolume, isMaster = true),
@@ -441,6 +458,8 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { st ->
             st.copy(groupMembers = st.groupMembers.map { if (it.ip == member.ip) it.copy(volume = v) else it })
         }
+        // 主机音量写进全站总线，播放页那一侧同一帧就跟着动
+        if (member.isMaster) VolumeBus.publishVolume(master, v)
         // 主机的音量是它自己的；从机必须由主机代转（从机在主机热点网段，直连不可达）
         groupVolumeChannel.trySend(member to v)
     }
