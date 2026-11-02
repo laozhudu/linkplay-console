@@ -1,5 +1,7 @@
 package io.github.laozhudu.linkplay.discovery
 
+import io.github.laozhudu.linkplay.protocol.ssdp.SsdpMessages
+import io.github.laozhudu.linkplay.protocol.ssdp.SsdpResponse
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.net.DatagramPacket
@@ -27,6 +29,8 @@ data class DiscoveredDevice(
     val server: String?,
     val searchTarget: String?,
     val friendlySsid: String? = null,
+    /** 设备 uuid，用于「IP 变了也能认回来」。 */
+    val uuid: String? = null,
 )
 
 class SsdpDiscovery(
@@ -71,6 +75,7 @@ class SsdpDiscovery(
                         usn = headers["usn"],
                         server = headers["server"],
                         searchTarget = st,
+                        uuid = SsdpMessages.uuidOf(headers["usn"]),
                     )
                 } else if (text.contains("HTTP/1.1 200", ignoreCase = true) && !found.containsKey(ip)) {
                     // 部分固件回包缺 ST，但有 LOCATION，仍然收下。
@@ -87,15 +92,55 @@ class SsdpDiscovery(
         found.values.toList()
     }
 
-    private fun buildMSearch(st: String): String = buildString {
-        append("M-SEARCH * HTTP/1.1\r\n")
-        append("HOST: ").append(MULTICAST_ADDRESS).append(':').append(SSDP_PORT).append("\r\n")
-        append("MAN: \"ssdp:discover\"\r\n")
-        append("MX: 2\r\n")
-        append("ST: ").append(st).append("\r\n")
-        append("USER-AGENT: Android/1.0 UPnP/1.0 LinkPlayConsole/1.0\r\n")
-        append("\r\n")
+    /**
+     * **单播发现**：直接把 M-SEARCH 发给已知 IP。
+     *
+     * 为什么需要：组播不过 VPN/不同网段，而实机（DOSS DS-1831）确认对单播 M-SEARCH 也回 200。
+     * 因此「IP 已知但组播不通」的场景（跨网段、AP 隔离、VPN）用这个方法。
+     */
+    suspend fun discoverUnicast(hosts: List<String>, timeoutMs: Int = 1_500): List<DiscoveredDevice> =
+        withContext(Dispatchers.IO) {
+            val found = LinkedHashMap<String, DiscoveredDevice>()
+            hosts.forEach { host ->
+                runCatching {
+                    DatagramSocket().use { socket ->
+                        socket.soTimeout = timeoutMs
+                        val msg = SsdpMessages.buildMSearch(SsdpMessages.ST_MEDIA_RENDERER).toByteArray()
+                        socket.send(DatagramPacket(msg, msg.size, InetSocketAddress(host, SsdpMessages.PORT)))
+                        val buf = ByteArray(4096)
+                        val packet = DatagramPacket(buf, buf.size)
+                        socket.receive(packet)
+                        val text = String(packet.data, 0, packet.length, Charsets.UTF_8)
+                        SsdpMessages.parseResponse(text)?.let { r ->
+                            found[host] = DiscoveredDevice(
+                                ip = r.hostFromLocation ?: host,
+                                location = r.location,
+                                usn = r.usn,
+                                server = r.server,
+                                searchTarget = r.st,
+                                uuid = r.uuid,
+                            )
+                        }
+                    }
+                }
+            }
+            found.values.toList()
+        }
+
+    /**
+     * 按 uuid 重发现：用于「上次记住的设备 IP 变了」。
+     *
+     * 实机教训：同一台音箱从 `192.168.99.164` 漂到了 `.153`（DHCP 重新租约），
+     * 只有 uuid 是稳定的（`getStatusEx.uuid` / SSDP 的 `USN`）。
+     */
+    suspend fun findByUuid(uuid: String): DiscoveredDevice? {
+        if (uuid.isBlank()) return null
+        val target = if (uuid.startsWith("uuid:", ignoreCase = true)) uuid else "uuid:$uuid"
+        // 扫描超时由构造参数 timeoutMs 决定（组播窗口是类级配置，避免每次调用语义不一致）
+        return discover().firstOrNull { it.uuid.equals(target, ignoreCase = true) }
     }
+
+    private fun buildMSearch(st: String): String = SsdpMessages.buildMSearch(st)
 
     private fun parseHeaders(raw: String): Map<String, String> {
         val map = HashMap<String, String>()
@@ -109,12 +154,12 @@ class SsdpDiscovery(
     }
 
     companion object {
-        const val MULTICAST_ADDRESS = "239.255.255.250"
-        const val SSDP_PORT = 1900
-        const val ST_WIIMU_PLAYQUEUE = "urn:schemas-wiimu-com:service:PlayQueue:1"
-        const val ST_MEDIA_RENDERER = "urn:schemas-upnp-org:device:MediaRenderer:1"
+        const val MULTICAST_ADDRESS = SsdpMessages.MULTICAST_ADDRESS
+        const val SSDP_PORT = SsdpMessages.PORT
+        const val ST_WIIMU_PLAYQUEUE = SsdpMessages.ST_WIIMU_PLAY_QUEUE
+        const val ST_MEDIA_RENDERER = SsdpMessages.ST_MEDIA_RENDERER
 
-        val SEARCH_TARGETS = listOf(ST_WIIMU_PLAYQUEUE, ST_MEDIA_RENDERER, "ssdp:all")
+        val SEARCH_TARGETS = SsdpMessages.DEFAULT_SEARCH_TARGETS
 
         fun newSearchId(): String = UUID.randomUUID().toString()
     }

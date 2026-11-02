@@ -131,3 +131,12 @@ done
 | 音乐库页 | ✅ | `LibraryScreen`（搜索/收藏/最近/电台四分区） |
 | 文件夹浏览页 | ⚠️ 未做 | 字段已存，缺 UI |
 | 专辑维度 | ⚠️ 部分 | 只参与搜索，无专辑页 |
+
+
+## 五、真机反馈（DOSS DS-1831 / 3.6.5310）修正了三条判断
+
+| 原判断 | 真机实测 | 修正 |
+|---|---|---|
+| 整列表推送可用（PlayQueue CreateQueue） | `QueueContext` 不是 DIDL，而是自定义 `<PlayList>` + `<ListInfo>` 方言；且 `<Tracks>` 不许有内容 | **本固件不能推本地列表**，只能建「在线源描述符」队列。见 docs/08 §5.2 |
+| 原 App 没有 QQ 音乐 | 设备**自带 QPlay 服务** | 这是设备侧能力，App 确实不需要实现；但 `InsertTracks` 被 `QPlayAuth` 挡住，第三方不可用。见 docs/08 §5.3 |
+| PlayQueue 有 10 个动作 | 真机 SCPD 有 **27 个** | 反推会系统性低估固件；已补 `ReplaceQueue`/`AppendQueue`/`GetQueueLoopMode`/`SetQueuePolicy`/`BrowseQueue` 读回 |
