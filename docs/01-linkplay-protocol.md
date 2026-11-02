@@ -101,6 +101,51 @@ GET /httpapi.asp?command=ConnectMasterAp:ssid=<SSID_HEX_UPPER>:ch=<channel>:auth
 - 密码为空 → `auth=OPEN`、`encry=NONE`、`pwd=` 留空。
 - `chext` 在直连场景为 `0`，在多房间从机跟随场景为 `1`。
 
+#### 3.1.1 扫描周边 AP：`wlanGetApListEx`
+
+返回值（✅ 已确证，字段与类型均来自原厂解析代码）：
+
+```json
+{"aplist":[
+  {"ssid":"Home","bssid":"aa:bb:cc:dd:ee:ff","rssi":-47,"channel":6,
+   "auth":"WPA2PSK","encry":"AES","extch":0}
+]}
+```
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `ssid` | string | 网络名，可能是非 ASCII |
+| `bssid` | string | AP 的 MAC |
+| `rssi` | int | 信号强度，负值 dBm |
+| `channel` | int | 信道号 |
+| `auth` | string | `WPA2PSK` / `OPEN` / … |
+| `encry` | string | `AES` / `NONE` / … |
+| `extch` | int | 扩展信道（40MHz 绑定用） |
+
+设备侧扫描较慢，客户端读超时应放宽（本项目用 25 s，普通命令是 15 s）。
+注意根键是 `aplist`，**不是** `slave_list`。
+
+#### 3.1.2 下发之后必须自己确认（重要）
+
+`ConnectMasterAp` 的响应**只有 `OK` 或空串**，没有任何结构化结果；原厂 App 收到后
+仅打印一行 log，**从不校验是否真的连上**。因此重写时不能照抄这一点，必须：
+
+```
+下发 ConnectMasterAp  →  轮询 getStatusEx  →  判断 essid == 目标 SSID 且 internet == 1
+```
+
+判定规则（本项目实现，见 `ProvisioningPoller`）：
+
+| 观测 | 结论 |
+|---|---|
+| `essid` == 目标 且 `internet == 1` | 配网成功 |
+| `essid` == 目标 但 `internet != 1` | 已切网但没拿到 IP/外网（多为密码错或 DHCP 问题） |
+| `essid` 一直不是目标，直到超时 | 超时（带最后一次观测状态） |
+| 连续多次探测失败 | 设备失联（**不一定是失败**：切网后原 AP 地址会失效） |
+
+关键细节：设备切到 STA 模式后，原来 AP 模式那个地址立刻不可达，所以**探测异常不能
+直接判失败**，要容忍连续若干次失败（本项目允许 4 次），否则会把「其实成功了」误报成失败。
+
 ### 3.2 已联网设备改连另一个 AP
 
 ```

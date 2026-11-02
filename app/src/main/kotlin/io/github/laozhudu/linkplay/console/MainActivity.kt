@@ -23,6 +23,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -41,6 +42,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import io.github.laozhudu.linkplay.console.provisioning.ProvisioningScreen
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -57,6 +59,27 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
     val state by vm.state.collectAsState()
+    var showProvisioning by remember { mutableStateOf(false) }
+
+    if (showProvisioning) {
+        Scaffold(
+            topBar = { TopAppBar(title = { Text("添加音箱（AP 直连配网）", fontWeight = FontWeight.SemiBold) }) },
+        ) { padding ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .padding(horizontal = 16.dp),
+            ) {
+                ProvisioningScreen(
+                    onDone = { showProvisioning = false },
+                    onBack = { showProvisioning = false },
+                )
+            }
+        }
+        return
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(title = {
@@ -91,6 +114,7 @@ fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
                     onScan = vm::scan,
                     onAdd = vm::addManualDevice,
                     onSelect = vm::select,
+                    onProvision = { showProvisioning = true },
                 )
             } else {
                 DeviceDetailScreen(state = state, vm = vm)
@@ -105,6 +129,7 @@ private fun DeviceListScreen(
     onScan: () -> Unit,
     onAdd: (String) -> Unit,
     onSelect: (String) -> Unit,
+    onProvision: () -> Unit,
 ) {
     var manualIp by remember { mutableStateOf("") }
     Row(
@@ -124,6 +149,10 @@ private fun DeviceListScreen(
     Spacer(Modifier.height(12.dp))
     Button(onClick = onScan, enabled = !state.scanning, modifier = Modifier.fillMaxWidth()) {
         Text(if (state.scanning) "正在搜索…" else "SSDP 搜索局域网设备")
+    }
+    Spacer(Modifier.height(8.dp))
+    OutlinedButton(onClick = onProvision, modifier = Modifier.fillMaxWidth()) {
+        Text("新音箱？走 AP 直连配网")
     }
     Spacer(Modifier.height(12.dp))
     if (state.devices.isEmpty()) {
