@@ -31,6 +31,8 @@ data class SlaveInfo(
     val uuid: String? = null,
     val name: String? = null,
     val volume: Int? = null,
+    /** 声道：0=立体声 1=仅左 2=仅右（`multiroom:SlaveChannel` 的取值）。 */
+    val channel: Int? = null,
     val inGroup: Boolean = false,
 )
 
@@ -280,6 +282,7 @@ class MultiroomClient(
                     // 真机字段名是 "volume"（不是文档里常见的 "vol"），两个都认
                     volume = (o.string("volume") ?: o.string("vol"))?.toIntOrNull()
                         ?: o.int("volume") ?: o.int("vol"),
+                    channel = o.string("channel")?.toIntOrNull() ?: o.int("channel"),
                     // 出现在 slave_list 里就是"在本机这一组"。
                     // 注意 **不能** 用 `mask` 推断 —— 真机上成组后 mask 仍是 0（已实测），
                     // 它表达的是"有没有被屏蔽"，与是否入组无关。

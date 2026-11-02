@@ -27,6 +27,7 @@ class MultiroomRealPayloadTest {
         assertEquals(60, s.volume)                  // 字段名是 volume
         assertTrue(s.uuid!!.startsWith("uuid:"))    // 带前缀，比对前要归一化
         assertTrue(s.inGroup)                       // 在 slave_list 里就是组内（mask=0 不代表没入组）
+        assertEquals(0, s.channel)                  // 声道字段真机有返回，默认 0=立体声
     }
 
     @Test

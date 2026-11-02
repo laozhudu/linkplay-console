@@ -55,6 +55,7 @@ import io.github.laozhudu.linkplay.console.playback.PlayerScreen
 import io.github.laozhudu.linkplay.console.playback.QueueBus
 import io.github.laozhudu.linkplay.console.playback.QueueRunState
 import io.github.laozhudu.linkplay.console.provisioning.ProvisioningScreen
+import io.github.laozhudu.linkplay.console.room.MultiroomCard
 import io.github.laozhudu.linkplay.console.ui.components.AppCard
 import io.github.laozhudu.linkplay.console.ui.components.AppShapesExpressive
 import io.github.laozhudu.linkplay.console.ui.components.EmptyState
@@ -143,13 +144,8 @@ fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
 
             SubPage.Settings -> DeviceSettingsScreen(
                 state = state,
-                saved = state.saved,
                 vm = vm,
                 onBack = { sub = null },
-                onOpenPlayer = { sub = null; tab = Tab.Player },
-                onOpenNas = { sub = SubPage.Nas },
-                onOpenLibrary = { sub = SubPage.Library },
-                onOpenLocalQueue = { sub = SubPage.LocalQueue },
             )
 
             SubPage.Provisioning -> ProvisioningScreen(
@@ -179,6 +175,7 @@ fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
             when (tab) {
                 Tab.Devices -> HomeScreen(
                     state = state,
+                    vm = vm,
                     onOpenDevice = { device ->
                         vm.open(device)
                         tab = Tab.Player
@@ -326,6 +323,7 @@ private fun SourcesScreen(
 @Composable
 private fun HomeScreen(
     state: ConsoleUiState,
+    vm: ConsoleViewModel,
     onOpenDevice: (SavedDevice) -> Unit,
     onScan: () -> Unit,
     onAddManual: (String) -> Unit,
@@ -364,6 +362,15 @@ private fun HomeScreen(
                             color = MaterialTheme.colorScheme.error,
                         )
                     }
+                }
+            }
+
+            // 多房间放在最上面：它是"我家有几台音箱"的事，属设备层面，
+            // 不是某一台设备的设置项（放设置页里就得先点进设备才看得见全局）
+            if (state.saved.size >= 2 || state.groupMembers.size > 1) {
+                item {
+                    MultiroomCard(state = state, vm = vm, onOpenDevice = onOpenDevice)
+                    VSpace(Spacing.sm)
                 }
             }
 

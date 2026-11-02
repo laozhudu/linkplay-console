@@ -60,7 +60,7 @@ jobs:
           echo "LINKPLAY_VERSION_CODE=$CODE" >> "$GITHUB_ENV"
 
       - name: Protocol unit tests
-        run: ./gradlew --no-daemon :core-protocol:test
+        run: ./gradlew --no-daemon :core-protocol:test :app:testDebugUnitTest
 
       - name: Assemble debug APK
         run: ./gradlew --no-daemon :app:assembleDebug

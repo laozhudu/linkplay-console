@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -42,14 +41,12 @@ import androidx.compose.ui.unit.dp
 import io.github.laozhudu.linkplay.console.ConsoleUiState
 import io.github.laozhudu.linkplay.console.ConsoleViewModel
 import io.github.laozhudu.linkplay.console.ui.components.AppCard
-import io.github.laozhudu.linkplay.console.ui.components.BackGlyph
+import io.github.laozhudu.linkplay.console.ui.components.PageHeader
 import io.github.laozhudu.linkplay.console.ui.components.PillTag
 import io.github.laozhudu.linkplay.console.ui.components.SectionTitle
 import io.github.laozhudu.linkplay.console.ui.components.VSpace
 import io.github.laozhudu.linkplay.console.ui.theme.Spacing
 import io.github.laozhudu.linkplay.console.ui.theme.StatusColors
-import io.github.laozhudu.linkplay.protocol.SlaveDevice
-import io.github.laozhudu.linkplay.protocol.session.SavedDevice
 
 /**
  * 设备设置页。
@@ -62,13 +59,8 @@ import io.github.laozhudu.linkplay.protocol.session.SavedDevice
 @Composable
 fun DeviceSettingsScreen(
     state: ConsoleUiState,
-    saved: List<SavedDevice>,
     vm: ConsoleViewModel,
     onBack: () -> Unit,
-    onOpenPlayer: () -> Unit,
-    onOpenNas: () -> Unit,
-    onOpenLibrary: () -> Unit,
-    onOpenLocalQueue: () -> Unit,
 ) {
     var command by remember { mutableStateOf("getNetwork") }
     var newName by remember { mutableStateOf("") }
@@ -83,35 +75,20 @@ fun DeviceSettingsScreen(
             .verticalScroll(rememberScrollState())
             .padding(horizontal = Spacing.lg),
     ) {
-        // ---- 顶栏：返回是本页唯一出口，固定在顶部 ----
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = Spacing.sm),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .clickable(onClick = onBack),
-                contentAlignment = Alignment.Center,
-            ) {
-                BackGlyph(MaterialTheme.colorScheme.onSurface, Modifier.size(22.dp))
-            }
-            Spacer(Modifier.width(Spacing.sm))
-            SectionTitle(
-                title = "设备设置",
-                subtitle = status?.ssid ?: state.selectedIp,
-                modifier = Modifier.weight(1f),
-            )
-            if (status != null) {
-                PillTag(
-                    text = if (status.isOnline) "在线" else "离线",
-                    color = if (status.isOnline) StatusColors.ok else StatusColors.error,
-                )
-            }
-        }
+        // 统一页头（与其它二级页同一套尺寸与间距）
+        PageHeader(
+            title = "设备设置",
+            subtitle = status?.ssid ?: state.selectedIp,
+            onBack = onBack,
+            trailing = {
+                if (status != null) {
+                    PillTag(
+                        text = if (status.isOnline) "在线" else "离线",
+                        color = if (status.isOnline) StatusColors.ok else StatusColors.error,
+                    )
+                }
+            },
+        )
 
         state.error?.let {
             AppCard {
@@ -120,24 +97,10 @@ fun DeviceSettingsScreen(
             VSpace(Spacing.sm)
         }
 
-        // ---- 进播放页 ----
-        AppCard(onClick = onOpenPlayer) {
-            SectionTitle("播放控制", "封面 · 进度 · 音量 · 循环 · 播放列表")
-        }
+        // 这里原来有四张「进播放页 / NAS / 音乐库 / 本地音乐」的入口卡片 —— 已删。
+        // 底部导航本来就有这三个 Tab，同一目的地在一屏里出现两次，
+        // 用户第一反应是"这两个按钮是不是不一样"，纯属干扰。
         VSpace(Spacing.sm)
-        AppCard(onClick = onOpenNas) {
-            SectionTitle("NAS 媒体库", "浏览局域网 DLNA 服务器，点一首即播")
-        }
-        VSpace(Spacing.sm)
-        AppCard(onClick = onOpenLibrary) {
-            SectionTitle("音乐库", "搜索 · 收藏 · 最近播放 · 网络电台")
-        }
-        VSpace(Spacing.sm)
-        AppCard(onClick = onOpenLocalQueue) {
-            SectionTitle("手机本地音乐", "把手机里的歌推给音箱")
-        }
-
-        VSpace(Spacing.lg)
 
         // ---- 设备信息 ----
         AppCard {
@@ -204,8 +167,10 @@ fun DeviceSettingsScreen(
 
         VSpace(Spacing.md)
 
-        // ---- 多房间 ----
-        MultiroomSection(state = state, saved = saved, vm = vm)
+        // ---- 多房间：已移到首页（设备层面的事，不该藏在某台设备的设置里）----
+        AppCard(onClick = onBack) {
+            SectionTitle("多房间", "在首页配置：加/减音箱、每台的音量与声道")
+        }
 
         VSpace(Spacing.md)
 
@@ -285,221 +250,6 @@ fun DeviceSettingsScreen(
             },
             dismissButton = { TextButton(onClick = { confirmForget = false }) { Text("取消") } },
         )
-    }
-}
-
-/**
- * 多房间（LinkPlay multiroom）。
- *
- * ## 这一块为什么长这样
- *
- * 命令格式是从原厂 APK 的 `com.wifiaudio.a.v` 反编译出来的（docs/14 §4.7）：
- * `SlaveVolume:<从机IP>:<vol>` / `SlaveChannel:<从机IP>:<ch>` /
- * `SlaveDeviceName:<从机IP>:<name>` / `SlaveMask` / `SlaveUnMask` / `SlaveKickout`。
- *
- * 但真机实测：两台 DS-1831 同时在线，各自 `multiroom:getSlaveList` 都回 `{"slaves": 0}`，
- * `SlaveMask` 回 `OK` 却不生效 —— 说明**两台设备还没互相发现**。
- * 原厂 App 对应的入口是「按 WPS 键配对」，那一步是硬件动作，软件替代不了。
- *
- * 所以这一块的做法是：
- * - 从机列表真实读取，读到就正常显示并可调音量/踢出；
- * - 读不到时**明确说明原因**，并给一个「邀请另一台已保存音箱」的按钮去试，
- *   试完立刻回读，把设备真实反应写进日志 —— 不假装成功。
- */
-@Composable
-/**
- * 多房间 —— 一键组网，不抄原厂的拖拽。
- *
- * 为什么不复刻拖拽：拖拽是 2015 年平板上的手势隐喻，在手机上容易误触，
- * 而且「谁拖到谁身上就变成主机」这条规则用户根本看不出来。
- * 这里改成主流智能音箱的做法：**当前设备固定当主机，点「＋」挑一台加入**。
- * 底层命令与原厂完全相同（`multiroom:ConnnectAP:...:chext=1`），只是入口更直白。
- */
-private fun MultiroomSection(state: ConsoleUiState, saved: List<SavedDevice>, vm: ConsoleViewModel) {
-    var picker by remember { mutableStateOf(false) }
-    val others = saved.filter { it.ip != state.selectedIp }
-    val grouped = state.slaves.size
-
-    AppCard {
-        SectionTitle(
-            "多房间",
-            when {
-                state.multiroomBusy -> "正在组网…"
-                grouped > 0 -> "本机带 $grouped 台音箱同步播放"
-                else -> "本机单独播放，可再加音箱一起响"
-            },
-        )
-        VSpace(Spacing.sm)
-
-        // ---- 一句话说明，不堆术语 ----
-        Text(
-            if (grouped > 0) {
-                "组内的音箱会和本机播同一首歌。点音箱可以单独调它自己的音量或让它退出。"
-            } else {
-                "把另一台音箱加到本机下面，两台就同步播放同一首歌。加入时它会短暂离开原来的 Wi-Fi，失败会自己连回来。"
-            },
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        VSpace(Spacing.md)
-
-        // ---- 主从关系用「芯片块」表达：主机实心 + 从机描边 + 加号 ----
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            FilterChip(
-                selected = true,
-                onClick = {},
-                label = { Text("本机 · " + (saved.firstOrNull { it.ip == state.selectedIp }?.title ?: "主机")) },
-            )
-            if (grouped > 0) {
-                Text("＋", style = MaterialTheme.typography.titleMedium)
-                state.slaves.forEach { slave ->
-                    FilterChip(
-                        selected = false,
-                        onClick = { vm.setSlaveDialog(slave) },
-                        label = { Text(slave.name ?: slave.ip) },
-                    )
-                }
-            }
-            if (others.isNotEmpty() && !state.multiroomBusy) {
-                Text("＋", style = MaterialTheme.typography.titleMedium)
-                AssistChip(onClick = { picker = true }, label = { Text("添加音箱") })
-            }
-        }
-
-        // ---- 组网中：进度条 + 秒数（原厂是转圈 + 40s 超时，这里把秒数显出来） ----
-        if (state.multiroomBusy) {
-            VSpace(Spacing.md)
-            LinearProgressIndicator(
-                progress = { (state.multiroomTick.coerceAtMost(40) / 40f) },
-                modifier = Modifier.fillMaxWidth(),
-            )
-            VSpace(Spacing.xs)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "正在把「${state.multiroomTarget ?: "音箱"}」加入… ${state.multiroomTick}s / 40s",
-                    style = MaterialTheme.typography.labelMedium,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(onClick = vm::cancelMultiroom) { Text("停止") }
-            }
-        }
-
-        // ---- 结果解释：命令回 OK 不等于成功，这里如实说明 ----
-        state.multiroomNote?.let { note ->
-            VSpace(Spacing.sm)
-            Text(
-                note,
-                style = MaterialTheme.typography.labelMedium,
-                color = if (grouped > 0) StatusColors.ok else MaterialTheme.colorScheme.error,
-            )
-        }
-
-        if (grouped == 0 && others.isEmpty() && !state.multiroomBusy) {
-            VSpace(Spacing.sm)
-            Text(
-                "还没有第二台音箱。先在「设备」页把它找出来并保存，这里就能直接加入。",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-
-    // ---- 选一台加入 ----
-    if (picker) {
-        AlertDialog(
-            onDismissRequest = { picker = false },
-            title = { Text("加入哪一台？") },
-            text = {
-                Column {
-                    Text(
-                        "选中的音箱会连到本机，之后两台同步播放。",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    VSpace(Spacing.sm)
-                    others.forEach { other ->
-                        OutlinedButton(
-                            onClick = { picker = false; vm.joinSlave(other) },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) { Text("${other.title}（${other.ip}）") }
-                        VSpace(Spacing.xs)
-                    }
-                }
-            },
-            confirmButton = { TextButton(onClick = { picker = false }) { Text("取消") } },
-        )
-    }
-
-    // ---- 从机详情：单独音量 / 退出 ----
-    val dialogSlave = state.slaveDialog
-    if (dialogSlave != null) {
-        AlertDialog(
-            onDismissRequest = vm::clearSlaveDialog,
-            title = { Text(dialogSlave.name ?: dialogSlave.ip) },
-            text = {
-                Column {
-                    Text("这台音箱单独的音量", style = MaterialTheme.typography.bodySmall)
-                    VSpace(Spacing.xs)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedButton(onClick = { vm.setSlaveVolume(dialogSlave.ip, (dialogSlave.volume ?: 50) - 10) }) { Text("−") }
-                        Text(
-                            "  ${dialogSlave.volume ?: "?"}  ",
-                            style = MaterialTheme.typography.titleMedium,
-                        )
-                        OutlinedButton(onClick = { vm.setSlaveVolume(dialogSlave.ip, (dialogSlave.volume ?: 50) + 10) }) { Text("＋") }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { vm.kickSlave(dialogSlave.ip); vm.clearSlaveDialog() }) {
-                    Text("让它退出组", color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = { TextButton(onClick = vm::clearSlaveDialog) { Text("关闭") } },
-        )
-    }
-}
-
-@Composable
-private fun SlaveRow(slave: SlaveDevice, busy: Boolean, vm: ConsoleViewModel) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = Spacing.sm),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                slave.name ?: slave.ip,
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                buildString {
-                    append(slave.ip)
-                    append(if (slave.inGroup) " · 已入组" else " · 未入组")
-                    slave.volume?.let { append(" · 音量 $it") }
-                },
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        // 音量用 −/+ 而不是滑块：这里是从机，拖动滑块会连续下发命令
-        OutlinedButton(
-            onClick = { vm.setSlaveVolume(slave.ip, (slave.volume ?: 0) - 5) },
-            enabled = !busy,
-        ) { Text("−") }
-        Spacer(Modifier.width(Spacing.xs))
-        OutlinedButton(
-            onClick = { vm.setSlaveVolume(slave.ip, (slave.volume ?: 0) + 5) },
-            enabled = !busy,
-        ) { Text("+") }
-        Spacer(Modifier.width(Spacing.xs))
-        OutlinedButton(onClick = { vm.kickSlave(slave.ip) }, enabled = !busy) { Text("踢出") }
     }
 }
 

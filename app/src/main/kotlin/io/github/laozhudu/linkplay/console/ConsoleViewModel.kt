@@ -14,6 +14,7 @@ import io.github.laozhudu.linkplay.protocol.LinkPlayStatus
 import io.github.laozhudu.linkplay.protocol.SlaveDevice
 import io.github.laozhudu.linkplay.protocol.identity.LinkPlayIdentity
 import io.github.laozhudu.linkplay.protocol.multiroom.MultiroomClient
+import io.github.laozhudu.linkplay.protocol.player.PlayerStatus
 import io.github.laozhudu.linkplay.protocol.session.SavedDevice
 import io.github.laozhudu.linkplay.protocol.upnp.UpnpRendererClient
 import kotlinx.coroutines.Dispatchers
@@ -21,8 +22,26 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/**
+ * 多房间组里的一台音箱（主机或从机）。
+ *
+ * 为什么单独建模而不复用 [SavedDevice]：从机在组里才有意义，
+ * 而且它的 IP 是**主机自报的**（主机 AP 网段 `10.10.10.x`），与保存记录里的旧 IP 不同。
+ * 用它去下发 `SlaveVolume`/`SlaveChannel` 才对。
+ */
+data class GroupMember(
+    val ip: String,
+    val name: String,
+    val uuid: String? = null,
+    val volume: Int? = null,
+    /** 声道：0=立体声 1=仅左 2=仅右。主机固定立体声，为 null。 */
+    val channel: Int? = null,
+    val isMaster: Boolean = false,
+)
 
 data class ConsoleUiState(
     val scanning: Boolean = false,
@@ -66,6 +85,11 @@ data class ConsoleUiState(
      */
     val groupedUnder: Map<String, String> = emptyMap(),
 
+    /** 当前多房间组的主机 IP / 名称。没有组时为 null。 */
+    val groupMasterIp: String? = null,
+    val groupMasterName: String? = null,
+    /** 组成员，第一个固定是主机。没有组时为空。 */
+    val groupMembers: List<GroupMember> = emptyList(),
     /** 点了某个从机后要弹的详情框。 */
     val slaveDialog: SlaveDevice? = null,
     /**
@@ -84,6 +108,15 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     private val client = DeviceHttpClient()
     private val discovery = SsdpDiscovery()
     private val store = SessionStore.of(app)
+    /**
+     * 组音量下发通道（合并式）。
+     *
+     * 音量条拖动一次会触发几十个回调，逐个发 HTTP 会堵住、也会让设备手忙脚乱。
+     * 合并通道只保留"最新值"，下游每 90ms 取一次 —— 手感是连续的，流量是可控的。
+     */
+    private val groupVolumeChannel = kotlinx.coroutines.channels.Channel<Pair<GroupMember, Int>>(
+        kotlinx.coroutines.channels.Channel.CONFLATED,
+    )
     private val _state = MutableStateFlow(ConsoleUiState())
     val state: StateFlow<ConsoleUiState> = _state.asStateFlow()
 
@@ -91,6 +124,18 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         // 首页一进来就有内容：读已保存设备，并后台探活（不清空界面、不阻塞）
         reloadSaved()
         probeSaved()
+        viewModelScope.launch {
+            for ((member, v) in groupVolumeChannel) {
+                withContext(Dispatchers.IO) {
+                    val master = _state.value.groupMasterIp ?: return@withContext
+                    runCatching {
+                        if (member.isMaster) client.send(master, LinkPlayCommands.playerVolume(v))
+                        else client.send(master, LinkPlayCommands.slaveVolume(member.ip, v))
+                    }.onFailure { log("调音量失败：${it.message}") }
+                }
+                delay(90)
+            }
+        }
     }
 
     // ---- 已保存设备 ----
@@ -132,18 +177,52 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
             }
-            // 顺带把「谁在谁的组里」也读出来（从机不可直连，只能由主机转述）
+            // 顺带把「组」读出来：从机不可直连，只能由主机转述（真机实测从机在 10.10.10.x）
             val grouped = mutableMapOf<String, String>()
+            var masterIp: String? = null
+            var masterName: String? = null
+            var members: List<GroupMember> = emptyList()
             for (d in targets) {
                 if (result[d.uuid] != true) continue
                 val slaves = withContext(Dispatchers.IO) {
                     runCatching { MultiroomClient(client).slaves(d.ip) }.getOrDefault(emptyList())
                 }
+                if (slaves.isEmpty()) continue
                 slaves.forEach { sl ->
                     sl.uuid?.removePrefix("uuid:")?.lowercase()?.let { grouped[it] = d.title }
                 }
+                if (masterIp == null) {
+                    masterIp = d.ip
+                    masterName = d.title
+                    // 主机自己的音量在 getPlayerStatus 里（getStatusEx 没有这个字段）
+                    val masterVolume = withContext(Dispatchers.IO) {
+                        runCatching {
+                            PlayerStatus.parse(client.send(d.ip, "getPlayerStatus")).volume
+                        }.getOrNull()
+                    }
+                    members = listOf(
+                        GroupMember(ip = d.ip, name = d.title, uuid = d.uuid, volume = masterVolume, isMaster = true),
+                    ) + slaves.map { sl ->
+                        GroupMember(
+                            ip = sl.ip,
+                            name = sl.name ?: sl.ip,
+                            uuid = sl.uuid?.removePrefix("uuid:"),
+                            volume = sl.volume,
+                            channel = sl.channel,
+                            isMaster = false,
+                        )
+                    }
+                }
             }
-            _state.update { it.copy(online = it.online + result, groupedUnder = grouped) }
+            _state.update {
+                it.copy(
+                    online = it.online + result,
+                    groupedUnder = grouped,
+                    groupMasterIp = masterIp,
+                    groupMasterName = masterName,
+                    groupMembers = members,
+                )
+            }
         }
     }
 
@@ -343,6 +422,100 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     fun switchMode(mode: String) {
         val ip = _state.value.selectedIp ?: return
         run("switchMode($mode)") { client.send(ip, LinkPlayCommands.switchMode(mode)) }
+    }
+
+    // ---- 多房间组：首页直接操作 ----
+
+    /** 重新探活并刷新组结构（首页下拉/进入时调用）。 */
+    fun refreshGroup() = probeSaved()
+
+    /**
+     * 调组内某台音箱的音量。
+     *
+     * 为什么不走 [run]：那里有 `busy` 闸门，音量条连续拖动时第二次就被丢掉，
+     * 手感立刻变「不跟手」。这里乐观更新本地值 + 直接下发，失败只记日志。
+     */
+    fun setGroupVolume(member: GroupMember, volume: Int) {
+        val master = _state.value.groupMasterIp ?: return
+        val v = volume.coerceIn(0, 100)
+        _state.update { st ->
+            st.copy(groupMembers = st.groupMembers.map { if (it.ip == member.ip) it.copy(volume = v) else it })
+        }
+        // 主机的音量是它自己的；从机必须由主机代转（从机在主机热点网段，直连不可达）
+        groupVolumeChannel.trySend(member to v)
+    }
+
+    /**
+     * 调组内某台从机的声道（0 立体声 / 1 仅左 / 2 仅右）。
+     *
+     * 只有从机有这条命令；主机声道由播放源决定，所以主机不做假开关。
+     */
+    fun setGroupChannel(member: GroupMember, channel: Int) {
+        val master = _state.value.groupMasterIp ?: return
+        if (member.isMaster) return
+        val ch = channel.coerceIn(0, 2)
+        _state.update { st ->
+            st.copy(groupMembers = st.groupMembers.map { if (it.ip == member.ip) it.copy(channel = ch) else it })
+        }
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                runCatching { client.send(master, "multiroom:SlaveChannel:${member.ip}:$ch") }
+                    .onFailure { log("调声道失败：${it.message}") }
+            }
+        }
+    }
+
+    /** 把某台从机移出组。 */
+    fun removeFromGroup(member: GroupMember) {
+        val master = _state.value.groupMasterIp ?: return
+        if (member.isMaster) return
+        run("移出组 ${member.name}") {
+            log("SlaveKickout → " + client.send(master, "multiroom:SlaveKickout:${member.ip}"))
+            delay(1500)
+        }
+        probeSaved()
+    }
+
+    /**
+     * 把一台已保存的音箱加进组。
+     *
+     * 主机取当前组的主机；还没有组时取第一台在线的已保存设备。
+     * 协议细节见 [MultiroomClient.joinWithPolling]（照原厂：`getNetwork` 的整段返回当密码）。
+     */
+    fun addToGroup(slave: SavedDevice) {
+        val master = _state.value.groupMasterIp
+            ?: _state.value.saved.firstOrNull { _state.value.online[it.uuid] == true }?.ip
+        if (master == null) {
+            _state.update { it.copy(error = "先添加并连上一台音箱") }
+            return
+        }
+        if (_state.value.multiroomBusy) return
+        _state.update {
+            it.copy(multiroomBusy = true, multiroomTick = 0, multiroomTarget = slave.title, multiroomNote = null)
+        }
+        viewModelScope.launch {
+            val (ok, reason) = withContext(Dispatchers.IO) {
+                val ap = runCatching { MultiroomClient(client).readApInfo(master) }.getOrNull()
+                    ?: return@withContext false to "读不到主机热点信息"
+                val ok = runCatching {
+                    MultiroomClient(client).joinWithPolling(
+                        masterIp = master,
+                        masterSsid = ap.ssid,
+                        slaveIp = slave.ip,
+                        onTick = { sec -> viewModelScope.launch { _state.update { it.copy(multiroomTick = sec) } } },
+                        shouldStop = { !_state.value.multiroomBusy },
+                    )
+                }.getOrElse { false }
+                ok to null
+            }
+            _state.update {
+                it.copy(
+                    multiroomBusy = false,
+                    multiroomNote = if (ok) "已把「${slave.title}」加入" else (reason ?: "命令已发出，但 40 秒内它没出现在组里"),
+                )
+            }
+            probeSaved()
+        }
     }
 
     fun setSlaveVolume(slaveIp: String, volume: Int) {

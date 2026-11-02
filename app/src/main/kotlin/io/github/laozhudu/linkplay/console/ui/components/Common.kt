@@ -248,5 +248,43 @@ fun DeviceCard(
 }
 
 /** 竖直间隔的快捷写法，避免到处 `Spacer(Modifier.height(x.dp))`。 */
+/**
+ * 二级页统一页头。
+ *
+ * 为什么要有它：之前每个页面各写一遍「返回圆钮 + 标题 + 副标题 + 右侧标签」，
+ * 结果圆钮尺寸、标题字号、间距各不相同 —— 用户说的「多个页面 UI 不统一」就是这个。
+ * 统一到一处后，改一次全站一致。
+ */
+@Composable
+fun PageHeader(
+    title: String,
+    subtitle: String? = null,
+    onBack: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
+    trailing: @Composable (() -> Unit)? = null,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = Spacing.sm),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (onBack != null) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = onBack),
+                contentAlignment = Alignment.Center,
+            ) {
+                BackGlyph(MaterialTheme.colorScheme.onSurface, Modifier.size(22.dp))
+            }
+            Spacer(Modifier.width(Spacing.sm))
+        }
+        SectionTitle(title = title, subtitle = subtitle, modifier = Modifier.weight(1f))
+        trailing?.invoke()
+    }
+}
+
 @Composable
 fun VSpace(dp: androidx.compose.ui.unit.Dp) = Spacer(Modifier.height(dp))
