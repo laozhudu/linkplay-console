@@ -209,6 +209,35 @@ fun NasScreen(
             TextButton(onClick = vm::clearQueue) { Text("清空") }
         }
 
+        // 控制面掉线时的自救入口：设备在线但 UPnP 控制口关了，重启才能恢复
+        if (state.controlLost) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+            ) {
+                Column(Modifier.padding(10.dp)) {
+                    Text(
+                        "音箱控制服务掉线（设备仍在线）",
+                        fontWeight = FontWeight.Medium,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Text(
+                        "UPnP 端口 49152 关了。重启音箱可恢复，实测约 40 秒。",
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Button(onClick = vm::restartRenderer, enabled = !state.healing) {
+                        if (state.healing) {
+                            CircularProgressIndicator(Modifier.width(14.dp).height(14.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        Text(if (state.healing) "重启并等待恢复…" else "重启音箱")
+                    }
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+        }
+
         state.log.asReversed().take(6).forEach {
             Text(it, style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace)
         }
