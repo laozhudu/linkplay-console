@@ -15,6 +15,7 @@ import io.github.laozhudu.linkplay.protocol.upnp.PositionInfo
 import io.github.laozhudu.linkplay.protocol.upnp.TransportState
 import io.github.laozhudu.linkplay.protocol.upnp.UpnpRendererClient
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -304,6 +305,44 @@ class PlaybackViewModel(
     fun stop() = act("停止") { engine!!.stop() }
     fun seekTo(seconds: Long) = act("跳转") { engine!!.seek(seconds) }
     fun setVolume(value: Int) = act("音量 ${value.coerceIn(0, 100)}") { engine!!.setVolume(value) }
+
+    /**
+     * 拖动音量条时用的「跟手」版本。
+     *
+     * 为什么不能用 [setVolume]：
+     * 1. 它走 [act]，那里有 `busy` 闸门 —— 拖动时上一个请求还没回来，后面几十个全被丢掉，
+     *    表现就是「拖了半天音量不动，松手才跳一下」；
+     * 2. 每次成功都 `refreshOnce()` + 写一条日志，几十次会把状态刷成毛刺。
+     *
+     * 这里做两件事：先把本地音量乐观改掉（数字立刻跟手），再把值丢进合并通道，
+     * 后台每 80ms 取最新值下发一次 —— 请求量可控，手感连续。
+     */
+    fun setVolumeLive(value: Int) {
+        val v = value.coerceIn(0, 100)
+        _state.update { it.copy(volume = v) }
+        volumeChannel.trySend(v)
+    }
+
+    private val volumeChannel = Channel<Int>(Channel.CONFLATED)
+
+    /**
+     * 播放列表里点某一首。
+     *
+     * 服务在跑就让它跳过去（它负责逐首投流）；服务不在跑就退化成「直接投这一首」——
+     * 单曲投流是本项目最可靠的能力，比什么都不发生强。
+     */
+    fun playQueueItem(index: Int) {
+        val q = QueueBus.state.value
+        val item = q.items.getOrNull(index) ?: return
+        if (QueueBus.hasController) {
+            QueueBus.skipTo(index)
+            return
+        }
+        act("播放第 ${index + 1} 首") { engine!!.playUrl(item.url, item.title) }
+    }
+
+    /** 从播放列表里删掉第 [index] 首。 */
+    fun removeQueueItem(index: Int) = QueueBus.removeAt(index)
     fun toggleMute() = act("静音切换") { engine!!.setMute(!_state.value.mute) }
 
     private fun act(label: String, block: () -> Unit) {
@@ -323,6 +362,16 @@ class PlaybackViewModel(
     }
 
     private fun log(line: String) = _state.update { it.copy(log = (it.log + line).takeLast(40)) }
+
+    init {
+        // 音量合并通道：只保留最新值，每 80ms 最多下发一次
+        viewModelScope.launch {
+            for (v in volumeChannel) {
+                runCatching { withContext(Dispatchers.IO) { engine?.setVolume(v) } }
+                delay(80)
+            }
+        }
+    }
 
     companion object {
         const val POLL_INTERVAL_MS = 1_000L

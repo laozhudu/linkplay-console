@@ -138,4 +138,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     // 封面加载（Apache-2.0）：DLNA 的 albumArtURI 是普通 http 图，Coil 一句 AsyncImage 就够
     implementation(libs.coil.compose)
+
+    // 纯 JVM 单测：队列/多房间这些逻辑不该只能靠真机验证
+    testImplementation("junit:junit:4.13.2")
 }

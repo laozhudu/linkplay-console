@@ -45,7 +45,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import io.github.laozhudu.linkplay.console.ui.components.AppCard
 import io.github.laozhudu.linkplay.console.ui.components.AppShapesExpressive
-import io.github.laozhudu.linkplay.console.ui.components.BackGlyph
+import io.github.laozhudu.linkplay.console.ui.components.PageHeader
 import io.github.laozhudu.linkplay.console.ui.components.EmptyState
 import io.github.laozhudu.linkplay.console.ui.components.SectionTitle
 import io.github.laozhudu.linkplay.console.ui.components.VSpace
@@ -102,23 +102,11 @@ fun QueueScreen(
             verticalArrangement = Arrangement.spacedBy(Spacing.sm),
         ) {
             item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .clickable(onClick = onBack),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        BackGlyph(MaterialTheme.colorScheme.onSurface, Modifier.size(20.dp))
-                    }
-                    Spacer(Modifier.width(Spacing.sm))
-                    SectionTitle(
-                        "手机本地音乐",
-                        state.serverUrl?.let { "正在共享：$it" } ?: "手机当文件服务器，音箱自己来拉流",
-                        modifier = Modifier.weight(1f),
-                    )
-                }
+                PageHeader(
+                    title = "手机音乐",
+                    subtitle = state.serverUrl?.let { "正在共享：$it" } ?: "手机当文件服务器，音箱自己来拉流",
+                    onBack = onBack,
+                )
             }
 
             state.error?.let { err ->

@@ -50,6 +50,9 @@ object QueueBus {
         controller = c
     }
 
+    /** 服务是否在跑（有 controller 才能真的跳转/删除）。 */
+    val hasController: Boolean get() = controller != null
+
     fun begin(items: List<QueueItem>) = _state.update {
         QueueRunState(running = true, items = items, index = 0, total = items.size, playedCount = 0)
     }
@@ -83,9 +86,34 @@ object QueueBus {
         controller?.skipTo(index)
     }
 
-    /** 从队列里移除第 [index] 首。 */
+    /**
+     * 从队列里移除第 [index] 首。
+     *
+     * 服务在跑（有 controller）时交给服务，保证它自己的游标跟着调；
+     * 服务没在跑（比如只投了一首、或者用户刚进来）时也必须能删 ——
+     * 否则界面上点了叉毫无反应，就是用户说的「播放列表没法用」。
+     * 所以这里保留一个本地兜底。
+     */
     fun removeAt(index: Int) {
-        controller?.removeAt(index)
+        val c = controller
+        if (c != null) {
+            c.removeAt(index)
+        } else {
+            dropLocal(index)
+        }
+    }
+
+    /** 只改本地列表（服务缺席时的兜底）。当前曲之后的索引要跟着前移。 */
+    private fun dropLocal(index: Int) = _state.update { st ->
+        if (index !in st.items.indices) return@update st
+        val next = st.items.toMutableList().apply { removeAt(index) }
+        val newIndex = when {
+            next.isEmpty() -> -1
+            index < st.index -> st.index - 1
+            index == st.index -> st.index.coerceAtMost(next.lastIndex)
+            else -> st.index
+        }
+        st.copy(items = next, index = newIndex, total = next.size)
     }
 }
 

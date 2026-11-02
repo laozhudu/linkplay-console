@@ -44,7 +44,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import io.github.laozhudu.linkplay.console.ui.components.AppCard
 import io.github.laozhudu.linkplay.console.ui.components.AppShapesExpressive
-import io.github.laozhudu.linkplay.console.ui.components.BackGlyph
+import io.github.laozhudu.linkplay.console.ui.components.PageHeader
 import io.github.laozhudu.linkplay.console.ui.components.EmptyState
 import io.github.laozhudu.linkplay.console.ui.components.PillTag
 import io.github.laozhudu.linkplay.console.ui.components.SectionTitle
@@ -103,26 +103,16 @@ fun NasScreen(
         ) {
             // ---------- 头部 ----------
             item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .clickable(onClick = onBack),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        BackGlyph(MaterialTheme.colorScheme.onSurface, Modifier.size(20.dp))
-                    }
-                    Spacer(Modifier.width(Spacing.sm))
-                    SectionTitle(
-                        title = "NAS 媒体库",
-                        subtitle = state.connectedServer ?: "DLNA 服务器上的曲目，点一首即播",
-                        modifier = Modifier.weight(1f),
-                    )
-                    if (state.connectedServer != null) {
-                        PillTag(text = "已连接", color = MaterialTheme.colorScheme.primary)
-                    }
-                }
+                PageHeader(
+                    title = "NAS 音乐",
+                    subtitle = state.connectedServer ?: "DLNA 服务器上的曲目，点一首即播",
+                    onBack = onBack,
+                    trailing = {
+                        if (state.connectedServer != null) {
+                            PillTag(text = "已连接", color = MaterialTheme.colorScheme.primary)
+                        }
+                    },
+                )
             }
 
             state.error?.let { err ->

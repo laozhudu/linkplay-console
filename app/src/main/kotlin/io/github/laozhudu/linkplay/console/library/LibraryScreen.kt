@@ -13,6 +13,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import io.github.laozhudu.linkplay.console.ui.components.AppShapesExpressive
+import io.github.laozhudu.linkplay.console.ui.components.PageHeader
+import io.github.laozhudu.linkplay.console.ui.components.VSpace
 import io.github.laozhudu.linkplay.console.ui.theme.Spacing
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -91,6 +93,12 @@ fun LibraryScreen(
             .fillMaxSize()
             .verticalScroll(rememberScrollState()),
     ) {
+        PageHeader(
+            title = "音乐库",
+            subtitle = "搜索 · 收藏 · 最近播放 · 网络电台",
+        )
+        VSpace(Spacing.xs)
+
         // 分区用可横滚的 pill 而不是一排按钮：4 个按钮在窄屏会换行，且按钮形状让「切换」看起来像「提交」
         Row(
             modifier = Modifier.horizontalScroll(rememberScrollState()),
