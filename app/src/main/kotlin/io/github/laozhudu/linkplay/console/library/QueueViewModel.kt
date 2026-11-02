@@ -6,7 +6,11 @@ import androidx.lifecycle.viewModelScope
 import io.github.laozhudu.linkplay.protocol.playqueue.DidlLiteBuilder
 import io.github.laozhudu.linkplay.protocol.playqueue.PlayQueueClient
 import io.github.laozhudu.linkplay.protocol.playqueue.QueueContextFormat
+import io.github.laozhudu.linkplay.console.playback.QueuePlaybackService
+import io.github.laozhudu.linkplay.protocol.player.LoopMode
 import io.github.laozhudu.linkplay.protocol.playqueue.QueueLoopMode
+import io.github.laozhudu.linkplay.protocol.queue.QueueItem
+import io.github.laozhudu.linkplay.protocol.session.PlaybackSession
 import io.github.laozhudu.linkplay.protocol.upnp.UpnpRendererClient
 import io.github.laozhudu.linkplay.protocol.upnp.UpnpServices
 import kotlinx.coroutines.Dispatchers
@@ -18,7 +22,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 data class QueueUiState(
-    val loading: Boolean = true,
+    val loading: Boolean = false,
     val tracks: List<LocalTrack> = emptyList(),
     val selected: Set<Long> = emptySet(),
     val serverReady: Boolean = false,
@@ -56,9 +60,13 @@ class QueueViewModel(
 
     private var queueClient: PlayQueueClient? = null
 
+    /** 设备地址来自 LOCATION（手动输 IP 时可能拿不到）。 */
+    private val deviceHost: String? = location?.let { runCatching { java.net.URI(it).host }.getOrNull() }
+
     init {
         viewModelScope.launch { initDevice() }
-        loadTracks()
+        // 不在构造时扫描：扫描需要读媒体权限，一进页面就弹权限框很粗暴。
+        // 改为用户点「扫描本机音乐」时才请求（见 QueueScreen）。
     }
 
     private suspend fun initDevice() {
@@ -129,7 +137,16 @@ class QueueViewModel(
     fun clearSelection() = _state.update { it.copy(selected = emptySet()) }
     fun setLoopMode(mode: Int) = _state.update { it.copy(loopMode = mode) }
 
-    /** 起服务并推送当前勾选的列表。 */
+    /**
+     * 推送当前勾选的列表。
+     *
+     * **实现变更（重要）**：原来走「PlayQueue + DIDL 整列表」，但真机实测这条路过不去 ——
+     * 固件只接受空的 `<Tracks/>`，放任何曲目都回 `404 ParseXmltoPlaylist error`（docs/08 §5.2）。
+     * 也就是说这个按钮在真机上从来没有成功过。
+     *
+     * 现在改成已验证的路径：起本机媒体服务 → 交给前台服务用 [ClientSideQueue] 逐首投流。
+     * 顺带白拿三件事：锁屏不断（前台服务）、断点续播（会话快照）、与 NAS 页同一套逻辑。
+     */
     fun pushSelected() {
         val s = _state.value
         if (s.busy) return
@@ -138,41 +155,47 @@ class QueueViewModel(
             _state.update { it.copy(error = "还没有选中歌曲") }
             return
         }
-        val client = queueClient
-        if (client == null || !client.isSupported) {
-            _state.update { it.copy(error = "这台设备不支持整列表推送（没有 PlayQueue 服务）") }
-            return
-        }
+        push(chosen)
+    }
 
+    /** 点一首就播这一首 —— 与 NAS 页一致，不再要求先勾选。 */
+    fun playNow(track: LocalTrack) = push(listOf(track))
+
+    private fun push(chosen: List<LocalTrack>) {
+        val s = _state.value
+        if (s.busy) return
         _state.update { it.copy(busy = true, error = null) }
         viewModelScope.launch {
             try {
                 val ctx = getApplication<Application>()
-                val port = withContext(Dispatchers.IO) {
-                    LocalMediaRegistry.ensureServer(ctx, s.tracks)
-                }
+                withContext(Dispatchers.IO) { LocalMediaRegistry.ensureServer(ctx, s.tracks) }
                 MediaServerService.start(ctx)
                 val base = LocalMediaRegistry.baseUrl()
-                if (base == null) {
-                    throw IllegalStateException("拿不到本机局域网 IP（确认已连 Wi-Fi）")
-                }
+                    ?: throw IllegalStateException("拿不到本机局域网 IP（确认已连 Wi-Fi）")
                 _state.update { it.copy(serverReady = true, serverUrl = base) }
-                log("本机媒体服务 $base（端口 $port）")
 
-                val playlist = LocalLibrary.toPlaylist(chosen, base)
-                val didl = DidlLiteBuilder.build(playlist)
-                val queueName = QUEUE_NAME
-                val context = QueueContextFormat.DIDL_ONLY.render(queueName, didl)
-
-                withContext(Dispatchers.IO) {
-                    // 先清掉同名旧队列（设备上残留会让 Index 错位），失败忽略
-                    runCatching { client.deleteQueue(queueName) }
-                    client.createQueue(context)
-                    client.setQueueLoopMode(s.loopMode)
-                    client.playQueueWithIndex(queueName, 0)
+                // 曲目地址形如 http://<本机IP>:<port>/t/<id>，由 LocalMediaServer 提供 Range
+                val items = chosen.map {
+                    QueueItem(
+                        url = "$base/t/${it.id}",
+                        title = it.title,
+                        artist = it.artist,
+                        album = it.album,
+                        durationSec = it.durationSec,
+                        mimeType = it.mimeType,
+                    )
                 }
-                _state.update { it.copy(busy = false, pushedCount = chosen.size) }
-                log("已推送 ${chosen.size} 首，循环=${QueueLoopMode.label(s.loopMode)}")
+                val host = deviceHost ?: throw IllegalStateException("拿不到音箱地址（需要先通过 SSDP 发现设备）")
+                val session = PlaybackSession(
+                    deviceUuid = host,
+                    deviceIp = host,
+                    items = items,
+                    index = 0,
+                    loopMode = s.loopMode,
+                )
+                QueuePlaybackService.start(ctx, location, session)
+                _state.update { it.copy(busy = false, pushedCount = items.size) }
+                log("已推送 ${items.size} 首（客户端逐首投流）")
             } catch (t: Throwable) {
                 _state.update { it.copy(busy = false, error = t.message) }
                 log("推送失败：${t.message}")

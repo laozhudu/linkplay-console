@@ -67,6 +67,8 @@ data class NasUiState(
     val rememberedPath: List<NasPathStep> = emptyList(),
     /** 上次没播完的队列（断点续播）。 */
     val resumable: PlaybackSession? = null,
+    /** 多选模式。平时点行=直接播，长按进入多选。 */
+    val selecting: Boolean = false,
 )
 
 /**
@@ -326,6 +328,22 @@ class NasViewModel(
             return
         }
         pushQueue(items.map(::toQueueItem))
+    }
+
+    /**
+     * 点一首就播这一首。
+     *
+     * 为什么要这个：原来听一首歌要「勾选 → 加入队列 → 推出」三步，
+     * 而人的预期是「点哪首放哪首」。多选只用于「攒一批再播」，是次要用法。
+     */
+    fun playNow(entry: BrowseEntry) {
+        if (entry.isContainer || entry.url == null) return
+        pushQueue(listOf(toQueueItem(entry)))
+    }
+
+    /** 多选模式：长按进入，避免平时每行都挂一个勾选框。 */
+    fun setSelecting(on: Boolean) = _state.update {
+        it.copy(selecting = on, selected = if (on) it.selected else emptySet())
     }
 
     /** 「继续上次播放」：从上次断掉的那一首接着推。 */
