@@ -52,8 +52,20 @@ import io.github.laozhudu.linkplay.console.playback.PlayerScreen
 import io.github.laozhudu.linkplay.console.ui.theme.LinkPlayTheme
 import io.github.laozhudu.linkplay.console.library.QueueScreen
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import io.github.laozhudu.linkplay.console.ui.components.AppShapesExpressive
+import io.github.laozhudu.linkplay.console.ui.components.DeviceCard
+import io.github.laozhudu.linkplay.console.ui.components.EmptyState
+import io.github.laozhudu.linkplay.console.ui.components.HeroEntryCard
+import io.github.laozhudu.linkplay.console.ui.components.VSpace
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
+import io.github.laozhudu.linkplay.console.ui.components.AppCard
+import io.github.laozhudu.linkplay.console.ui.components.PillTag
+import io.github.laozhudu.linkplay.console.ui.components.SectionTitle
+import io.github.laozhudu.linkplay.console.ui.theme.StatusColors
 import io.github.laozhudu.linkplay.console.ui.theme.LocalExtraColors
 import io.github.laozhudu.linkplay.console.ui.theme.Spacing
 import io.github.laozhudu.linkplay.console.ui.theme.seedOf
@@ -100,7 +112,7 @@ fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
-                    .padding(horizontal = 16.dp),
+                    .padding(horizontal = Spacing.lg),
             ) {
                 ProvisioningScreen(
                     onDone = { showProvisioning = false },
@@ -119,7 +131,7 @@ fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
-                    .padding(horizontal = 16.dp),
+                    .padding(horizontal = Spacing.lg),
             ) {
                 NasScreen(
                     deviceUuid = state.selectedUuid,
@@ -140,7 +152,7 @@ fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
-                    .padding(horizontal = 16.dp),
+                    .padding(horizontal = Spacing.lg),
             ) {
                 LibraryScreen(
                     deviceIp = state.selectedIp.orEmpty(),
@@ -161,7 +173,7 @@ fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
-                    .padding(horizontal = 16.dp),
+                    .padding(horizontal = Spacing.lg),
             ) {
                 QueueScreen(
                     deviceIp = state.selectedIp.orEmpty(),
@@ -191,7 +203,7 @@ fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(horizontal = 16.dp),
+                .padding(horizontal = Spacing.lg),
         ) {
             state.error?.let {
                 Text(
@@ -232,46 +244,58 @@ private fun DeviceListScreen(
     onProvision: () -> Unit,
 ) {
     var manualIp by remember { mutableStateOf("") }
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        OutlinedTextField(
-            value = manualIp,
-            onValueChange = { manualIp = it },
-            label = { Text("手动输入设备 IP") },
-            singleLine = true,
-            modifier = Modifier.weight(1f),
-        )
-        Spacer(Modifier.width(8.dp))
-        Button(onClick = { onAdd(manualIp); manualIp = "" }) { Text("添加") }
-    }
-    Spacer(Modifier.height(12.dp))
-    Button(onClick = onScan, enabled = !state.scanning, modifier = Modifier.fillMaxWidth()) {
-        Text(if (state.scanning) "正在搜索…" else "SSDP 搜索局域网设备")
-    }
-    Spacer(Modifier.height(8.dp))
-    OutlinedButton(onClick = onProvision, modifier = Modifier.fillMaxWidth()) {
-        Text("新音箱？走 AP 直连配网")
-    }
-    Spacer(Modifier.height(12.dp))
-    if (state.devices.isEmpty()) {
-        Text(
-            text = "尚无设备。SSDP 依赖组播，若路由器隔离了组播，请手动输入 IP。",
-            style = MaterialTheme.typography.bodySmall,
-        )
-    }
-    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        items(state.devices) { device ->
-            Card(
-                onClick = { onSelect(device.ip) },
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-            ) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    Text(device.ip, fontWeight = FontWeight.Medium)
-                    device.server?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                    device.searchTarget?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                }
+
+    Column(Modifier.fillMaxSize()) {
+        // 搜索是列表页的主动作，做成大胶囊；手动输入降为次级，避免两个同等重的入口抢注意力
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp)
+                .clip(AppShapesExpressive.pill)
+                .background(MaterialTheme.colorScheme.primary)
+                .clickable(enabled = !state.scanning, onClick = onScan),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                if (state.scanning) "正在搜索局域网…" else "搜索局域网设备",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onPrimary,
+            )
+        }
+        VSpace(Spacing.md)
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = manualIp,
+                onValueChange = { manualIp = it },
+                label = { Text("手动输入 IP") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(Spacing.sm))
+            Button(onClick = { onAdd(manualIp); manualIp = "" }) { Text("添加") }
+        }
+        VSpace(Spacing.sm)
+        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+            OutlinedButton(onClick = onProvision) { Text("AP 直连配网") }
+        }
+        VSpace(Spacing.md)
+
+        if (state.devices.isEmpty()) {
+            EmptyState(
+                title = "还没有设备",
+                hint = "搜索依赖 SSDP 组播；路由器隔离组播时，直接在上面填 IP 添加。",
+            )
+        }
+
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+            items(state.devices) { device ->
+                DeviceCard(
+                    ip = device.ip,
+                    server = device.server,
+                    searchTarget = device.searchTarget,
+                    onClick = { onSelect(device.ip) },
+                )
             }
         }
     }
@@ -302,45 +326,29 @@ private fun DeviceDetailScreen(
             .fillMaxSize()
             .verticalScroll(rememberScrollState()),
     ) {
-        // 播放页入口：做成大卡片而不是普通按钮 —— 这是最常用的动作，应该一眼能找到
+        // 播放页入口：渐变大卡片。这是最常用的动作，用普通卡片会淹没在设置项里
         val entryPalette = remember(playbackVm) { seedOf(null, state.selectedIp) }
-        Card(
+        HeroEntryCard(
+            title = "播放控制",
+            subtitle = "进度 · 音量 · 循环 · 上下曲",
+            topColor = entryPalette.top,
+            accentColor = entryPalette.accent,
             onClick = onOpenPlayer,
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Color.Transparent),
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(
-                        Brush.linearGradient(listOf(entryPalette.top, entryPalette.accent.copy(alpha = 0.45f))),
-                    )
-                    .padding(Spacing.lg),
-            ) {
-                Column {
-                    Text(
-                        "播放控制",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = LocalExtraColors.current.onBackdrop,
-                    )
-                    Text(
-                        "进度 · 音量 · 循环 · 上下曲",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = LocalExtraColors.current.onBackdropMuted,
-                    )
-                }
-            }
-        }
-        Spacer(Modifier.height(Spacing.md))
+        )
+        VSpace(Spacing.md)
 
         val status = state.status
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        ) {
-            Column(modifier = Modifier.padding(12.dp)) {
-                Text("设备信息", fontWeight = FontWeight.Medium)
-                Spacer(Modifier.height(6.dp))
+        AppCard {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    SectionTitle("设备信息", modifier = Modifier.weight(1f))
+                    if (status != null) {
+                        PillTag(
+                            text = if (status.isOnline) "在线" else "离线",
+                            color = if (status.isOnline) StatusColors.ok else StatusColors.error,
+                        )
+                    }
+                }
+                VSpace(Spacing.xs)
                 if (status == null) {
                     Text("未读取（点击下方刷新）", style = MaterialTheme.typography.bodySmall)
                 } else {
@@ -356,7 +364,6 @@ private fun DeviceDetailScreen(
                     InfoRow("Build", status.build)
                 }
             }
-        }
 
         Spacer(Modifier.height(10.dp))
         // 详情页不再塞整套控制：同一套控制出现在两处必然漂移。
@@ -365,17 +372,18 @@ private fun DeviceDetailScreen(
             vm = playbackVm,
             onOpen = onOpenPlayer,
         )
-        Spacer(Modifier.height(8.dp))
-        OutlinedButton(onClick = onOpenQueue, modifier = Modifier.fillMaxWidth()) {
-            Text("推送手机本地音乐（整个列表）")
+        VSpace(Spacing.sm)
+        // 三个入口做成同构卡片：标题 + 一句说明。比三个一模一样的按钮更容易区分用途
+        AppCard(onClick = onOpenNas) {
+            SectionTitle("NAS 媒体库", "浏览局域网 DLNA 服务器，选中后整列表推送")
         }
-        Spacer(Modifier.height(8.dp))
-        OutlinedButton(onClick = onOpenLibrary, modifier = Modifier.fillMaxWidth()) {
-            Text("音乐库：搜索 / 收藏 / 最近 / 电台")
+        VSpace(Spacing.sm)
+        AppCard(onClick = onOpenLibrary) {
+            SectionTitle("音乐库", "搜索 · 收藏 · 最近播放 · 网络电台")
         }
-        Spacer(Modifier.height(8.dp))
-        OutlinedButton(onClick = onOpenNas, modifier = Modifier.fillMaxWidth()) {
-            Text("NAS 媒体库：浏览并推送整列表")
+        VSpace(Spacing.sm)
+        AppCard(onClick = onOpenQueue) {
+            SectionTitle("手机本地音乐", "整个列表推给音箱（本机 HTTP 服务）")
         }
         Spacer(Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
