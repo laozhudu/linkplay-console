@@ -24,6 +24,17 @@ getPlayerStatus → mode=10 status=play curpos=678→5020 totlen=6000（正是�
 本地服务日志   → [srv] 192.168.99.153 "GET /tone1.mp3" 200
 ```
 
+**用 NAS 真实曲目再验一次**（不依赖本地临时服务）：
+
+```
+setPlayerCmd:play:http://192.168.99.223:8200/MediaItems/515.mp3 → OK
+getPlayerStatus 连读 8 次：status=play，位置 1.1s → 15.6s 单调递增，totlen=863s
+uri（HEX 解码）= http://192.168.99.223:8200/MediaItems/515.mp3
+```
+
+注意：投流后 `Title/Artist/Album` 是空（该固件不从 URL 猜元数据），
+所以**标题要由控制端自己保留**，不能指望设备回读。
+
 意义：**UPnP 的 49152 掉线时不需要重启音箱**，80 端口的 httpapi 就能投流与控音量。
 之前那套「掉线 → reboot → 等 40 秒」从「唯一解」降级为「UPnP 专属功能不可用时的备选」。
 

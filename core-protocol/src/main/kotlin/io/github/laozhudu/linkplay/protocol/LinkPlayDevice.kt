@@ -1,5 +1,6 @@
 package io.github.laozhudu.linkplay.protocol
 
+import io.github.laozhudu.linkplay.protocol.player.FallbackPlaybackEngine
 import io.github.laozhudu.linkplay.protocol.player.HttpApiPlaybackEngine
 import io.github.laozhudu.linkplay.protocol.player.PlaybackEngine
 import io.github.laozhudu.linkplay.protocol.player.UpnpPlaybackEngine
@@ -125,11 +126,24 @@ class LinkPlayDevice private constructor(
     // ---- 播放 ----
 
     /** 取一个可用的播放通道：UPnP 优先，其次 httpapi。都不可用返回 null。 */
+    /**
+     * 取一个播放通道。
+     *
+     * **两条都可用时返回 [FallbackPlaybackEngine]**：UPnP 优先（字段规范、能拿 DIDL 元数据），
+     * 它掉线就自动降到 httpapi 的 80 端口，不再需要重启音箱（docs/14 §0.1 实测）。
+     * 只有一条可用时直接用那一条，不必包一层。
+     */
     fun playback(): PlaybackEngine? {
-        description()?.takeIf { it.avTransportControlUrl != null }?.let {
-            return UpnpPlaybackEngine(UpnpRendererClient(it, upnpTransport))
+        val upnp = description()?.takeIf { it.avTransportControlUrl != null }
+            ?.let { UpnpPlaybackEngine(UpnpRendererClient(it, upnpTransport)) }
+        val http = HttpApiPlaybackEngine(httpClient, ip).takeIf {
+            runCatching { it.probe() }.getOrDefault(false)
         }
-        return HttpApiPlaybackEngine(httpClient, ip).takeIf { it.probe() }
+        return when {
+            upnp != null && http != null -> FallbackPlaybackEngine(upnp, http)
+            upnp != null -> upnp
+            else -> http
+        }
     }
 
     // ---- 队列（整列表推送） ----

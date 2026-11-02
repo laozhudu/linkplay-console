@@ -102,11 +102,16 @@ class UpnpPlaybackEngine(private val client: UpnpRendererClient) : PlaybackEngin
 /**
  * httpapi 通道：走 WiiM 官方文档的 `setPlayerCmd:*`（见 docs/01 §11）。
  *
- * 现状与限制：
- * - `getPlayerStatus` 的字段是字符串，且**没有曲目标题**，标题要另调 `getMetaInfo`；
- * - 直播流 `totlen` 常为 0，进度条不可用；
- * - 老固件（2015 那批）**并不支持**这些命令，探测失败要能优雅退回，
- *   所以 `probe()` 单独暴露出去，由上层决定是否采用这条通道。
+ * 已实测（docs/14 §0.1，2026-11）：这台 2018 年固件的 `setPlayerCmd:*` **完整可用**，
+ * `mute:1` 写入后 `GetMute` 回读为 1，`play:<url>` 能让设备主动来拉流并播完。
+ * 早先「老固件不支持」的结论是探测脚本参数写错导致的误判，已更正。
+ *
+ * 本机实测的字段差异（与官方文档不同，必须按实际处理）：
+ * - `getPlayerStatus` **确实带** `vol` / `mute` / `Title` / `Artist` / `Album` / `uri`，
+ *   文本字段是 HEX 编码（`556E6B6E6F776E` = "Unknown"）；
+ * - 而 `getMetaInfo` 在本机是 `unknown command`，所以**不能依赖它**补标题，
+ *   只能把它当作「某些固件上存在的增强」，用 runCatching 包住；
+ * - 直播流 `totlen` 为 0，进度条应显示为「直播」而不是 0%。
  */
 class HttpApiPlaybackEngine(
     private val client: DeviceHttpClient,
@@ -124,6 +129,7 @@ class HttpApiPlaybackEngine(
 
     override fun snapshot(): PlaybackSnapshot {
         val s = status()
+        // getMetaInfo 只在部分固件存在（本机是 unknown command），能拿到才用
         val meta = runCatching { metadata() }.getOrNull()
         return PlaybackSnapshot(
             state = when (s.playState) {
@@ -133,8 +139,9 @@ class HttpApiPlaybackEngine(
                 PlayState.LOADING -> TransportState.TRANSITIONING
                 PlayState.UNKNOWN -> TransportState.UNKNOWN
             },
-            title = meta?.title,
-            artist = meta?.artist,
+            // 标题优先用 getPlayerStatus 的 HEX 字段（本机可靠），getMetaInfo 兜底
+            title = s.title ?: meta?.title,
+            artist = s.artist ?: meta?.artist,
             albumArtUrl = meta?.albumArtUrl,
             positionSec = s.positionSec,
             durationSec = s.durationSec,
