@@ -43,6 +43,15 @@ data class QueueRunState(
     val deviceOffset: Int = 0,
     /** 这份列表从哪来的（设备 / 本地快照 / 占位），直接显示给用户，避免"看起来像同步了其实没有"。 */
     val sourceNote: String? = null,
+    /**
+     * 这份列表属于哪台设备（按 IP）。
+     *
+     * 为什么必须记：多台音箱时队列是**各归各的**。之前 QueueBus 是全局单例、
+     * 换设备不清空，于是切到 `.164` 后播放页显示的还是 `.153` 的
+     * 「设备列表 122 首 · 第 3 首」，用户一按播放就对着不相干的内容操作
+     * （截图里就是这种情况）。null 表示"不知道归属"，一律按不匹配处理。
+     */
+    val ownerIp: String? = null,
     val error: String? = null,
     val log: List<String> = emptyList(),
 ) {
@@ -51,6 +60,15 @@ data class QueueRunState(
 
 object QueueBus {
     private val _state = MutableStateFlow(QueueRunState())
+
+    /**
+     * 当前这份队列属于哪台设备。
+     *
+     * 用模块级变量而不是只看 state：`begin/restore/clear` 都会新建 `QueueRunState`，
+     * 若每次都要调用方记得传 owner，漏一处的后果就是"列表又串台了"。
+     * 这里统一由 [setOwner] 维护，内部构造时自动带上。
+     */
+    private var currentOwner: String? = null
     val state: StateFlow<QueueRunState> = _state.asStateFlow()
 
     /**
@@ -70,8 +88,25 @@ object QueueBus {
     val hasController: Boolean get() = controller != null
 
     fun begin(items: List<QueueItem>) = _state.update {
-        QueueRunState(running = true, items = items, index = 0, total = items.size, playedCount = 0)
+        QueueRunState(
+            ownerIp = currentOwner,
+            running = true, items = items, index = 0, total = items.size, playedCount = 0,
+        )
     }
+
+    /**
+     * 声明"接下来的队列属于这台设备"。
+     *
+     * 换了设备就**整份丢掉**上一台的列表与日志 —— 多台音箱时队列各归各的，
+     * 继续显示别人的列表会让用户对着不相干的内容按播放。
+     */
+    fun setOwner(deviceIp: String) {
+        if (currentOwner == deviceIp) return
+        currentOwner = deviceIp
+        _state.update { QueueRunState(ownerIp = deviceIp) }
+    }
+
+    fun owner(): String? = currentOwner
 
     fun playing(title: String, index: Int, items: List<QueueItem>? = null) = _state.update {
         it.copy(
@@ -108,6 +143,7 @@ object QueueBus {
         note: String? = null,
     ) = _state.update {
         QueueRunState(
+            ownerIp = currentOwner,
             running = false,
             items = items,
             index = index.coerceIn(0, (items.size - 1).coerceAtLeast(0)),
@@ -135,7 +171,14 @@ object QueueBus {
     /** 停止后保留 items/nowPlaying，方便 UI 显示「上次播到哪」。 */
     fun stopped() = _state.update { it.copy(running = false) }
 
-    fun clear() = _state.update { QueueRunState() }
+    fun clear() = _state.update { QueueRunState(ownerIp = currentOwner) }
+
+    /**
+     * 这台设备的队列是不是"我们手上这份"。
+     *
+     * 调用方（播放页 / 切设备）用它判断：不匹配就必须重读设备，不能继续显示别人的列表。
+     */
+    fun owns(deviceIp: String?): Boolean = currentOwner != null && deviceIp != null && currentOwner == deviceIp
 
     /** 跳到第 [index] 首。服务不在时什么都不做（UI 自己回读状态即可）。 */
     fun skipTo(index: Int) {

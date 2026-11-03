@@ -42,11 +42,13 @@ class HttpUpnpTransport(
             val response = readBody(conn)
             val code = conn.responseCode
             if (code !in 200..299) {
-                val fault = SoapEnvelope.faultCode(response)
-                val desc = SoapEnvelope.faultDescription(response)
-                throw IOException(
-                    "SOAP $code for $soapAction" +
-                        (fault?.let { " (UPnP error $it${desc?.let { d -> ": $d" } ?: ""})" } ?: ""),
+                // 结构化带出 UPnP 错误码：调用方据此决定"降级重试"还是"提示用户选歌"，
+                // 界面层也才能翻译成人话（见 SoapFaultException / UpnpFault）
+                throw SoapFaultException(
+                    httpCode = code,
+                    upnpCode = SoapEnvelope.faultCode(response),
+                    description = SoapEnvelope.faultDescription(response),
+                    action = soapAction.substringAfterLast('#').trim('"'),
                 )
             }
             return response
