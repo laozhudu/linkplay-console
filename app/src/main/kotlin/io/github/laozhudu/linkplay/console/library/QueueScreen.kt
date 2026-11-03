@@ -49,6 +49,7 @@ import io.github.laozhudu.linkplay.console.ui.components.PageHeader
 import io.github.laozhudu.linkplay.console.ui.components.EmptyState
 import io.github.laozhudu.linkplay.console.ui.components.SectionTitle
 import io.github.laozhudu.linkplay.console.ui.components.VSpace
+import io.github.laozhudu.linkplay.console.ui.theme.StatusColors
 import io.github.laozhudu.linkplay.console.ui.theme.Spacing
 import io.github.laozhudu.linkplay.protocol.playqueue.QueueLoopMode
 
@@ -112,7 +113,7 @@ fun QueueScreen(
             state.error?.let { err ->
                 item {
                     AppCard {
-                        Text(err, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                        Text(err, style = MaterialTheme.typography.bodySmall, color = StatusColors.error)
                     }
                 }
             }

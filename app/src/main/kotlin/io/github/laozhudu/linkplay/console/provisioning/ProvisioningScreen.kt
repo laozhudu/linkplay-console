@@ -1,5 +1,6 @@
 package io.github.laozhudu.linkplay.console.provisioning
 
+import io.github.laozhudu.linkplay.console.ui.theme.StatusColors
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -58,11 +59,11 @@ fun ProvisioningScreen(
         StepHeader(state.step)
 
         state.error?.let {
-            Text("· $it", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            Text("· $it", color = StatusColors.error, style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.height(8.dp))
         }
         state.validationError?.let {
-            Text("· $it", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            Text("· $it", color = StatusColors.error, style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.height(8.dp))
         }
 

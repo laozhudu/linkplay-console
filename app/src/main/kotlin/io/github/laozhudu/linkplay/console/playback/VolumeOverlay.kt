@@ -17,7 +17,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
+import io.github.laozhudu.linkplay.console.ui.components.AppShapesExpressive
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -65,7 +65,7 @@ fun VolumeOverlay(
                 modifier = Modifier
                     .padding(top = 72.dp)
                     .width(240.dp)
-                    .clip(RoundedCornerShape(20.dp))
+                    .clip(AppShapesExpressive.squircle)
                     // 半透明深底 + 高对比正文：压在任意页面之上都能读
                     .background(Color(0xF01A1F2A))
                     .padding(horizontal = Spacing.md, vertical = Spacing.sm),
@@ -97,14 +97,14 @@ fun VolumeOverlay(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(6.dp)
-                        .clip(RoundedCornerShape(3.dp))
+                        .clip(AppShapesExpressive.pill)
                         .background(Color(0x33FFFFFF)),
                 ) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth((volume / 100f).coerceIn(0f, 1f))
                             .height(6.dp)
-                            .clip(RoundedCornerShape(3.dp))
+                            .clip(AppShapesExpressive.pill)
                             .background(if (mute) Color(0x66FFFFFF) else Color(0xFF9FD3FF)),
                     )
                 }

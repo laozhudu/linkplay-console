@@ -461,7 +461,7 @@ private fun HomeScreen(
                         Text(
                             err,
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
+                            color = StatusColors.error,
                         )
                     }
                 }

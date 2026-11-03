@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
@@ -35,6 +34,8 @@ import io.github.laozhudu.linkplay.console.ConsoleUiState
 import io.github.laozhudu.linkplay.console.ConsoleViewModel
 import io.github.laozhudu.linkplay.console.GroupMember
 import io.github.laozhudu.linkplay.console.ui.components.AppCard
+import io.github.laozhudu.linkplay.console.ui.components.AppShapesExpressive
+import io.github.laozhudu.linkplay.console.ui.components.PillButton
 import io.github.laozhudu.linkplay.console.ui.components.PillTag
 import io.github.laozhudu.linkplay.console.ui.components.SectionTitle
 import io.github.laozhudu.linkplay.console.ui.components.VSpace
@@ -134,7 +135,7 @@ fun MultiroomCard(
             Text(
                 note,
                 style = MaterialTheme.typography.labelMedium,
-                color = if (grouped) StatusColors.ok else MaterialTheme.colorScheme.error,
+                color = if (grouped) StatusColors.ok else StatusColors.error,
             )
             VSpace(Spacing.xs)
         }
@@ -151,13 +152,13 @@ fun MultiroomCard(
             if (outsiders.isNotEmpty()) {
                 PillButton(
                     text = if (grouped) "＋ 加音箱" else "＋ 组起来",
-                    enabled = !state.multiroomBusy,
                     onClick = { picker = true },
+                    enabled = !state.multiroomBusy,
                     filled = true,
                 )
             }
             if (grouped) {
-                PillButton(text = "刷新状态", enabled = true, onClick = vm::refreshGroup, filled = false)
+                PillButton(text = "刷新状态", onClick = vm::refreshGroup, filled = false)
             }
         }
 
@@ -185,7 +186,7 @@ fun MultiroomCard(
                             style = MaterialTheme.typography.titleMedium,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(14.dp))
+                                .clip(AppShapesExpressive.squircle)
                                 .clickable { picker = false; vm.addToGroup(other) }
                                 .padding(vertical = 12.dp, horizontal = Spacing.sm),
                         )
@@ -212,7 +213,7 @@ private fun MemberBlock(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
+            .clip(AppShapesExpressive.squircle)
             .background(
                 if (member.isMaster) accent.copy(alpha = 0.12f)
                 else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
@@ -226,7 +227,7 @@ private fun MemberBlock(
                     .then(
                         if (onOpen != null) {
                             Modifier
-                                .clip(RoundedCornerShape(8.dp))
+                                .clip(AppShapesExpressive.squircle)
                                 .clickable(onClick = onOpen)
                         } else Modifier,
                     ),
@@ -297,7 +298,7 @@ private fun ChannelChip(label: String, selected: Boolean, onClick: () -> Unit) {
     Box(
         modifier = Modifier
             .padding(end = Spacing.xs)
-            .clip(RoundedCornerShape(10.dp))
+            .clip(AppShapesExpressive.pill)
             .background(
                 if (selected) MaterialTheme.colorScheme.primary
                 else MaterialTheme.colorScheme.surfaceVariant,
@@ -311,22 +312,5 @@ private fun ChannelChip(label: String, selected: Boolean, onClick: () -> Unit) {
             color = if (selected) MaterialTheme.colorScheme.onPrimary
             else MaterialTheme.colorScheme.onSurfaceVariant,
         )
-    }
-}
-
-@Composable
-private fun PillButton(text: String, enabled: Boolean, onClick: () -> Unit, filled: Boolean) {
-    val bg = if (filled) MaterialTheme.colorScheme.primary
-    else MaterialTheme.colorScheme.surfaceVariant
-    val fg = if (filled) MaterialTheme.colorScheme.onPrimary
-    else MaterialTheme.colorScheme.onSurfaceVariant
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(50))
-            .background(if (enabled) bg else bg.copy(alpha = 0.4f))
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = Spacing.md, vertical = 9.dp),
-    ) {
-        Text(text, style = MaterialTheme.typography.labelLarge, color = fg)
     }
 }

@@ -49,6 +49,7 @@ import io.github.laozhudu.linkplay.console.ui.components.EmptyState
 import io.github.laozhudu.linkplay.console.ui.components.PillTag
 import io.github.laozhudu.linkplay.console.ui.components.SectionTitle
 import io.github.laozhudu.linkplay.console.ui.components.VSpace
+import io.github.laozhudu.linkplay.console.ui.theme.StatusColors
 import io.github.laozhudu.linkplay.console.ui.theme.LocalExtraColors
 import io.github.laozhudu.linkplay.console.ui.theme.Spacing
 import io.github.laozhudu.linkplay.console.ui.theme.seedOf
@@ -118,7 +119,7 @@ fun NasScreen(
             state.error?.let { err ->
                 item {
                     AppCard {
-                        Text(err, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                        Text(err, style = MaterialTheme.typography.bodySmall, color = StatusColors.error)
                         VSpace(Spacing.xs)
                         OutlinedButton(onClick = vm::clearError) { Text("知道了") }
                     }

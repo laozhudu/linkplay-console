@@ -8,6 +8,8 @@ import io.github.laozhudu.linkplay.protocol.LinkPlayDevice
 import io.github.laozhudu.linkplay.protocol.library.LibrarySearch
 import io.github.laozhudu.linkplay.protocol.library.SearchHit
 import io.github.laozhudu.linkplay.console.playback.QueueBus
+import io.github.laozhudu.linkplay.console.playback.DeviceQueuePush
+import io.github.laozhudu.linkplay.protocol.DeviceHttpClient
 import io.github.laozhudu.linkplay.console.playback.QueuePlaybackService
 import io.github.laozhudu.linkplay.protocol.library.TrackRecord
 import io.github.laozhudu.linkplay.protocol.queue.PlayFromList
@@ -163,15 +165,27 @@ class LibraryViewModel(
                 }
                 if (items.isEmpty()) throw IllegalStateException("这些曲目都没有可播的地址")
 
+                val startAt = start.coerceIn(0, items.lastIndex)
                 val session = PlaybackSession(
                     deviceUuid = deviceLabel ?: deviceIp,
                     deviceIp = deviceIp,
                     items = items,
-                    index = start.coerceIn(0, items.lastIndex),
+                    index = startAt,
                     loopMode = ClientSideQueue.LOOP_ALL,
                 )
-                withContext(Dispatchers.IO) {
-                    QueuePlaybackService.start(getApplication(), location, session)
+                // 先试「整列表交给设备」：App 退出后设备仍能继续播，设备的上一首/下一首也生效
+                val pushed = withContext(Dispatchers.IO) {
+                    DeviceQueuePush.push(DeviceHttpClient(), deviceIp, items, startAt)
+                }
+                if (pushed.ok) {
+                    QueueBus.restore(items, startAt, items.getOrNull(startAt)?.title)
+                    QueueBus.markDeviceOwned(pushed.offset)
+                    log(pushed.detail + "（设备侧队列）")
+                } else {
+                    log("设备未接收整列表：${pushed.detail} —— 退回客户端逐首投流")
+                    withContext(Dispatchers.IO) {
+                        QueuePlaybackService.start(getApplication(), location, session)
+                    }
                 }
                 val recent = withContext(Dispatchers.IO) {
                     store.recents.record(track, System.currentTimeMillis())

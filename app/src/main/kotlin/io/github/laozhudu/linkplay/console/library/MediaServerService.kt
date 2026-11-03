@@ -118,19 +118,8 @@ object LocalMediaRegistry {
     fun isRunning(): Boolean = server != null && port > 0
 
     /** 取本机在当前网络下的 IPv4 地址（音箱要能访问到，所以不能用 127.0.0.1）。 */
-    fun localIpAddress(): String? {
-        return try {
-            java.net.NetworkInterface.getNetworkInterfaces().toList()
-                .asSequence()
-                .filter { it.isUp && !it.isLoopback }
-                .flatMap { it.inetAddresses.toList().asSequence() }
-                .filterIsInstance<java.net.Inet4Address>()
-                .firstOrNull { !it.isLoopbackAddress }
-                ?.hostAddress
-        } catch (e: Exception) {
-            null
-        }
-    }
+    /** 兼容旧调用点；实现已移到 [io.github.laozhudu.linkplay.console.util.Net]。 */
+    fun localIpAddress(): String? = io.github.laozhudu.linkplay.console.util.Net.localIpv4()
 
     fun baseUrl(): String? {
         val ip = localIpAddress() ?: return null
