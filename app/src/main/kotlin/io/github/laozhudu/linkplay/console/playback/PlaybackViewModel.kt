@@ -22,6 +22,8 @@ import io.github.laozhudu.linkplay.protocol.player.DeviceGeneration
 import io.github.laozhudu.linkplay.protocol.player.UpnpPlaybackEngine
 import io.github.laozhudu.linkplay.protocol.upnp.PositionInfo
 import io.github.laozhudu.linkplay.protocol.upnp.TransportState
+import io.github.laozhudu.linkplay.protocol.upnp.SoapFaultException
+import io.github.laozhudu.linkplay.protocol.upnp.UpnpFault
 import io.github.laozhudu.linkplay.protocol.upnp.UpnpRendererClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
@@ -82,6 +84,13 @@ data class PlaybackUiState(
     /** 已尝试过读标签的地址，避免重复拉字节。 */
     val tagsLoadedFor: String? = null,
     val error: String? = null,
+    /**
+     * 可执行提示（不是故障）。
+     *
+     * 例如"这台音箱还没加载媒体，先去选一首" —— 用红色报错去说这句话，
+     * 用户会以为 App 坏了。二者分开：[error] 红、[notice] 中性。
+     */
+    val notice: String? = null,
     val log: List<String> = emptyList(),
 ) {
     val progress: Float
@@ -114,6 +123,8 @@ class PlaybackViewModel(
     private var deviceUuid: String? = null,
     /** 会话仓库。传 null 表示"不恢复上次状态"（预览/测试用）。 */
     private val sessionStore: SessionStore? = null,
+    /** 应用上下文：只用于在换设备时停掉绑定旧设备的投流服务。 */
+    private val appContext: android.content.Context? = null,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(PlaybackUiState())
@@ -176,6 +187,14 @@ class PlaybackViewModel(
         deviceIp = ip
         location = newLocation
         deviceUuid = uuid
+
+        // 队列**按设备归属**：换了设备就把上一台的列表整份丢掉，
+        // 否则播放页会显示「doss1 … 设备列表 122 首 · 第 3 首」这种别人的数据（用户实测截图）
+        //
+        // 同时停掉客户端投流服务：它绑定的是**一台设备**的地址，
+        // 留着它会让旧设备继续被我们逐首投流，而界面上已经是新设备 —— 两边对不上。
+        appContext?.let { ctx -> runCatching { QueuePlaybackService.stop(ctx) } }
+        QueueBus.setOwner(ip)
 
         // 只保留用户正在输入的投流参数；其余全清（尤其是 error 与设备队列数字）
         _state.update {
@@ -394,7 +413,81 @@ class PlaybackViewModel(
         return ext.takeIf { it in setOf("mp3", "m4a", "aac", "flac", "ogg", "wav") } ?: "mp3"
     }
 
-    fun play() = act("播放") { engine!!.resume() }
+    /**
+     * 播放。
+     *
+     * ## 为什么要专门处理 704
+     *
+     * 真机实测（`.164`，`GetMediaInfo` 的 `PlayMedium=UNKNOWN`）：设备**没有加载媒体**时
+     * `AVTransport.Play` 回 `500 / 704 play not allowed`。原来我们把这个原始报文
+     * 直接怼到界面上（用户看到的红字是 `SOAP 500 for "...AVTransport:1#Play"`）。
+     * 原厂从不会碰到这条 —— 它点播放前一定先下发过 URI/队列。
+     *
+     * 这里的顺序与原厂一致：
+     * 1. 设备自己握着队列（`plicount>0`）→ 先 `AVTransport.Play`，失败再试 httpapi `play`；
+     * 2. 设备没有队列、本地队列有内容 → 先把队列交给设备，再播；
+     * 3. 都没有 → 明确提示去选歌（不是"故障"）。
+     */
+    fun play() {
+        if (_state.value.busy) return
+        val e = engine ?: run { httpAct("播放", "setPlayerCmd:play"); return }
+        _state.update { it.copy(busy = true, error = null) }
+        viewModelScope.launch {
+            val gen = generation.current()
+            val hasDeviceQueue = _state.value.deviceQueueCount > 0
+            val localItems = QueueBus.state.value.items
+
+            // ③ 什么都没有：这不是错误，是"该选歌了"
+            if (!hasDeviceQueue && localItems.isEmpty()) {
+                _state.update {
+                    it.copy(busy = false, error = null, notice = UpnpFault.message(UpnpFault.NO_MEDIA))
+                }
+                log("播放：设备没有队列，本地队列也空")
+                return@launch
+            }
+
+            // ② 本地有队列但设备没有：把队列交给设备（原厂点"全部播放"就是这个动作）
+            if (!hasDeviceQueue && localItems.isNotEmpty()) {
+                val ok = withContext(Dispatchers.IO) {
+                    runCatching { DevicePlaylistGateway.push(deviceIp, location, localItems, 0) }.getOrNull()
+                }
+                if (ok?.ok == true) {
+                    if (generation.isStale(gen)) return@launch
+                    _state.update { it.copy(busy = false, error = null) }
+                    log("播放：已把 ${localItems.size} 首交给设备（${ok.detail}）")
+                    QueueBus.markDeviceOwned(0)
+                    refreshOnce(silent = true)
+                    return@launch
+                }
+            }
+
+            // ① 设备有队列：直接播；Play 被拒就换 httpapi 再试一次
+            val failure = withContext(Dispatchers.IO) { runCatching { e.resume() }.exceptionOrNull() }
+            if (generation.isStale(gen)) return@launch
+            if (failure == null) {
+                _state.update { it.copy(busy = false, error = null, notice = null) }
+                log("播放 ok")
+                refreshOnce(silent = true)
+                return@launch
+            }
+
+            val upnpCode = (failure as? SoapFaultException)?.upnpCode
+            if (UpnpFault.isRetryableOnAnotherChannel(upnpCode)) {
+                val retry = withContext(Dispatchers.IO) {
+                    runCatching { device.send(deviceIp, "setPlayerCmd:play") }.getOrNull()
+                }
+                log("AVTransport.Play 被拒（UPnP $upnpCode），httpapi 兜底 → ${retry ?: "失败"}")
+                if (retry != null) {
+                    _state.update { it.copy(busy = false, error = null) }
+                    refreshOnce(silent = true)
+                    return@launch
+                }
+            }
+            // 翻译成人话再显示；原始报文只进日志
+            _state.update { it.copy(busy = false, error = UpnpFault.friendlyOf(failure)) }
+            log("播放失败：${failure.message}")
+        }
+    }
 
     /**
      * 下一首：走播放引擎（UPnP 的 AVTransport.Next，原厂做法）。
@@ -558,7 +651,8 @@ class PlaybackViewModel(
         viewModelScope.launch {
             val failure = runCatching { withContext(Dispatchers.IO) { block() } }.exceptionOrNull()
             if (failure != null) {
-                _state.update { it.copy(busy = false, error = failure.message) }
+                // 界面只显示翻译过的一句话；原始 SOAP 报文只进日志（用户看不懂也不该看懂）
+                _state.update { it.copy(busy = false, error = UpnpFault.friendlyOf(failure)) }
                 log("$label 失败：${failure.message}")
             } else {
                 _state.update { it.copy(busy = false) }

@@ -150,6 +150,7 @@ fun PlayerScreen(
                     location = deviceLocation,
                     deviceUuid = deviceUuid,
                     sessionStore = SessionStore.of(appContext),
+                    appContext = appContext,
                 )
             }
         },
@@ -497,7 +498,26 @@ fun PlayerScreen(
             // 输入源：可切换，且当前源固定排第一（横向滚动时永远看得见）
             InputSourceRow(state = state, vm = vm)
 
-            (state.error ?: state.unavailableReason)?.let { msg ->
+            // 故障用红字；"该选歌了"这种可执行提示用中性色，别让人以为 App 坏了
+            state.error?.let { msg ->
+                Text(
+                    msg,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = StatusColors.error,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            state.notice?.let { msg ->
+                Text(
+                    msg,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = StatusColors.warn,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (state.error == null) state.unavailableReason?.let { msg ->
                 Text(
                     msg,
                     style = MaterialTheme.typography.labelSmall,
