@@ -51,8 +51,16 @@ object DiagnosticsReport {
         crash: String?,
         devices: List<DeviceLine>,
         issues: List<String>,
+        /**
+         * 各模块自报的状态（[DiagnosticsHub.render] 的输出）。
+         *
+         * 给了它就**不再渲染 [devices] 段** —— 因为 Hub 里已经有一段「设备」，
+         * 两边都画就是同一份信息出现两次，截图时白白占掉半屏。
+         * 传 null 时保持老行为（只有设备段），这样单测与"没有 Hub 的调用方"都不受影响。
+         */
+        sections: String? = null,
     ): String = buildString {
-        appendLine("=== LinkPlay Console 诊断报告 ===")
+        appendLine("=== 声控台 诊断报告 ===")
         appendLine("版本：$version")
         appendLine("时间：$now")
         appendLine()
@@ -70,7 +78,20 @@ object DiagnosticsReport {
         }
         appendLine()
 
-        // ---- 2. 设备 ----
+        // ---- 2. 模块状态（Hub 已注册的段）或设备表 ----
+        if (sections != null) {
+            append(sections)
+            appendLine()
+        } else {
+            appendDeviceSection(devices)
+        }
+
+        // ---- 3. 运行期问题 ----
+        appendIssues(issues)
+    }
+
+    /** 老路径：只画设备表（单测与没有 Hub 的调用方用）。 */
+    private fun StringBuilder.appendDeviceSection(devices: List<DeviceLine>) {
         appendLine("[设备 ${devices.size} 台]")
         if (devices.isEmpty()) {
             appendLine("  没有已保存的设备")
@@ -93,8 +114,9 @@ object DiagnosticsReport {
             }
         }
         appendLine()
+    }
 
-        // ---- 3. 运行期问题 ----
+    private fun StringBuilder.appendIssues(issues: List<String>) {
         appendLine("[运行期问题 ${issues.size} 条（新→旧）]")
         if (issues.isEmpty()) {
             appendLine("  无")

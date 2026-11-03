@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import io.github.laozhudu.linkplay.console.diagnostics.DiagnosticsHub
 import io.github.laozhudu.linkplay.console.diagnostics.safeLaunch
 
 data class PlaybackUiState(
@@ -164,6 +165,7 @@ class PlaybackViewModel(
     private var relay: RelayMediaServer? = null
 
     init {
+        registerDiagnostics()
         safeLaunch("PlaybackViewModel") { prepare() }
     }
 
@@ -391,8 +393,36 @@ class PlaybackViewModel(
         }
     }
 
+    /**
+     * 把播放状态注册进诊断页。
+     *
+     * 为什么在这里而不是界面里读：`PlaybackUiState` 是私有的 StateFlow，
+     * 界面读得到的是"渲染后"的样子；诊断要的是引擎通道、设备队列位置、
+     * 起播失败原因这些原始值 —— 它们只在 ViewModel 里。
+     *
+     * 注销在 [onCleared] 里做，见 [DiagnosticsHub] 的类注释（切设备会重建实例）。
+     */
+    private fun registerDiagnostics() {
+        DiagnosticsHub.register("playback", "播放") {
+            val s = _state.value
+            buildString {
+                appendLine("  通道=${s.channel ?: "未建立"}  就绪=${s.ready}  准备中=${s.preparing}")
+                s.unavailableReason?.let { appendLine("  不可用原因=$it") }
+                appendLine("  输入源=${s.sourceLabel ?: "-"}（id=${s.sourceId ?: "-"}, mode=${s.mode ?: "-"}）")
+                appendLine("  传输态=${s.state}  曲目=${s.title ?: "-"}")
+                appendLine("  位置=${s.positionSec}s/${s.durationSec}s  音量=${s.volume}  静音=${s.mute}  循环=${s.loopMode}")
+                appendLine("  设备队列=${s.deviceQueueCount} 首 · 第 ${s.deviceQueueIndex + 1} 首")
+                appendLine("  封面=${if (s.embeddedCover != null) "${s.embeddedCover!!.size}B（内嵌）" else (s.albumArtUrl ?: "无")}")
+                appendLine("  歌词=${if (s.lyrics.isNullOrBlank()) "无" else "${s.lyrics!!.length} 字"}")
+                s.notice?.let { appendLine("  提示=$it") }
+            }
+        }
+    }
+
     /** 转发服务占着端口，页面销毁时要还回去。 */
     override fun onCleared() {
+        // 必须注销：切设备会重建本 VM，旧实例留在注册表里会显示上一台的状态
+        DiagnosticsHub.unregister("playback")
         relay?.stop()
         relay = null
         super.onCleared()

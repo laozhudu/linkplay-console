@@ -1,4 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">LinkPlay Console</string>
+    <!--
+      应用名（桌面图标下显示的名字）。
+
+      为什么叫「声控台」：
+      - 声 = 音频；控 = 遥控；台 = 控制台，也指"多台设备"
+      - 三字，中文里好念好记，且不会和"某某音乐"混淆 —— 这不是播放器，是遥控器
+      - 与项目代号 linkplay-console 的 console 对应，直译就是"声控台"
+
+      备选（要换只改这一行）：「一屋声」（强调多房间同步）、
+      「音箱管家」（最直白，但"管家"偏土）。
+    -->
+    <string name="app_name">声控台</string>
 </resources>
