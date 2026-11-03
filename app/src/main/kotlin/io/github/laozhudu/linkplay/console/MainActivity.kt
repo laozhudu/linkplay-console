@@ -78,6 +78,7 @@ import io.github.laozhudu.linkplay.console.playback.VolumeOsd
 import io.github.laozhudu.linkplay.console.playback.VolumeOverlay
 import io.github.laozhudu.linkplay.console.playback.QueueRunState
 import io.github.laozhudu.linkplay.console.provisioning.ProvisioningScreen
+import io.github.laozhudu.linkplay.console.provisioning.WpsGuideScreen
 import io.github.laozhudu.linkplay.console.radio.RadioScreen
 import io.github.laozhudu.linkplay.console.ui.components.AppCard
 import io.github.laozhudu.linkplay.console.ui.components.AppShapesExpressive
@@ -157,7 +158,7 @@ private enum class Tab(val label: String, val glyph: String) {
 }
 
 /** 二级页面：从一级页推进去，返回即回一级。 */
-private enum class SubPage { Nas, LocalQueue, Library, Radio, Settings, Provisioning, DeviceContent, Online }
+private enum class SubPage { Nas, LocalQueue, Library, Radio, Settings, Provisioning, DeviceContent, Online, Wps }
 
 @Composable
 fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
@@ -274,6 +275,14 @@ private fun ConsoleBody(vm: ConsoleViewModel) {
             SubPage.Provisioning -> ProvisioningScreen(
                 onDone = { sub = null; tab = Tab.Devices },
                 onBack = { sub = null },
+                onOpenWps = { sub = SubPage.Wps },
+            )
+
+            SubPage.Wps -> WpsGuideScreen(
+                state = state,
+                onRescan = { vm.scan() },
+                onBack = { sub = SubPage.Provisioning },
+                onDone = { sub = null; tab = Tab.Devices },
             )
             }
         }

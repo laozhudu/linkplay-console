@@ -48,6 +48,8 @@ import io.github.laozhudu.linkplay.protocol.ProvisioningResult
 fun ProvisioningScreen(
     onDone: () -> Unit,
     onBack: () -> Unit,
+    /** 改走 WPS 配网（让音箱自己跟路由器配对）。 */
+    onOpenWps: () -> Unit = {},
     vm: ProvisioningViewModel = viewModel(),
 ) {
     val state by vm.state.collectAsState()
@@ -57,6 +59,18 @@ fun ProvisioningScreen(
             .verticalScroll(rememberScrollState()),
     ) {
         StepHeader(state.step)
+
+        // WPS 是另一条配网路径：不用手机中转，让音箱自己跟路由器配对。
+        // 放在步骤头下面而不是页尾 —— 用户走错路时应该第一时间看到另一条路。
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "音箱有 WPS 键？可以让它自己连路由器。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = onOpenWps) { Text("用 WPS 配网") }
+        }
 
         state.error?.let {
             Text("· $it", color = StatusColors.error, style = MaterialTheme.typography.bodySmall)
