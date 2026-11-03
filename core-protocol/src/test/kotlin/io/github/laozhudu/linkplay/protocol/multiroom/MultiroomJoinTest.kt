@@ -29,7 +29,7 @@ class MultiroomJoinTest {
     }
 
     @Test
-    fun `无密码主机生成 OPEN 命令，ssid 用小写 hex`() {
+    fun `无密码主机生成 OPEN 命令，ssid 用大写 hex 且无 multiroom 前缀`() {
         val http = FakeHttp()
         val c = MultiroomClient(http)
         c.joinGroup(
@@ -41,13 +41,11 @@ class MultiroomJoinTest {
         // 命令要发给从机
         assertEquals("192.168.99.153", http.sent.last().first)
         val cmd = http.sent.last().second
-        val expected = "multiroom:ConnnectAP:192.168.99.164:ConnectMasterAp:" +
-            "ssid=${MultiroomClient.hexLower("DOSS DS-1831_400C")}" +
-            ":ch=6:auth=OPEN:encry=NONE:pwd=:chext=1"
+        // 真机验证过的那条：ConnectMasterAp（无 multiroom 前缀）+ 大写 hex + chext=0
+        val expected = "ConnectMasterAp:" +
+            "ssid=${MultiroomClient.hexUpper("DOSS DS-1831_400C")}" +
+            ":ch=6:auth=OPEN:encry=NONE:pwd=:chext=0"
         assertEquals(expected, cmd)
-        // 小写 hex，不能是大写（普通配网才用大写）
-        assertTrue(cmd.contains(MultiroomClient.hexLower("DOSS DS-1831_400C")))
-        assertFalse(cmd.contains(MultiroomClient.hexLower("DOSS DS-1831_400C").uppercase()))
     }
 
     @Test
@@ -111,7 +109,7 @@ class MultiroomJoinTest {
         )
         assertFalse(ok)
         // 发过成组命令
-        assertTrue(http.sent.any { it.second.contains("multiroom:ConnnectAP:") })
+        assertTrue(http.sent.any { it.second.startsWith("ConnectMasterAp:") })
     }
 
     @Test
