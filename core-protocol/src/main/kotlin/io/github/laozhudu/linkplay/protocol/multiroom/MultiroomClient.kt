@@ -35,8 +35,18 @@ data class SlaveInfo(
     val channel: Int? = null,
     /** 电量百分比（`slave_list[].battery`，真机从机返回 60/70）。 */
     val battery: Int? = null,
+    /**
+     * `mask != 0`。
+     *
+     * **注意语义**：真机验证 `SlaveMask` 之后 `mask` 由 0 变 1，而设备**仍在组里**、
+     * 只是不出声。所以这个字段实际含义是「被屏蔽」，不是「是否在组里」
+     * （在不在组里看它是否出现在 `slave_list` 中）。名字是老代码留下的，用 [masked] 读。
+     */
     val inGroup: Boolean = false,
-)
+) {
+    /** 是否被屏蔽（`mask != 0`）：不出声，但仍在组里。 */
+    val masked: Boolean get() = inGroup
+}
 
 /**
  * 多房间（LinkPlay 的 multiroom）。

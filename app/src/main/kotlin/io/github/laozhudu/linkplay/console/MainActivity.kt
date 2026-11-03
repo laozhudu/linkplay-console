@@ -64,6 +64,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import io.github.laozhudu.linkplay.console.device.DeviceContentScreen
 import io.github.laozhudu.linkplay.console.device.DeviceSettingsScreen
 import io.github.laozhudu.linkplay.console.library.LibraryScreen
 import io.github.laozhudu.linkplay.console.library.QueueScreen
@@ -154,7 +155,7 @@ private enum class Tab(val label: String, val glyph: String) {
 }
 
 /** 二级页面：从一级页推进去，返回即回一级。 */
-private enum class SubPage { Nas, LocalQueue, Library, Radio, Settings, Provisioning }
+private enum class SubPage { Nas, LocalQueue, Library, Radio, Settings, Provisioning, DeviceContent }
 
 @Composable
 fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
@@ -249,6 +250,12 @@ private fun ConsoleBody(vm: ConsoleViewModel) {
                 deviceUuid = state.selectedUuid,
             )
 
+            SubPage.DeviceContent -> DeviceContentScreen(
+                state = state,
+                vm = vm,
+                onBack = { sub = null },
+            )
+
             SubPage.Settings -> DeviceSettingsScreen(
                 state = state,
                 vm = vm,
@@ -307,6 +314,7 @@ private fun ConsoleBody(vm: ConsoleViewModel) {
                         vm.open(device)
                         sub = SubPage.Settings
                     },
+                    onOpenContent = { sub = SubPage.DeviceContent },
                 )
 
                 Tab.Player -> if (state.selectedIp == null) {
@@ -460,6 +468,8 @@ private fun HomeScreen(
     onProvision: () -> Unit,
     /** 齿轮：进这台设备的设置页（原厂卡片右上角就是齿轮）。 */
     onOpenSettings: (SavedDevice) -> Unit,
+    /** 齿轮菜单里的「设备内容」（预设键 / 固件升级）。 */
+    onOpenContent: () -> Unit = {},
 ) {
     val extras = LocalExtraColors.current
     var showAdd by remember { mutableStateOf(false) }
@@ -467,6 +477,7 @@ private fun HomeScreen(
 
     // 齿轮点开的设备操作菜单（改名 / 删除 / 进设置）
     var menuTarget by remember { mutableStateOf<SavedDevice?>(null) }
+    var sleepMenu by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<SavedDevice?>(null) }
     var deleteTarget by remember { mutableStateOf<SavedDevice?>(null) }
 
@@ -568,12 +579,16 @@ private fun HomeScreen(
                     drag = dragState,
                     siblingCount = state.saved.size,
                     isGroupMaster = state.groupMasterIp != null && device.ip == state.groupMasterIp,
+                    masked = state.groupMembers.firstOrNull {
+                        it.uuid?.equals(device.uuid, ignoreCase = true) == true
+                    }?.masked == true,
                     onCenter = { c -> centers[device.uuid] = c },
                     onOpen = { onOpenDevice(device) },
                     onSettings = { onOpenSettings(device) },
                     onVolume = { vm.setCardVolume(device, it) },
                     onChannel = { vm.cycleCardChannel(device) },
                     onUngroup = { vm.ungroupCard(device) },
+                    onMask = { vm.toggleMask(device) },
                     onRename = { menuTarget = device },
                     onDropOn = { targetUuid ->
                         state.saved.firstOrNull { it.uuid == targetUuid }?.let { vm.groupByDrag(device, it) }
@@ -711,6 +726,20 @@ private fun HomeScreen(
                         deleteTarget = target
                         menuTarget = null
                     }) { Text("删除这台音箱") }
+                    // 设备内容（原厂 DeviceContentActivity）：预设键 + 固件升级
+                    TextButton(onClick = { vm.open(target); onOpenContent(); menuTarget = null }) {
+                        Text("设备内容（预设键 / 固件）")
+                    }
+                    // 定时关闭（原厂设备菜单第四项）：纯客户端倒计时，到点由 App 下发停止
+                    TextButton(onClick = { sleepMenu = true; menuTarget = null }) {
+                        Text(
+                            if (state.sleepTimer.active) {
+                                "定时关闭（剩 ${state.sleepTimer.remainingText(state.nowMs)}）"
+                            } else {
+                                "定时关闭"
+                            },
+                        )
+                    }
                     TextButton(onClick = { onOpenSettings(target); menuTarget = null }) { Text("设备信息 / 设置") }
                 }
             },
@@ -745,6 +774,44 @@ private fun HomeScreen(
                 }) { Text("保存") }
             },
             dismissButton = { TextButton(onClick = { renameTarget = null }) { Text("取消") } },
+        )
+    }
+
+    if (sleepMenu) {
+        AlertDialog(
+            onDismissRequest = { sleepMenu = false },
+            title = { Text("定时关闭") },
+            text = {
+                Column {
+                    Text(
+                        if (state.sleepTimer.active) {
+                            "当前还剩 ${state.sleepTimer.remainingText(state.nowMs)}"
+                        } else {
+                            "到点由 App 下发停止（原厂也是客户端倒计时）"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    VSpace(Spacing.xs)
+                    io.github.laozhudu.linkplay.protocol.player.SleepTimer.PRESETS.chunked(3).forEach { row ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                            row.forEach { minutes ->
+                                TextButton(onClick = {
+                                    vm.setSleepTimer(minutes)
+                                    sleepMenu = false
+                                }) { Text("$minutes 分钟") }
+                            }
+                        }
+                    }
+                    if (state.sleepTimer.active) {
+                        TextButton(onClick = {
+                            vm.cancelSleepTimer()
+                            sleepMenu = false
+                        }) { Text("取消定时") }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { sleepMenu = false }) { Text("关闭") } },
         )
     }
 
@@ -803,12 +870,15 @@ private fun DraggableDeviceCard(
     siblingCount: Int,
     /** 这台是不是当前组的主机。 */
     isGroupMaster: Boolean,
+    /** 这台是否已被屏蔽（`mask=1`）。 */
+    masked: Boolean,
     onCenter: (Offset) -> Unit,
     onOpen: () -> Unit,
     onSettings: () -> Unit,
     onVolume: (Int) -> Unit,
     onChannel: () -> Unit,
     onUngroup: () -> Unit,
+    onMask: () -> Unit,
     onRename: () -> Unit,
     onDropOn: (String) -> Unit,
 ) {
@@ -877,13 +947,16 @@ private fun DraggableDeviceCard(
             groupedUnder = groupedUnder,
             card = card,
             dimmed = dragging,
-            // 主机自己也算法"在组里"（它的 slave_list 非空）
+            // 主机自己也算"在组里"（它的 slave_list 非空）
             inGroup = groupedUnder != null || isGroupMaster,
+            isMaster = isGroupMaster,
+            masked = masked,
             onOpen = onOpen,
             onSettings = onSettings,
             onVolume = onVolume,
             onChannel = onChannel,
             onUngroup = onUngroup,
+            onMask = onMask,
             onRename = onRename,
         )
     }
@@ -920,11 +993,16 @@ private fun DeviceCardRow(
     dimmed: Boolean = false,
     /** 在组里（主机或从机）—— 声道标签才可点。 */
     inGroup: Boolean = false,
+    /** 主机（不能屏蔽、不能改声道）。 */
+    isMaster: Boolean = false,
+    /** 已被屏蔽（`mask=1`，不出声但留在组里）。 */
+    masked: Boolean = false,
     onOpen: () -> Unit,
     onSettings: () -> Unit,
     onVolume: (Int) -> Unit,
     onChannel: () -> Unit = {},
     onUngroup: () -> Unit = {},
+    onMask: () -> Unit = {},
     /** 齿轮：打开这台设备的操作菜单。 */
     onRename: () -> Unit = {},
 ) {

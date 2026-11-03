@@ -109,7 +109,13 @@ object LinkPlayCommands {
     fun slaveDeviceName(slaveIp: String, name: String): String =
         "multiroom:SlaveDeviceName:$slaveIp:" + urlEncode(name)
 
-    /** 把从机加入本机群组（ip 为掩码串，按设备返回的 mask 列表下发）。 */
+    /**
+     * 从机「屏蔽」（`mask=1`：不出声，但仍在组里 —— 不是退出组）。
+     *
+     * 真机验证（2026-11-03，`.164` 主机 + `10.10.10.92` 从机）：
+     * `SlaveMask` 后 `slave_list[].mask` 由 0 → 1，`SlaveUnMask` 后回 0。
+     * 参数就是单个从机 IP（原厂 `com.wifiaudio.a.v.b(String, String)` 直接拼 IP）。
+     */
     fun slaveMask(ips: String): String = "multiroom:SlaveMask:$ips"
 
     fun slaveUnMask(ips: String): String = "multiroom:SlaveUnMask:$ips"
@@ -120,12 +126,27 @@ object LinkPlayCommands {
 
     fun firmwareUpdateStart(): String = "getMvRemoteUpdateStart"
 
+    /**
+     * 六键预设：`MCUKeyShortClick:<1..6>`（原厂 `DeviceContentActivity` 的预设列表就是它）。
+     *
+     * 入参是**界面上第几个键（0 基）**，下发时 +1 —— 与反编译的
+     * `com.wifiaudio.view.pagesdevcenter.i`（`i + 1`）一致。
+     * 真机 `.164` 发 `MCUKeyShortClick:1` 回 `OK`。
+     */
+    fun presetKey(uiIndex: Int): String = "MCUKeyShortClick:${(uiIndex + 1).coerceIn(1, 6)}"
+
+    /** 旧配网的直连方式：`setNetwork:<0|1>:<ssid[:password]>`（原厂 `com.wifiaudio.a.i`）。 */
+    fun setNetworkDirect(ssid: String, password: String): String =
+        if (password.isEmpty()) "setNetwork:0:$ssid" else "setNetwork:1:$ssid:$password"
+
+    /** EasyLink 直连配网收尾（原厂 smartlink 库）。 */
+    fun easyLinkStop(): String = "EasyLinkResponseStop"
+
     fun firmwareUpdateStatus(): String = "getMvRemoteUpdateStatus"
 
     fun firmwareDownloadStatus(): String = "getMvRomDownloadStatus"
 
     fun firmwareBurnPercent(): String = "getMvRomBurnPrecent"
-
 
     // ---- 播放控制（WiiM 官方 HTTP API v1.2 §2.3；老固件可能不支持，需探测） ----
 
