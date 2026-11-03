@@ -1,5 +1,15 @@
 package io.github.laozhudu.linkplay.console
 
+import io.github.laozhudu.linkplay.protocol.multiroom.DragGrouping
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.runtime.mutableStateMapOf
 import android.os.Bundle
 import android.view.KeyEvent
 import androidx.activity.viewModels
@@ -284,7 +294,6 @@ private fun ConsoleBody(vm: ConsoleViewModel) {
                     onScan = vm::scan,
                     onAddManual = vm::addManual,
                     onAddDiscovered = { vm.add(it); tab = Tab.Player },
-                    onForget = vm::forget,
                     onProvision = { sub = SubPage.Provisioning },
                     onOpenSettings = { device ->
                         vm.open(device)
@@ -440,7 +449,6 @@ private fun HomeScreen(
     onScan: () -> Unit,
     onAddManual: (String) -> Unit,
     onAddDiscovered: (DiscoveredDevice) -> Unit,
-    onForget: (String) -> Unit,
     onProvision: () -> Unit,
     /** 齿轮：进这台设备的设置页（原厂卡片右上角就是齿轮）。 */
     onOpenSettings: (SavedDevice) -> Unit,
@@ -448,7 +456,34 @@ private fun HomeScreen(
     val extras = LocalExtraColors.current
     var showAdd by remember { mutableStateOf(false) }
     var manualIp by remember { mutableStateOf("") }
-    var forgetTarget by remember { mutableStateOf<SavedDevice?>(null) }
+
+    // 拖拽组网的状态：整页共用一份，卡片只负责上报"我被拖了/我松手命中谁"
+    val dragState = remember { DragState() }
+    // 每台卡片在**根坐标**里的中心点，用来判断松手命中了哪台。
+    // 拖拽期间被拖那台的坐标被冻结（见 DraggableDeviceCard 里的 onGloballyPositioned）
+    val centers = remember { mutableStateMapOf<String, Offset>() }
+    val density = LocalDensity.current
+    // 命中半径：卡片中心到指尖。卡片高约 190dp、纵向间距约 200dp，
+    // 130dp 能可靠命中相邻卡片，又不至于把两条之外的也吸过来
+    val hitRadiusPx = with(density) { 130.dp.toPx() }
+
+    // 指尖位置 = 被拖卡片（冻结的）中心 + 累计位移；据此算悬停目标
+    LaunchedEffect(dragState.draggingUuid, dragState.offset) {
+        val dragged = dragState.draggingUuid
+        if (dragged == null) {
+            dragState.hoverUuid = null
+            return@LaunchedEffect
+        }
+        val origin = centers[dragged] ?: return@LaunchedEffect
+        val points = centers.map { (uuid, c) -> Triple(uuid, c.x, c.y) }.toList()
+        dragState.hoverUuid = DragGrouping.hitTest(
+            points = points,
+            x = origin.x + dragState.offset.x,
+            y = origin.y + dragState.offset.y,
+            draggedUuid = dragged,
+            maxDistancePx = hitRadiusPx,
+        )
+    }
 
     Column(Modifier.fillMaxSize().padding(horizontal = Spacing.lg)) {
         VSpace(Spacing.md)
@@ -473,6 +508,14 @@ private fun HomeScreen(
             CircleIcon(onClick = { vm.refreshDevices() }, size = 40.dp) {
                 Text("↻", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+        }
+        if (state.saved.size >= 2) {
+            Text(
+                "长按一张卡片拖到另一台上，松手即可组网（被拖到的那台当主机）",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = Spacing.xs),
+            )
         }
         VSpace(Spacing.md)
 
@@ -503,15 +546,21 @@ private fun HomeScreen(
             }
 
             items(state.saved, key = { it.uuid }) { device ->
-                DeviceCardRow(
+                DraggableDeviceCard(
                     device = device,
                     online = state.online[device.uuid],
                     groupedUnder = state.groupedUnder[device.uuid.lowercase()],
                     card = state.cards[device.uuid],
+                    // 拖拽组网：松手时命中了另一台就把"被拖的"挂到"被命中的"上
+                    drag = dragState,
+                    siblingCount = state.saved.size,
+                    onCenter = { c -> centers[device.uuid] = c },
                     onOpen = { onOpenDevice(device) },
                     onSettings = { onOpenSettings(device) },
                     onVolume = { vm.setCardVolume(device, it) },
-                    onLongPress = { forgetTarget = device },
+                    onDropOn = { targetUuid ->
+                        state.saved.firstOrNull { it.uuid == targetUuid }?.let { vm.groupByDrag(device, it) }
+                    },
                 )
             }
 
@@ -648,17 +697,122 @@ private fun HomeScreen(
         }
     }
 
-    forgetTarget?.let { target ->
-        AlertDialog(
-            onDismissRequest = { forgetTarget = null },
-            title = { Text("移除 ${target.title}？") },
-            text = { Text("只删本机保存的记录，不影响音箱本身。下次可以重新搜索添加。") },
-            confirmButton = {
-                TextButton(onClick = { onForget(target.uuid); forgetTarget = null }) { Text("移除") }
-            },
-            dismissButton = { TextButton(onClick = { forgetTarget = null }) { Text("取消") } },
+}
+
+/**
+ * 首页拖拽组网的共享状态。
+ *
+ * 为什么放在页面级而不是每张卡片自己维护：松手要判断"命中了哪台**别的**卡片"，
+ * 这需要知道所有卡片的位置。卡片只上报自己的中心点与拖拽意图，判定统一在 [ComposeHit] 里做。
+ */
+private class DragState {
+    var draggingUuid by mutableStateOf<String?>(null)
+    var offset by mutableStateOf(Offset.Zero)
+    var hoverUuid by mutableStateOf<String?>(null)
+    /** 拖拽起点时被拖卡片的中心（根坐标）。之后靠 [offset] 累加算出指尖位置。 */
+    var origin by mutableStateOf(Offset.Zero)
+}
+
+/**
+ * 可拖拽的设备卡片外壳。
+ *
+ * 手势：**长按 300ms 后拖动**（`detectDragGesturesAfterLongPress`）。
+ * 为什么不是"直接拖"：设备卡片本身要能点开（点一下进播放页）、音量条要能拖，
+ * 直接拖会把这些手势全抢走。
+ *
+ * 拖起来之后：
+ * - 卡片跟着手指移动并轻微放大，明确"它现在被拿起来了"；
+ * - 悬停到另一台上时，那台描一圈高亮，告诉用户"松手就挂到它上面"；
+ * - 松手时用指尖位置做命中判定（[DragGrouping.hitTest]，见 core-protocol 的单测）。
+ *
+ * 长按原来绑定的是"移除记录"，现在改到设备设置页 —— 一个手势不能同时是两件事。
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun DraggableDeviceCard(
+    device: SavedDevice,
+    online: Boolean?,
+    groupedUnder: String?,
+    card: DeviceCard?,
+    drag: DragState,
+    siblingCount: Int,
+    onCenter: (Offset) -> Unit,
+    onOpen: () -> Unit,
+    onSettings: () -> Unit,
+    onVolume: (Int) -> Unit,
+    onDropOn: (String) -> Unit,
+) {
+    val dragging = drag.draggingUuid == device.uuid
+    val hovered = drag.hoverUuid == device.uuid && !dragging
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                if (dragging) {
+                    translationX = drag.offset.x
+                    translationY = drag.offset.y
+                    scaleX = 1.03f
+                    scaleY = 1.03f
+                    shadowElevation = 18f
+                }
+            }
+            .onGloballyPositioned { coords ->
+                // 拖拽期间**不更新**自己的中心：卡片被 graphicsLayer 平移后会跟着手指走，
+                // 若继续上报，指尖位置 = 中心 + 位移 就会重复累加，命中判定立刻错位
+                if (!dragging) {
+                    val b = coords.boundsInRoot()
+                    onCenter(Offset(b.center.x, b.center.y))
+                }
+            }
+            .then(
+                if (siblingCount < 2) Modifier else Modifier.pointerInput(device.uuid, siblingCount) {
+                    detectDragGesturesAfterLongPress(
+                        onDragStart = {
+                            drag.draggingUuid = device.uuid
+                            drag.offset = Offset.Zero
+                            drag.hoverUuid = null
+                            // origin 用"卡片中心 - 指尖起点"对齐：拖拽期间卡片跟手，指尖
+                            // 相对卡片的位置始终不变，所以 origin 直接用当前中心即可
+                            drag.origin = Offset.Zero
+                        },
+                        onDrag = { change, amount ->
+                            change.consume()
+                            drag.offset += amount
+                        },
+                        onDragEnd = {
+                            val target = drag.hoverUuid
+                            drag.draggingUuid = null
+                            drag.hoverUuid = null
+                            drag.offset = Offset.Zero
+                            if (target != null) onDropOn(target)
+                        },
+                        onDragCancel = {
+                            drag.draggingUuid = null
+                            drag.hoverUuid = null
+                            drag.offset = Offset.Zero
+                        },
+                    )
+                }
+            )
+            // 悬停目标高亮：一层描边，不改变布局尺寸（否则会把下面的卡片推走）
+            .then(
+                if (hovered) Modifier.border(2.dp, StatusColors.ok, AppShapesExpressive.squircle)
+                else Modifier,
+            ),
+    ) {
+        DeviceCardRow(
+            device = device,
+            online = online,
+            groupedUnder = groupedUnder,
+            card = card,
+            dimmed = dragging,
+            onOpen = onOpen,
+            onSettings = onSettings,
+            onVolume = onVolume,
         )
     }
+
 }
 
 /**
@@ -681,17 +835,17 @@ private fun HomeScreen(
  * 封面：设备不回填元数据（`getPlayerStatus` 的 Title 是 HEX，且没有封面地址），
  * 所以这里不假装有封面 —— 用曲名首字 + 派生色块，和无封面时的通用做法一致。
  */
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun DeviceCardRow(
     device: SavedDevice,
     online: Boolean?,
     groupedUnder: String?,
     card: DeviceCard?,
+    /** 正被拖起来时压暗，让"另一台上的高亮"更显眼。 */
+    dimmed: Boolean = false,
     onOpen: () -> Unit,
     onSettings: () -> Unit,
     onVolume: (Int) -> Unit,
-    onLongPress: () -> Unit,
 ) {
     val palette = remember(device.uuid) { seedOf(device.name, device.ip) }
     // 拖动时的本地乐观值：不这样会出现"手指在动、旋钮不动"（要等 3 秒轮询回读）
@@ -707,7 +861,8 @@ private fun DeviceCardRow(
             .background(
                 Brush.linearGradient(listOf(palette.top, palette.accent.copy(alpha = 0.28f))),
             )
-            .combinedClickable(onClick = onOpen, onLongClick = onLongPress)
+            .graphicsLayer { alpha = if (dimmed) 0.85f else 1f }
+            .clickable(onClick = onOpen)
             .padding(Spacing.md),
     ) {
         // 第一行：设备名 + 状态 + 齿轮

@@ -13,6 +13,7 @@ import io.github.laozhudu.linkplay.protocol.LinkPlayCommands
 import io.github.laozhudu.linkplay.protocol.LinkPlayStatus
 import io.github.laozhudu.linkplay.protocol.SlaveDevice
 import io.github.laozhudu.linkplay.protocol.identity.LinkPlayIdentity
+import io.github.laozhudu.linkplay.protocol.multiroom.DragGrouping
 import io.github.laozhudu.linkplay.protocol.multiroom.MultiroomClient
 import io.github.laozhudu.linkplay.protocol.playback.QueueRestore
 import io.github.laozhudu.linkplay.protocol.player.DeviceQueueState
@@ -941,6 +942,97 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     fun setJoinChannel(ch: Int) = _state.update { it.copy(joinChannel = ch.coerceIn(0, 14)) }
 
     fun setJoinPassword(pwd: String) = _state.update { it.copy(joinPassword = pwd) }
+
+    /**
+     * 拖拽组网（原厂交互）：把「从机」拖到「主机」上松手。
+     *
+     * 与 [joinSlave] 的区别只有一个，但很关键：**主机由松手位置决定**，
+     * 而不是当前选中的设备。主机要维持热点（`ra0=10.10.10.254`），从机接入后掉到
+     * `10.10.10.x` 从路由器侧消失 —— 方向错了整组都不通。
+     *
+     * 判据在 [DragGrouping.resolve]（纯函数，单测里逐条锁死），这里只负责：
+     * 1. 按判据给出"能做/不能做"的一句话；
+     * 2. 现读主机状态拿到热点名（`ssid`）与信道，再下发成组命令；
+     * 3. 轮询主机 `slave_list` 等它真的出现（命令回 OK ≠ 生效，这条吃过亏）。
+     */
+    fun groupByDrag(dragged: SavedDevice, target: SavedDevice) {
+        if (_state.value.multiroomBusy) return
+        val nodes = _state.value.saved.associate { d ->
+            d.uuid to DragGrouping.Node(
+                uuid = d.uuid,
+                name = d.title,
+                online = _state.value.online[d.uuid] != false,
+                groupedUnder = _state.value.groupedUnder[d.uuid.lowercase()],
+            )
+        }
+        when (val decision = DragGrouping.resolve(nodes[dragged.uuid], nodes[target.uuid])) {
+            is DragGrouping.Decision.Reject -> {
+                _state.update { it.copy(multiroomNote = decision.reason, error = null) }
+                log("拖拽组网：${decision.reason}")
+                return
+            }
+            is DragGrouping.Decision.Group -> Unit
+        }
+
+        _state.update {
+            it.copy(
+                multiroomBusy = true,
+                multiroomTick = 0,
+                multiroomTarget = dragged.title,
+                multiroomNote = null,
+                error = null,
+            )
+        }
+        viewModelScope.launch {
+            log("拖拽组网：${dragged.title} → 主机 ${target.title}（${target.ip}）")
+            // 主机热点名要现读：SavedDevice 里没有 ssid，且设备改名后旧值会失效
+            val status = withContext(Dispatchers.IO) { runCatching { client.status(target.ip) }.getOrNull() }
+            val ssid = status?.ssid
+            if (ssid.isNullOrBlank()) {
+                _state.update {
+                    it.copy(multiroomBusy = false, multiroomNote = "读不到「${target.title}」的热点名，先刷新设备再试")
+                }
+                return@launch
+            }
+            val ok = withContext(Dispatchers.IO) {
+                runCatching {
+                    MultiroomClient(client).joinWithPolling(
+                        masterIp = target.ip,
+                        masterSsid = ssid,
+                        slaveIp = dragged.ip,
+                        channel = _state.value.joinChannel,
+                        password = _state.value.joinPassword,
+                        onTick = { sec ->
+                            log("等待从机出现… ${sec}s / 40s")
+                            viewModelScope.launch { _state.update { it.copy(multiroomTick = sec) } }
+                        },
+                        shouldStop = { !_state.value.multiroomBusy },
+                    )
+                }.getOrElse { t ->
+                    log("成组异常：${t.message}")
+                    false
+                }
+            }
+            val after = withContext(Dispatchers.IO) {
+                runCatching { client.slaveList(target.ip) }.getOrDefault(emptyList())
+            }
+            _state.update {
+                it.copy(
+                    multiroomBusy = false,
+                    slaves = after,
+                    groupMasterIp = target.ip,
+                    groupMasterName = target.title,
+                    multiroomNote = if (ok || after.isNotEmpty()) {
+                        "「${dragged.title}」已加入「${target.title}」，现在共 ${after.size} 台同步播放"
+                    } else {
+                        "命令已发给音箱，但 40 秒内它没出现在组里 —— 这一步没成功。可等 1~2 分钟再刷新。"
+                    },
+                )
+            }
+            log(if (ok) "拖拽成组成功" else "拖拽成组未确认")
+            refreshSlaves()
+        }
+    }
 
     fun joinSlave(device: SavedDevice) {
         val masterIp = _state.value.selectedIp ?: return
