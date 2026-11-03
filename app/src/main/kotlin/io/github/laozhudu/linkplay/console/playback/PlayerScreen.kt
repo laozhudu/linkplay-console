@@ -455,7 +455,9 @@ fun PlayerScreen(
                 )
                 Spacer(Modifier.weight(1f))
                 Text(
-                    PlaybackViewModel.format(duration),
+                    // 通用 DLNA 渲染器常常不回时长（GetPositionInfo 的 TrackDuration 为空），
+                    // 这时显示 0:00 会让人以为"歌是空的"，用 --:-- 明确表示"设备没告诉"。
+                    if (duration > 0) PlaybackViewModel.format(duration) else "--:--",
                     style = MaterialTheme.typography.labelSmall,
                     color = OnDarkPalette.muted,
                 )
