@@ -17,6 +17,7 @@ import io.github.laozhudu.linkplay.protocol.multiroom.MultiroomClient
 import io.github.laozhudu.linkplay.protocol.playback.QueueRestore
 import io.github.laozhudu.linkplay.protocol.player.DeviceQueueState
 import io.github.laozhudu.linkplay.protocol.session.PlaybackKey
+import io.github.laozhudu.linkplay.console.playback.DevicePlaylistGateway
 import io.github.laozhudu.linkplay.console.playback.QueueBus
 import io.github.laozhudu.linkplay.console.playback.VolumeBus
 import io.github.laozhudu.linkplay.protocol.player.PlayerStatus
@@ -219,6 +220,23 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
             val uuid = _state.value.selectedUuid
             val ip = _state.value.selectedIp ?: return@launch
 
+            // ① 原厂做法：BrowseQueue 把设备上的整份列表（含曲名）读回来 —— 这才是"同步设备列表"
+            val deviceList = DevicePlaylistGateway.read(ip, _state.value.selectedLocation)
+            if (deviceList != null && !deviceList.isEmpty) {
+                val items = DevicePlaylistGateway.toQueueItems(deviceList)
+                val idx = deviceList.currentIndex.coerceIn(0, items.lastIndex)
+                QueueBus.restore(
+                    items = items,
+                    index = idx,
+                    title = items.getOrNull(idx)?.title,
+                    deviceOwned = true,
+                    note = "设备列表 ${items.size} 首 · 第 ${idx + 1} 首",
+                )
+                log("从设备读回播放列表：${items.size} 首（队列名 ${deviceList.name}）")
+                return@launch
+            }
+
+            // ② 设备没有队列 → 用本地快照兜底（并说明设备当前是空的）
             val device = withContext(Dispatchers.IO) {
                 runCatching {
                     DeviceQueueState.from(PlayerStatus.parse(client.send(ip, "getPlayerStatus")))

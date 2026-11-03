@@ -17,6 +17,7 @@ import io.github.laozhudu.linkplay.protocol.session.NasPathStep
 import io.github.laozhudu.linkplay.protocol.session.NasServerRef
 import io.github.laozhudu.linkplay.protocol.session.NasSession
 import io.github.laozhudu.linkplay.protocol.session.PlaybackSession
+import io.github.laozhudu.linkplay.console.playback.DevicePlaylistGateway
 import io.github.laozhudu.linkplay.console.playback.DeviceQueuePush
 import io.github.laozhudu.linkplay.console.playback.QueueBus
 import io.github.laozhudu.linkplay.console.playback.QueuePlaybackService
@@ -414,10 +415,23 @@ class NasViewModel(
             )
             savePlayback(items, start, _state.value.loopMode)
 
+            // ① 原厂机制：CreateQueue + PlayQueueWithIndex（设备握住列表，可读回、退出照播）
+            val upstream = DevicePlaylistGateway.push(rendererIp, rendererLocation, items, start)
+            if (upstream.ok) {
+                log(upstream.detail + "（设备侧队列 · 原厂 PlayQueue）")
+                QueueBus.restore(items, start, items.getOrNull(start)?.title, deviceOwned = true,
+                    note = "设备列表 ${items.size} 首 · 第 ${start + 1} 首")
+                _state.update { it.copy(playing = true, nowPlaying = items.getOrNull(start)?.title) }
+                return@launch
+            }
+            log("PlayQueue 未接受：${upstream.detail}")
+
+            // ② 兜底：m3u + setPlayerCmd:playlist（能在老固件上凑效，但读不回曲目清单）
             val pushed = DeviceQueuePush.push(DeviceHttpClient(), rendererIp, items, start)
             if (pushed.ok) {
-                log(pushed.detail + "（设备侧队列）")
-                QueueBus.restore(items, start, items.getOrNull(start)?.title)
+                log(pushed.detail + "（设备侧队列 · m3u）")
+                QueueBus.restore(items, start, items.getOrNull(start)?.title, deviceOwned = true,
+                    offset = pushed.offset, note = "设备列表 ${items.size} 首 · 第 ${start + 1} 首（m3u）")
                 QueueBus.markDeviceOwned(pushed.offset)
                 _state.update { it.copy(playing = true, nowPlaying = items.getOrNull(start)?.title) }
             } else {

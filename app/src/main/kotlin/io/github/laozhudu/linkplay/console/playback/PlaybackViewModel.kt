@@ -407,6 +407,19 @@ class PlaybackViewModel(
             }
             return
         }
+        // 设备握着列表时用设备的跳位（原厂 PlayQueueWithIndex），这样设备侧进度才是真的
+        if (q.deviceOwned) {
+            viewModelScope.launch {
+                val ok = DevicePlaylistGateway.playIndex(deviceIp, location, index)
+                if (ok) {
+                    QueueBus.syncDeviceIndex(index)
+                    refreshOnce(silent = true)
+                } else {
+                    _state.update { it.copy(error = "设备没有接受跳转（第 ${index + 1} 首）") }
+                }
+            }
+            return
+        }
         if (QueueBus.hasController) {
             QueueBus.skipTo(index)
             return
@@ -516,7 +529,23 @@ class PlaybackViewModel(
             log("恢复设备状态：${snapshot.state} vol=${snapshot.volume} src=${snapshot.sourceLabel ?: "-"}")
         }
 
-        // 2) 队列：设备真值 + 本地快照，交给 QueueRestore 统一判定
+        // 2) 队列：优先把设备上的整份列表读回来（原厂 BrowseQueue），读不到再用本地快照
+        val deviceList = DevicePlaylistGateway.read(deviceIp, location)
+        if (deviceList != null && !deviceList.isEmpty) {
+            val items = DevicePlaylistGateway.toQueueItems(deviceList)
+            val idx = deviceList.currentIndex.coerceIn(0, items.lastIndex)
+            QueueBus.restore(
+                items = items,
+                index = idx,
+                title = items.getOrNull(idx)?.title,
+                deviceOwned = true,
+                note = "设备列表 ${items.size} 首 · 第 ${idx + 1} 首",
+            )
+            log("从设备读回播放列表：${items.size} 首")
+            return
+        }
+
+        // 3) 设备没有队列：退回「设备真值 + 本地快照」的判定
         //    （这里不再自己写一套恢复逻辑——两套实现必然漂移，这也是"重开列表不同步"的老根因）
         val savedSession = withContext(Dispatchers.IO) {
             PlaybackKey.candidates(deviceUuid, deviceIp).firstNotNullOfOrNull { key ->
