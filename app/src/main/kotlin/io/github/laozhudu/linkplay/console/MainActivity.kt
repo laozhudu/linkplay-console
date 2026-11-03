@@ -35,6 +35,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -48,6 +50,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -66,6 +69,7 @@ import io.github.laozhudu.linkplay.console.radio.RadioScreen
 import io.github.laozhudu.linkplay.console.room.MultiroomCard
 import io.github.laozhudu.linkplay.console.ui.components.AppCard
 import io.github.laozhudu.linkplay.console.ui.components.AppShapesExpressive
+import io.github.laozhudu.linkplay.console.ui.components.CircleIcon
 import io.github.laozhudu.linkplay.console.ui.components.EmptyState
 import io.github.laozhudu.linkplay.console.ui.components.PillTag
 import io.github.laozhudu.linkplay.console.ui.components.SectionTitle
@@ -282,6 +286,10 @@ private fun ConsoleBody(vm: ConsoleViewModel) {
                     onAddDiscovered = { vm.add(it); tab = Tab.Player },
                     onForget = vm::forget,
                     onProvision = { sub = SubPage.Provisioning },
+                    onOpenSettings = { device ->
+                        vm.open(device)
+                        sub = SubPage.Settings
+                    },
                 )
 
                 Tab.Player -> if (state.selectedIp == null) {
@@ -434,6 +442,8 @@ private fun HomeScreen(
     onAddDiscovered: (DiscoveredDevice) -> Unit,
     onForget: (String) -> Unit,
     onProvision: () -> Unit,
+    /** 齿轮：进这台设备的设置页（原厂卡片右上角就是齿轮）。 */
+    onOpenSettings: (SavedDevice) -> Unit,
 ) {
     val extras = LocalExtraColors.current
     var showAdd by remember { mutableStateOf(false) }
@@ -442,14 +452,28 @@ private fun HomeScreen(
 
     Column(Modifier.fillMaxSize().padding(horizontal = Spacing.lg)) {
         VSpace(Spacing.md)
-        SectionTitle(
-            title = "我的音箱",
-            subtitle = when {
-                state.busy -> "正在连接…"
-                state.saved.isEmpty() -> "还没有添加"
-                else -> "${state.saved.count { state.online[it.uuid] != false }} 台在线"
-            },
-        )
+        // 顶栏按原厂的「设备列表 + 添加 + 刷新」：这两个动作原来藏在「添加音箱」折叠区里，
+        // 用户得先展开才能刷新，属于把常用动作埋在低频入口后面
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.weight(1f)) {
+                SectionTitle(
+                    title = "我的音箱",
+                    subtitle = when {
+                        state.busy -> "正在连接…"
+                        state.saved.isEmpty() -> "还没有添加"
+                        else -> "${state.saved.count { state.online[it.uuid] != false }} 台在线"
+                    },
+                )
+            }
+            CircleIcon(onClick = { showAdd = !showAdd }, size = 40.dp) {
+                Text("+", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
+            }
+            Spacer(Modifier.width(Spacing.xs))
+            // 刷新 = 重新探活（不清设备列表、不闪屏），比"再搜一遍"快
+            CircleIcon(onClick = { vm.refreshDevices() }, size = 40.dp) {
+                Text("↻", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
         VSpace(Spacing.md)
 
         LazyColumn(
@@ -479,66 +503,16 @@ private fun HomeScreen(
             }
 
             items(state.saved, key = { it.uuid }) { device ->
-                val online = state.online[device.uuid]
-                val palette = remember(device.uuid) { seedOf(device.name, device.ip) }
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(AppShapesExpressive.squircle)
-                        .background(
-                            Brush.linearGradient(
-                                listOf(palette.top, palette.accent.copy(alpha = 0.28f)),
-                            ),
-                        )
-                        .combinedClickable(
-                            onClick = { onOpenDevice(device) },
-                            onLongClick = { forgetTarget = device },
-                        )
-                        .padding(Spacing.lg),
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                device.title,
-                                style = MaterialTheme.typography.titleLarge,
-                                // 卡片底是派生深色渐变，文字必须恒定白：
-                                // 跟着主题变会在浅色模式下变成"深字压深底"
-                                color = OnDarkPalette.text,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            Text(
-                                listOfNotNull(
-                                    device.ip,
-                                    device.modelName,
-                                    // 入组的从机连不上，但不能说"离线" —— 它正在同步播放
-                                    state.groupedUnder[device.uuid.lowercase()]?.let { "同步播放中 · 属 $it" }
-                                        ?: when (online) {
-                                            true -> "在线"
-                                            false -> "离线"
-                                            null -> null
-                                        },
-                                ).joinToString(" · "),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = OnDarkPalette.muted,
-                                maxLines = 1,
-                            )
-                        }
-                        val groupedUnder = state.groupedUnder[device.uuid.lowercase()]
-                        PillTag(
-                            text = when {
-                                groupedUnder != null -> "组内"
-                                online == false -> "离线"
-                                else -> "打开"
-                            },
-                            color = when {
-                                groupedUnder != null -> StatusColors.ok
-                                online == false -> StatusColors.error
-                                else -> palette.accent
-                            },
-                        )
-                    }
-                }
+                DeviceCardRow(
+                    device = device,
+                    online = state.online[device.uuid],
+                    groupedUnder = state.groupedUnder[device.uuid.lowercase()],
+                    card = state.cards[device.uuid],
+                    onOpen = { onOpenDevice(device) },
+                    onSettings = { onOpenSettings(device) },
+                    onVolume = { vm.setCardVolume(device, it) },
+                    onLongPress = { forgetTarget = device },
+                )
             }
 
             if (state.saved.isNotEmpty()) {
@@ -630,6 +604,39 @@ private fun HomeScreen(
                 }
             }
 
+            // 原厂这页底部有一句「如何在多音箱同步和独立播放间切换？」+ 一个大按钮「全部播放」。
+            // 两者都保留：虚线是原厂的视觉分隔，帮助文案点开走多房间卡片（不新造页面）。
+            if (state.saved.isNotEmpty()) {
+                item {
+                    VSpace(Spacing.md)
+                    DottedRule()
+                    Text(
+                        "如何在多音箱同步和独立播放间切换？",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.fillMaxWidth(),
+                        textAlign = TextAlign.Center,
+                    )
+                    DottedRule()
+                    VSpace(Spacing.sm)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp)
+                            .clip(AppShapesExpressive.pill)
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .clickable(enabled = !state.busy, onClick = { vm.playAll() }),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            if (state.busy) "正在准备…" else "全部播放",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
+            }
+
             // 多房间放在整个列表**最底部**（添加音箱之后）：
             // 组网是组一次管很久的低频配置，不该占据首屏；设备列表与添加入口优先。
             if (state.saved.size >= 2 || state.groupMembers.size > 1) {
@@ -652,6 +659,203 @@ private fun HomeScreen(
             dismissButton = { TextButton(onClick = { forgetTarget = null }) { Text("取消") } },
         )
     }
+}
+
+/**
+ * 设备卡片（按原厂样式重做，同时保留我们自己的信息）。
+ *
+ * 原厂那张卡的构成，从上到下：
+ * ```
+ * doss1                                                  ⚙
+ * ┌────┐  000.凯叔·三国演义·引子
+ * │封面 │
+ * └────┘
+ * 🔊 ──────●──────                              [R]
+ * ```
+ * 我们额外保留的（原厂没有，但这是我们更好用的地方）：
+ * - 设备 IP / 在线状态 / 「同步播放中 · 属 dossX」—— 组内从机连不上时不会误报离线；
+ * - 音量条拖动**立刻**改设备音量（原厂也是这个交互，但原厂没有我们的合并通道，
+ *   拖动时会打出一串 HTTP 请求）；
+ * - 长按移除记录。
+ *
+ * 封面：设备不回填元数据（`getPlayerStatus` 的 Title 是 HEX，且没有封面地址），
+ * 所以这里不假装有封面 —— 用曲名首字 + 派生色块，和无封面时的通用做法一致。
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun DeviceCardRow(
+    device: SavedDevice,
+    online: Boolean?,
+    groupedUnder: String?,
+    card: DeviceCard?,
+    onOpen: () -> Unit,
+    onSettings: () -> Unit,
+    onVolume: (Int) -> Unit,
+    onLongPress: () -> Unit,
+) {
+    val palette = remember(device.uuid) { seedOf(device.name, device.ip) }
+    // 拖动时的本地乐观值：不这样会出现"手指在动、旋钮不动"（要等 3 秒轮询回读）
+    var dragging by remember(device.uuid) { mutableStateOf<Int?>(null) }
+    val volume = dragging ?: card?.volume ?: 0
+    val channel = card?.channel
+    val title = card?.title
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(AppShapesExpressive.squircle)
+            .background(
+                Brush.linearGradient(listOf(palette.top, palette.accent.copy(alpha = 0.28f))),
+            )
+            .combinedClickable(onClick = onOpen, onLongClick = onLongPress)
+            .padding(Spacing.md),
+    ) {
+        // 第一行：设备名 + 状态 + 齿轮
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    device.title,
+                    style = MaterialTheme.typography.titleLarge,
+                    // 卡片底是派生深色渐变，文字必须恒定白：跟主题变会在浅色模式下隐形
+                    color = OnDarkPalette.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    listOfNotNull(
+                        device.ip,
+                        groupedUnder?.let { "同步播放中 · 属 $it" }
+                            ?: when (online) {
+                                true -> "在线"
+                                false -> "离线"
+                                null -> null
+                            },
+                    ).joinToString(" · "),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = OnDarkPalette.muted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (groupedUnder != null) {
+                PillTag(text = "组内", color = StatusColors.ok)
+                Spacer(Modifier.width(Spacing.xs))
+            } else if (online == false) {
+                PillTag(text = "离线", color = StatusColors.error)
+                Spacer(Modifier.width(Spacing.xs))
+            }
+            // 齿轮：原厂在卡片右上角，直接进这台设备的设置
+            CircleIcon(onClick = onSettings, size = 36.dp) {
+                Text("⚙", style = MaterialTheme.typography.titleMedium, color = OnDarkPalette.muted)
+            }
+        }
+
+        VSpace(Spacing.sm)
+
+        // 第二行：缩略图 + 曲名（原厂的"正在播放"条）
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(52.dp)
+                    .clip(AppShapesExpressive.squircle)
+                    .background(OnDarkPalette.chip),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    title?.trim()?.firstOrNull()?.toString()?.uppercase() ?: "♪",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = OnDarkPalette.text,
+                )
+            }
+            Spacer(Modifier.width(Spacing.sm))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    title ?: if (online == false) "设备无响应" else "空闲中 · 点开挑一首",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (title != null) OnDarkPalette.text else OnDarkPalette.muted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                val sub = when {
+                    card == null -> null
+                    card.plicount > 0 -> "${card.plicount} 首 · 第 ${card.plicurr.coerceAtLeast(1)} 首"
+                    else -> "没有播放列表"
+                }
+                if (sub != null) {
+                    Text(
+                        sub,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = OnDarkPalette.muted,
+                        maxLines = 1,
+                    )
+                }
+            }
+        }
+
+        VSpace(Spacing.xs)
+
+        // 第三行：音量 + 声道（原厂就是「喇叭图标 + 滑条 + R/LR」）
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("🔊", style = MaterialTheme.typography.bodySmall, color = OnDarkPalette.muted)
+            Spacer(Modifier.width(Spacing.xs))
+            Slider(
+                value = volume.toFloat(),
+                onValueChange = {
+                    val v = it.toInt().coerceIn(0, 100)
+                    dragging = v
+                    onVolume(v)
+                },
+                onValueChangeFinished = { dragging = null },
+                valueRange = 0f..100f,
+                modifier = Modifier.weight(1f).height(28.dp),
+                colors = SliderDefaults.colors(
+                    thumbColor = OnDarkPalette.text,
+                    activeTrackColor = OnDarkPalette.text.copy(alpha = 0.85f),
+                    inactiveTrackColor = OnDarkPalette.muted.copy(alpha = 0.30f),
+                ),
+            )
+            Spacer(Modifier.width(Spacing.xs))
+            Text(
+                if (card?.mute == true) "静音" else volume.toString(),
+                style = MaterialTheme.typography.labelSmall,
+                color = OnDarkPalette.muted,
+                modifier = Modifier.width(30.dp),
+                textAlign = TextAlign.End,
+            )
+            // 声道标签：0 立体声 / 1 仅左 / 2 仅右（设备 ch 字段）
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(OnDarkPalette.text.copy(alpha = 0.14f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    when (channel) {
+                        1 -> "L"
+                        2 -> "R"
+                        else -> "LR"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = OnDarkPalette.text,
+                )
+            }
+        }
+    }
+}
+
+/** 原厂设备列表里的虚线分隔（用短横排出来，避免自造 Canvas 画法）。 */
+@Composable
+private fun DottedRule(color: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.outlineVariant) {
+    Text(
+        "· · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · ·",
+        style = MaterialTheme.typography.labelSmall,
+        color = color,
+        maxLines = 1,
+        overflow = TextOverflow.Clip,
+        textAlign = TextAlign.Center,
+        modifier = Modifier.fillMaxWidth(),
+    )
 }
 
 /**

@@ -68,6 +68,8 @@ data class DeviceCard(
     val mute: Boolean = false,
     /** 设备回报的 mode（判断在哪一路上播）。 */
     val mode: Int? = null,
+    /** 声道：0 立体声 / 1 仅左 / 2 仅右（`getPlayerStatus` 的 `ch`）。 */
+    val channel: Int? = null,
     /** 设备侧队列长度/当前序号（`plicount`/`plicurr`），0 表示没有列表。 */
     val plicount: Int = 0,
     val plicurr: Int = 0,
@@ -218,6 +220,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                                 volume = st.volume,
                                 mute = st.mute,
                                 mode = st.mode,
+                                channel = st.channel,
                                 plicount = st.playListCount ?: 0,
                                 plicurr = st.playListCurrent ?: 0,
                                 playing = st.playState == PlayState.PLAY,
@@ -650,6 +653,20 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshGroup() = probeSaved()
 
     /**
+     * 首页顶栏的刷新：重新探活已保存的设备（并顺带读一次卡片状态）。
+     *
+     * 与 [scan] 的区别：scan 会重新做 SSDP 发现、可能弹出"已忽略 N 个非音箱设备"，
+     * 适合"添加新设备"。刷新只想知道"现在还在不在"，不该有副作用。
+     */
+    fun refreshDevices() {
+        if (_state.value.saved.isEmpty()) {
+            scan()
+            return
+        }
+        probeSaved()
+    }
+
+    /**
      * 调组内某台音箱的音量。
      *
      * 为什么不走 [run]：那里有 `busy` 闸门，音量条连续拖动时第二次就被丢掉，
@@ -777,8 +794,15 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
             val res = withContext(Dispatchers.IO) {
                 runCatching<String> {
                     if ((card?.plicount ?: 0) > 0) {
-                        // 设备自己握着队列：直接续播，连索引都不用给（设备记得 LastPlayIndex）
-                        client.send(ip, "setPlayerCmd:resume")
+                        // 设备自己握着队列：走 AVTransport.Play（原厂做法）。
+                        // 实测 .164（plicount=3, pause）→ Play 回 200 且 status=play；
+                        // 而 `setPlayerCmd:resume` 回 OK 但状态不变 —— 命令回 OK ≠ 生效。
+                        val ok: Boolean = runCatching {
+                            UpnpRendererClient.ofDevice(ip).play()
+                            true
+                        }.getOrDefault(false)
+                        if (!ok) client.send(ip, "setPlayerCmd:play")
+                        "avtransport-play"
                     } else {
                         // 没队列：从上次的队列恢复
                         val uuid = _state.value.selectedUuid
