@@ -24,6 +24,7 @@ import io.github.laozhudu.linkplay.console.playback.QueueBus
 import io.github.laozhudu.linkplay.console.playback.VolumeBus
 import io.github.laozhudu.linkplay.console.library.LibraryStore
 import io.github.laozhudu.linkplay.console.library.LocalLibrary
+import io.github.laozhudu.linkplay.protocol.FirmwareUpdate
 import io.github.laozhudu.linkplay.protocol.player.PlayState
 import io.github.laozhudu.linkplay.protocol.player.PlayerStatus
 import io.github.laozhudu.linkplay.protocol.player.SleepTimer
@@ -54,6 +55,8 @@ data class GroupMember(
     /** 声道：0=立体声 1=仅左 2=仅右。主机固定立体声，为 null。 */
     val channel: Int? = null,
     val isMaster: Boolean = false,
+    /** 是否被屏蔽（`slave_list[].mask`）：屏蔽后不出声但仍在组里。 */
+    val masked: Boolean = false,
 )
 
 /**
@@ -150,6 +153,11 @@ data class ConsoleUiState(
     val sleepTimer: SleepTimer = SleepTimer(),
     /** 定时器显示用的"现在"，每秒刷新一次，让倒计时能走。 */
     val nowMs: Long = 0L,
+
+    /** 固件升级状态（原厂「设备升级」页）。 */
+    val firmware: FirmwareUpdate = FirmwareUpdate(),
+    /** 预设键数量（`getStatusEx.preset_key`，真机 6）；读不到按 6 显示。 */
+    val presetCount: Int = 6,
 
     /** 「我的音乐」页要显示的数量。 */
     val localMusicCount: Int = 0,
@@ -459,6 +467,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                             volume = sl.volume,
                             channel = sl.channel,
                             isMaster = false,
+                            masked = sl.masked,
                         )
                     }
                 }
@@ -1030,6 +1039,86 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
             } ?: continue
             VolumeBus.publish(ip, card.volume, card.mute)
             _state.update { it.copy(cards = it.cards + (uuid to card)) }
+        }
+    }
+
+    /**
+     * 按第 [uiIndex] 个预设键（0 基）。
+     *
+     * 原厂 `DeviceContentActivity` 的预设列表就是发 `MCUKeyShortClick:<i+1>`，
+     * 真机 `.164` 回 `OK`。它触发**设备端**存好的动作（电台/歌单），
+     * 所以我们不需要知道内容，只把索引发过去。
+     */
+    fun pressPreset(uiIndex: Int) {
+        val ip = _state.value.selectedIp ?: return
+        run("预设键 ${uiIndex + 1}") {
+            val reply = client.send(ip, LinkPlayCommands.presetKey(uiIndex))
+            log("MCUKeyShortClick:${uiIndex + 1} → $reply")
+            delay(800)
+            refreshDevicesInGroup()
+        }
+    }
+
+    /** 查固件更新：照原厂顺序四条命令读一遍，结果如实展示。 */
+    fun checkFirmware() {
+        val ip = _state.value.selectedIp ?: return
+        run("检查固件更新") {
+            val fw = withContext(Dispatchers.IO) {
+                runCatching {
+                    client.send(ip, LinkPlayCommands.firmwareUpdateStart())
+                    delay(1_500)
+                    val remote = client.send(ip, LinkPlayCommands.firmwareUpdateStatus())
+                    val dl = runCatching { client.send(ip, LinkPlayCommands.firmwareDownloadStatus()) }.getOrNull()
+                    val burn = runCatching { client.send(ip, LinkPlayCommands.firmwareBurnPercent()) }.getOrNull()
+                    FirmwareUpdate.of(remote, dl, burn)
+                }.getOrElse { t ->
+                    log("检查固件失败：${t.message}")
+                    FirmwareUpdate()
+                }
+            }
+            _state.update { it.copy(firmware = fw) }
+            log("固件：${fw.phase}（status=${fw.statusRaw}）")
+        }
+    }
+
+    /** 开始升级（界面只在 [FirmwareUpdate.canStart] 时放开这个按钮）。 */
+    fun startFirmwareUpdate() {
+        val ip = _state.value.selectedIp ?: return
+        run("开始升级固件") {
+            log("开始下载固件…")
+            client.send(ip, "setMvRemoteUpdateStart")
+            repeat(40) {
+                delay(3_000)
+                val dl = runCatching { client.send(ip, LinkPlayCommands.firmwareDownloadStatus()) }.getOrNull()
+                val burn = runCatching { client.send(ip, LinkPlayCommands.firmwareBurnPercent()) }.getOrNull()
+                val fw = FirmwareUpdate.of(_state.value.firmware.statusRaw?.toString(), dl, burn)
+                _state.update { it.copy(firmware = fw) }
+                log("固件：${fw.phase}")
+                if (fw.burnPercent >= 100) return@run
+            }
+        }
+    }
+
+    /**
+     * 屏蔽/恢复某台从机（`mask=1` 不出声但仍留在组里）。
+     *
+     * 与「解除」的区别：解除 = 踢出组（它回自己 Wi-Fi）；屏蔽 = 还在组里、只是不出声。
+     * 真机：`SlaveMask` → `mask` 0→1；`SlaveUnMask` → 回 0。
+     */
+    fun toggleMask(device: SavedDevice) {
+        val st = _state.value
+        val masterIp = st.groupMasterIp
+        val member = st.groupMembers.firstOrNull { it.uuid?.equals(device.uuid, true) == true }
+        if (masterIp == null || member == null || member.isMaster) {
+            _state.update { it.copy(multiroomNote = "只有组内从机能屏蔽") }
+            return
+        }
+        run(if (member.masked) "恢复 ${device.title}" else "屏蔽 ${device.title}") {
+            val cmd = if (member.masked) LinkPlayCommands.slaveUnMask(member.ip)
+            else LinkPlayCommands.slaveMask(member.ip)
+            log("$cmd → " + runCatching { client.send(masterIp, cmd) }.getOrDefault("ERR"))
+            delay(1_500)
+            probeSaved()
         }
     }
 
