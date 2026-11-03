@@ -76,6 +76,24 @@ object QueueBus {
 
     fun appendLog(line: String) = _state.update { it.copy(log = (it.log + line).takeLast(30)) }
 
+    /**
+     * 从本地快照恢复队列（App 重开时用）。
+     *
+     * 关键区别：**不把 running 置 true**。设备还在放上一首，但控制这个队列的前台服务并没有在跑
+     * （没有 controller）。如实标记成「已恢复，未接管」，界面上点某一首就会直接投流接管，
+     * 而不是假装有个正在运行的队列。
+     */
+    fun restore(items: List<QueueItem>, index: Int, title: String?) = _state.update {
+        QueueRunState(
+            running = false,
+            items = items,
+            index = index.coerceIn(0, (items.size - 1).coerceAtLeast(0)),
+            nowPlaying = title ?: items.getOrNull(index)?.title,
+            total = items.size,
+            playedCount = index + 1,
+        )
+    }
+
     /** 停止后保留 items/nowPlaying，方便 UI 显示「上次播到哪」。 */
     fun stopped() = _state.update { it.copy(running = false) }
 

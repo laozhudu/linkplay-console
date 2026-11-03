@@ -27,6 +27,10 @@ data class PlaybackSnapshot(
     val mute: Boolean,
     /** 输入源/模式的人类可读名，两套通道给的语义不同，各自填。 */
     val sourceLabel: String? = null,
+    /** 当前输入源 id（见 [PlayerSource]），读不到为 null。 */
+    val sourceId: String? = null,
+    /** 设备回报的原始 mode 数字，界面需要在几个地方交叉判断。 */
+    val mode: Int? = null,
 ) {
     val progress: Float
         get() = if (durationSec <= 0) 0f else (positionSec.toFloat() / durationSec.toFloat()).coerceIn(0f, 1f)
@@ -147,7 +151,9 @@ class HttpApiPlaybackEngine(
             durationSec = s.durationSec,
             volume = s.volume,
             mute = s.mute,
-            sourceLabel = PlayerStatus.modeLabel(s.mode),
+            sourceLabel = PlayerSource.describe(s.mode),
+            sourceId = PlayerSource.currentIdOf(s.mode),
+            mode = s.mode,
         )
     }
 

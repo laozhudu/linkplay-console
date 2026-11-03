@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 图标底色：与 App 深色主题的 background 一致（0xFF0A0C11 附近），
+         自适应图标在圆形/方形/水滴等不同形状下都保持同一块深底。 -->
+    <color name="ic_launcher_background">#0B0E15</color>
+</resources>

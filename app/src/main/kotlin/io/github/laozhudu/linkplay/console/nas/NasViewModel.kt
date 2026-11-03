@@ -9,6 +9,7 @@ import io.github.laozhudu.linkplay.protocol.DeviceHttpClient
 import io.github.laozhudu.linkplay.protocol.LinkPlayCommands
 import io.github.laozhudu.linkplay.protocol.queue.ClientSideQueue
 import io.github.laozhudu.linkplay.protocol.queue.PlayFromList
+import io.github.laozhudu.linkplay.protocol.session.PlaybackKey
 import io.github.laozhudu.linkplay.protocol.recovery.RendererHealth
 import io.github.laozhudu.linkplay.protocol.recovery.RendererProbe
 import io.github.laozhudu.linkplay.protocol.recovery.RendererRecovery
@@ -97,7 +98,7 @@ class NasViewModel(
     private val discovery = SsdpDiscovery(timeoutMs = 3_000)
     private val sessions = SessionStore.of(app)
     /** 记忆的键：优先设备 UUID；拿不到（比如手动 IP 且未连上）就退回 IP。 */
-    private val memoryKey: String = deviceUuid?.takeIf { it.isNotBlank() } ?: "ip:$rendererIp"
+    private val memoryKey: String = PlaybackKey.of(deviceUuid, rendererIp)
 
     init {
         restoreMemory()

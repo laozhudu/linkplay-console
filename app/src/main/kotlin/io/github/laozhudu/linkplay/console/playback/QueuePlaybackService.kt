@@ -11,6 +11,7 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import io.github.laozhudu.linkplay.console.MainActivity
 import io.github.laozhudu.linkplay.console.session.SessionStore
+import io.github.laozhudu.linkplay.protocol.session.PlaybackKey
 import io.github.laozhudu.linkplay.protocol.session.PlaybackSession
 import io.github.laozhudu.linkplay.protocol.upnp.UpnpRendererClient
 import io.github.laozhudu.linkplay.protocol.queue.ClientSideQueue
@@ -153,7 +154,7 @@ class QueuePlaybackService : Service() {
                         // 每切一首就更新快照：被杀进程时最多丢一首的进度
                         runCatching {
                             sessions.savePlayback(
-                                uuid.ifBlank { ip },
+                                PlaybackKey.of(uuid, ip),
                                 PlaybackSession(uuid.ifBlank { ip }, ip, curItems, index, loopMode),
                             )
                         }

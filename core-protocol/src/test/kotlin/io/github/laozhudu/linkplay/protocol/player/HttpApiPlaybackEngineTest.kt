@@ -37,7 +37,11 @@ class HttpApiPlaybackEngineTest {
         assertEquals(120L, snap.durationSec)
         assertEquals(30, snap.volume)
         assertEquals(0.5f, snap.progress, 0.01f)
-        assertEquals("本地播放列表", snap.sourceLabel)
+        // 改版后 sourceLabel 带上"输入源 · 模式细节"，因为界面上要同时看出
+        // 「现在在哪一路」和「这一路里在做什么」（用户要求输入源可读可标）
+        assertEquals("网络播放 · 本地播放列表", snap.sourceLabel)
+        assertEquals("wifi", snap.sourceId)
+        assertEquals(10, snap.mode)
         assertEquals("HTTP API", engine.channelName)
     }
 

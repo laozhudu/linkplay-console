@@ -8,8 +8,12 @@ import io.github.laozhudu.linkplay.protocol.media.RelayMediaServer
 import io.github.laozhudu.linkplay.protocol.media.RelayTarget
 import io.github.laozhudu.linkplay.protocol.player.LoopMode
 import io.github.laozhudu.linkplay.protocol.queue.QueueItem
+import io.github.laozhudu.linkplay.console.session.SessionStore
 import io.github.laozhudu.linkplay.protocol.metadata.TagFetcher
+import io.github.laozhudu.linkplay.protocol.session.PlaybackKey
+import io.github.laozhudu.linkplay.protocol.LinkPlayCommands
 import io.github.laozhudu.linkplay.protocol.player.PlaybackEngine
+import io.github.laozhudu.linkplay.protocol.player.PlayerSource
 import io.github.laozhudu.linkplay.protocol.player.PlaybackSnapshot
 import io.github.laozhudu.linkplay.protocol.player.UpnpPlaybackEngine
 import io.github.laozhudu.linkplay.protocol.upnp.PositionInfo
@@ -35,6 +39,10 @@ data class PlaybackUiState(
     val channel: String? = null,
     val friendlyName: String? = null,
     val sourceLabel: String? = null,
+    /** 当前输入源 id（`wifi`/`line-in`/`bluetooth`/`udisk`/`optical`），见 [PlayerSource]。 */
+    val sourceId: String? = null,
+    /** 设备回报的原始 mode 数字。 */
+    val mode: Int? = null,
     val state: TransportState = TransportState.UNKNOWN,
     val title: String? = null,
     val artist: String? = null,
@@ -81,12 +89,19 @@ data class PlaybackUiState(
 class PlaybackViewModel(
     private val deviceIp: String,
     private val location: String?,
+    /** 设备 uuid：播放快照按它存盘，换 IP 也能找回上次的队列。 */
+    private val deviceUuid: String? = null,
+    /** 会话仓库。传 null 表示"不恢复上次状态"（预览/测试用）。 */
+    private val sessionStore: SessionStore? = null,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(PlaybackUiState())
     val state: StateFlow<PlaybackUiState> = _state.asStateFlow()
 
     private var engine: PlaybackEngine? = null
+
+    /** 直接的 httpapi 客户端：切换输入源这类命令不属于"播放通道"，不该塞进 PlaybackEngine。 */
+    private val device = DeviceHttpClient()
     private var polling = false
 
     /**
@@ -197,6 +212,8 @@ class PlaybackViewModel(
                     volume = snapshot.volume,
                     mute = snapshot.mute,
                     sourceLabel = snapshot.sourceLabel,
+                    sourceId = snapshot.sourceId,
+                    mode = snapshot.mode,
                     error = null,
                 )
             }
@@ -415,12 +432,103 @@ class PlaybackViewModel(
 
     private fun log(line: String) = _state.update { it.copy(log = (it.log + line).takeLast(40)) }
 
+    /**
+     * 恢复上次的设备播放状态。
+     *
+     * 两路信息合起来看：
+     * 1. **设备侧**（`getPlayerStatus`）：真的在放什么、音量多少、输入源、进度。这是权威；
+     * 2. **本地快照**（`SessionStore.loadPlayback`）：队列列表与上次播到第几首。
+     *
+     * 为什么不干脆由设备给列表：本固件不支持整列表推送（docs/10），
+     * 设备只知道"当前这一首"，队列只存在于我们这边，所以必须两边合起来才完整。
+     */
+    private suspend fun restoreLastSession() {
+        val store = sessionStore ?: return
+        // 先等 prepare() 把通道建好；最多等 4 秒，避免通道彻底不可用时一直挂着
+        var waited = 0L
+        while (engine == null && _state.value.preparing && waited < 4_000) {
+            delay(200); waited += 200
+        }
+
+        // 1) 设备侧现状
+        val snapshot = withContext(Dispatchers.IO) { runCatching { engine?.snapshot() }.getOrNull() }
+        if (snapshot != null) {
+            _state.update {
+                it.copy(
+                    state = snapshot.state,
+                    volume = snapshot.volume,
+                    mute = snapshot.mute,
+                    positionSec = snapshot.positionSec,
+                    durationSec = snapshot.durationSec,
+                    title = snapshot.title ?: it.title,
+                    artist = snapshot.artist,
+                    albumArtUrl = snapshot.albumArtUrl,
+                    sourceLabel = snapshot.sourceLabel,
+                    sourceId = snapshot.sourceId,
+                    mode = snapshot.mode,
+                )
+            }
+            VolumeBus.publish(deviceIp, snapshot.volume, snapshot.mute)
+            log("恢复设备状态：${snapshot.state} vol=${snapshot.volume} src=${snapshot.sourceLabel ?: "-"}")
+        }
+
+        // 2) 本地快照的队列
+        val saved = withContext(Dispatchers.IO) {
+            PlaybackKey.candidates(deviceUuid, deviceIp).firstNotNullOfOrNull { key ->
+                runCatching { store.loadPlayback(key) }.getOrNull()
+            }
+        }
+        if (saved != null && saved.items.isNotEmpty()) {
+            QueueBus.restore(saved.items, saved.index, snapshot?.title ?: saved.items.getOrNull(saved.index)?.title)
+            log("恢复播放列表：${saved.items.size} 首，上次第 ${saved.index + 1} 首")
+        }
+    }
+
     /** 换曲时清掉上一首的封面/歌词，避免新歌配着旧封面。 */
+    /**
+     * 切换输入源。
+     *
+     * 真机教训：切到非 Wi-Fi 源之后，设备的 httpapi **通常仍然可达**（还在同一 Wi-Fi 上），
+     * 但音频路径换掉了；如果设备把 Wi-Fi 也断了（部分固件的蓝牙模式会），
+     * 手机就控制不到它，只能到机身上按回去。所以 UI 上对这些源必须明确提示风险。
+     *
+     * 切完立刻回读 `mode`，以设备回报为准 —— 命令回 OK 不代表真的切了（这条在本项目反复出现）。
+     */
+    fun switchSource(sourceId: String) {
+        val src = PlayerSource.byId(sourceId) ?: return
+        viewModelScope.launch {
+            _state.update { it.copy(busy = true, error = null) }
+            val root = runCatching {
+                withContext(Dispatchers.IO) { device.send(deviceIp, LinkPlayCommands.switchMode(src.id)) }
+            }.getOrElse { t ->
+                _state.update { it.copy(busy = false, error = "切换失败：${t.message}") }
+                return@launch
+            }
+            // 给设备 1.5 秒完成切换，再回读真实 mode
+            delay(1500)
+            refreshOnce(silent = true)
+            val now = _state.value.mode
+            val matched = PlayerSource.currentIdOf(now) == src.id
+            _state.update {
+                it.copy(
+                    busy = false,
+                    error = if (matched) null else "设备回报的输入源是「${PlayerSource.describe(now)}」，没切到「${src.label}」（命令返回 $root）",
+                )
+            }
+            log("switchmode:${src.id} → $root，回读 mode=$now")
+        }
+    }
+
     fun clearEmbeddedTags() = _state.update {
         it.copy(embeddedCover = null, lyrics = null, tagsLoadedFor = null)
     }
 
     init {
+        // 重开 App 时恢复：设备侧还在放的那首歌 + 本地快照里的队列。
+        // 这一条是用户明确要求的「原厂退出后重开能读到原来的状态包括列表」。
+        viewModelScope.launch {
+            restoreLastSession()
+        }
         // 音量合并通道：只保留最新值，每 80ms 最多下发一次
         viewModelScope.launch {
             for (v in volumeChannel) {
