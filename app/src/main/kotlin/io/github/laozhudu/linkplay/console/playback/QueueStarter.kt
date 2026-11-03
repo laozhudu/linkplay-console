@@ -53,7 +53,14 @@ suspend fun startQueueOnDevice(
     )
 
     // ① 原厂机制：CreateQueue + PlayQueueWithIndex（设备握着列表，App 退出照播）
-    val upstream = DevicePlaylistGateway.push(deviceIp, location, items, index)
+    //
+    // 通用 DLNA 渲染器（电视盒子这类）没有 PlayQueue 服务，硬推只会拿到 401，
+    // 白等一轮超时才降级。所以先问能力缓存：不支持就**直接跳过这一段**。
+    val upstream = if (DeviceProfileCache.supportsDeviceQueue(deviceIp)) {
+        DevicePlaylistGateway.push(deviceIp, location, items, index)
+    } else {
+        DevicePlaylistGateway.PushResult(false, "该设备是通用 DLNA 渲染器，没有设备侧队列")
+    }
     if (upstream.ok) {
         withContext(Dispatchers.IO) {
             runCatching { sessions.savePlayback(PlaybackKey.of(deviceUuid, deviceIp), session) }

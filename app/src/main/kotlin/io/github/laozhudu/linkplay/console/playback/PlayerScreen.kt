@@ -1,5 +1,9 @@
 package io.github.laozhudu.linkplay.console.playback
 
+import io.github.laozhudu.linkplay.protocol.voice.VoiceIntent
+import io.github.laozhudu.linkplay.protocol.voice.IntentRouter
+import io.github.laozhudu.linkplay.console.voice.VoiceController
+import androidx.compose.runtime.DisposableEffect
 import android.graphics.BitmapFactory
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
@@ -169,6 +173,40 @@ fun PlayerScreen(
     /** 底部内容区显示哪一块。false = 播放列表，true = 投流与日志。 */
     var showAdvanced by remember { mutableStateOf(false) }
 
+    // ---- 语音：一条顶栏提示 + 一个麦克风按钮，不引入任何浮层 ----
+    var voiceNote by remember { mutableStateOf<String?>(null) }
+    var listening by remember { mutableStateOf(false) }
+    val voice = remember { VoiceController(appContext) }
+    // 页面销毁时必须取消会话，否则 SpeechRecognizer 会继续占着麦克风
+    DisposableEffect(Unit) { onDispose { voice.cancel() } }
+
+    // 麦克风是运行时权限：没授权就先申请，拿到再开始听（不静默失败）
+    fun beginListening() {
+        listening = true
+        voice.start(
+            onResult = { text ->
+                listening = false
+                voiceNote = handleVoiceIntent(IntentRouter.route(text), vm)
+            },
+            onError = { msg ->
+                listening = false
+                voiceNote = msg
+            },
+        )
+    }
+    val micLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) beginListening() else voiceNote = "没有麦克风权限，语音用不了"
+    }
+    // 3 秒后自动消失：这是"刚才发生了什么"的即时回执，不是需要用户关掉的东西
+    LaunchedEffect(voiceNote) {
+        if (voiceNote != null) {
+            kotlinx.coroutines.delay(3_000)
+            voiceNote = null
+        }
+    }
+
     val playing = state.state == TransportState.PLAYING || state.state == TransportState.TRANSITIONING
     val duration = state.durationSec.coerceAtLeast(0)
     val progress = scrubDraft ?: state.progress
@@ -258,9 +296,47 @@ fun PlayerScreen(
                         maxLines = 1,
                     )
                 }
+                // 麦克风：点一下开始听、再点取消。识别结果走 IntentRouter → 现有 ViewModel 方法，
+                // 不新增任何播放逻辑（语音只是"另一个输入方式"）。
+                CircleIcon(
+                    onClick = {
+                        if (listening) {
+                            voice.cancel()
+                            listening = false
+                            voiceNote = "已取消"
+                        } else if (!VoiceController.available(appContext)) {
+                            voiceNote = "本机没有可用的语音识别"
+                        } else if (androidx.core.content.ContextCompat.checkSelfPermission(
+                                appContext, android.Manifest.permission.RECORD_AUDIO,
+                            ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                        ) {
+                            // 先要权限；授权成功后由 launcher 回调继续 start
+                            micLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+                        } else {
+                            beginListening()
+                        }
+                    },
+                ) {
+                    Text(
+                        if (listening) "…" else "🎤",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = if (listening) palette.accent else OnDarkPalette.text,
+                    )
+                }
                 CircleIcon(onClick = onOpenSettings) {
                     Text("⋯", style = MaterialTheme.typography.headlineSmall, color = OnDarkPalette.text)
                 }
+            }
+
+            voiceNote?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.accent,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(bottom = Spacing.xs),
+                )
             }
 
             // ---------- 封面 ----------
@@ -455,7 +531,9 @@ fun PlayerScreen(
                 )
                 Spacer(Modifier.weight(1f))
                 Text(
-                    PlaybackViewModel.format(duration),
+                    // 通用 DLNA 渲染器常常不回时长（GetPositionInfo 的 TrackDuration 为空），
+                    // 这时显示 0:00 会让人以为"歌是空的"，用 --:-- 明确表示"设备没告诉"。
+                    if (duration > 0) PlaybackViewModel.format(duration) else "--:--",
                     style = MaterialTheme.typography.labelSmall,
                     color = OnDarkPalette.muted,
                 )
@@ -733,4 +811,32 @@ private fun CastPanel(
             )
         }
     }
+}
+
+/**
+ * 语音意图 → 现有 ViewModel 动作。
+ *
+ * 这里只做**分派**：所有动作都调已经存在的方法（next/pause/setVolumeLive...），
+ * 不在语音这一层另写一套播放逻辑 —— 否则语音和按钮的时序会各走一套，
+ * 迟早出现"按按钮能停、说话停不了"这种不一致。
+ *
+ * @return 给用户的一句回执（3 秒后自动消失）
+ */
+private fun handleVoiceIntent(intent: VoiceIntent, vm: PlaybackViewModel): String = when (intent) {
+    VoiceIntent.Next -> { vm.next(); "下一首" }
+    VoiceIntent.Previous -> { vm.previous(); "上一首" }
+    VoiceIntent.Play -> { vm.play(); "播放" }
+    VoiceIntent.Pause -> { vm.pause(); "暂停" }
+    VoiceIntent.Stop -> { vm.stop(); "停止" }
+    VoiceIntent.TogglePlay -> {
+        // 当前状态以设备回报为准，不在本地猜
+        if (vm.state.value.state == TransportState.PLAYING) vm.pause() else vm.play()
+        "已切换播放状态"
+    }
+    VoiceIntent.VolumeUp -> { vm.setVolumeLive((vm.state.value.volume + 5).coerceAtMost(100)); "音量 +5" }
+    VoiceIntent.VolumeDown -> { vm.setVolumeLive((vm.state.value.volume - 5).coerceAtLeast(0)); "音量 -5" }
+    VoiceIntent.Mute -> { vm.toggleMute(); "静音切换" }
+    VoiceIntent.LoopNext -> { vm.cycleLoopMode(); "循环模式：${vm.state.value.loopMode.label}" }
+    is VoiceIntent.Search -> "要找「${intent.keyword}」：去「媒体库 → 在线曲库」搜一下"
+    is VoiceIntent.Unknown -> "没听清（识别为「${intent.text.take(12)}」）"
 }

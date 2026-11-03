@@ -33,6 +33,14 @@ data class DiscoveredDevice(
     val uuid: String? = null,
     /** 来自设备描述的 friendlyName（SSDP 头里没有，要拉描述才知道）。 */
     val friendlyName: String? = null,
+    /**
+     * 从设备描述判出来的能力档（见 [io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile]）。
+     *
+     * 为什么放在发现结果里：首页「添加设备」列表要据此把 LinkPlay 标成「音箱」、
+     * 把其它 MediaRenderer 标成「渲染器」，而判档需要拉一次描述 —— 那一步已经在这里做了，
+     * 不带上就等于让界面再拉一遍。
+     */
+    val profile: io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile? = null,
 )
 
 class SsdpDiscovery(
@@ -77,6 +85,38 @@ class SsdpDiscovery(
                 )
             }
             .distinctBy { it.uuid ?: it.ip }
+    }
+
+    /**
+     * 发现局域网里**所有** UPnP 媒体渲染器（不限品牌），并判出能力档。
+     *
+     * 为什么不再只找 LinkPlay：家里还有电视盒子这类只标准 UPnP 的设备（实测
+     * `192.168.99.175:3500`，SoftMedia AirReceiver，DMR-1.50）。它们一样能投流，
+     * 只是没有私有 PlayQueue / httpapi，所以界面上要按 [DiscoveredDevice.profile] 区分标签。
+     *
+     * 判据是**拉描述**而不是 SSDP 头：真机 SERVER 只有 `Linux/3.x UPnP/1.0`，看不出任何品牌。
+     * 连 AVTransport 都没有的（路由器 / NAS / 打印机）在这里就被丢掉，不进列表。
+     */
+    suspend fun discoverMediaRenderers(): List<DiscoveredDevice> = withContext(Dispatchers.IO) {
+        discoverWithTargets(listOf(SsdpMessages.ST_MEDIA_RENDERER, SsdpMessages.ST_WIIMU_PLAY_QUEUE, "ssdp:all"))
+            .filter { it.location != null }
+            .mapNotNull { device ->
+                val location = device.location ?: return@mapNotNull null
+                val desc = runCatching {
+                    io.github.laozhudu.linkplay.protocol.upnp.UpnpRendererClient.describe(location)
+                }.getOrNull() ?: return@mapNotNull null
+                val (profile, _) = io.github.laozhudu.linkplay.protocol.dlna.detect(desc, httpapiReachable = null)
+                if (profile == io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile.UNKNOWN) {
+                    return@mapNotNull null
+                }
+                device.copy(
+                    friendlySsid = desc.friendlyName,
+                    uuid = device.uuid ?: desc.udn,
+                    friendlyName = desc.friendlyName,
+                    profile = profile,
+                )
+            }
+            .distinctBy { (it.uuid ?: it.ip).lowercase() }
     }
 
     private suspend fun discoverWithTargets(targets: List<String>): List<DiscoveredDevice> = withContext(Dispatchers.IO) {

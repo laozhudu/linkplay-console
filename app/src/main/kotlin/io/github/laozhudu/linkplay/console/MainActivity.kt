@@ -67,6 +67,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.laozhudu.linkplay.console.device.DeviceContentScreen
 import io.github.laozhudu.linkplay.console.device.DeviceSettingsScreen
 import io.github.laozhudu.linkplay.console.library.LibraryScreen
+import io.github.laozhudu.linkplay.console.library.MyMusicScreen
 import io.github.laozhudu.linkplay.console.library.QueueScreen
 import io.github.laozhudu.linkplay.console.nas.NasScreen
 import io.github.laozhudu.linkplay.console.online.OnlineScreen
@@ -77,6 +78,7 @@ import io.github.laozhudu.linkplay.console.playback.VolumeOsd
 import io.github.laozhudu.linkplay.console.playback.VolumeOverlay
 import io.github.laozhudu.linkplay.console.playback.QueueRunState
 import io.github.laozhudu.linkplay.console.provisioning.ProvisioningScreen
+import io.github.laozhudu.linkplay.console.provisioning.WpsGuideScreen
 import io.github.laozhudu.linkplay.console.radio.RadioScreen
 import io.github.laozhudu.linkplay.console.ui.components.AppCard
 import io.github.laozhudu.linkplay.console.ui.components.AppShapesExpressive
@@ -156,7 +158,7 @@ private enum class Tab(val label: String, val glyph: String) {
 }
 
 /** 二级页面：从一级页推进去，返回即回一级。 */
-private enum class SubPage { Nas, LocalQueue, Library, Radio, Settings, Provisioning, DeviceContent, Online }
+private enum class SubPage { Nas, LocalQueue, Library, Radio, Settings, Provisioning, DeviceContent, Online, Wps }
 
 @Composable
 fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
@@ -273,6 +275,14 @@ private fun ConsoleBody(vm: ConsoleViewModel) {
             SubPage.Provisioning -> ProvisioningScreen(
                 onDone = { sub = null; tab = Tab.Devices },
                 onBack = { sub = null },
+                onOpenWps = { sub = SubPage.Wps },
+            )
+
+            SubPage.Wps -> WpsGuideScreen(
+                state = state,
+                onRescan = { vm.scan() },
+                onBack = { sub = SubPage.Provisioning },
+                onDone = { sub = null; tab = Tab.Devices },
             )
             }
         }
@@ -342,11 +352,13 @@ private fun ConsoleBody(vm: ConsoleViewModel) {
 
                 Tab.Sources -> SourcesScreen(
                     state = state,
+                    vm = vm,
                     onOpenOnline = { sub = SubPage.Online },
                     onOpenNas = { sub = SubPage.Nas },
                     onOpenLibrary = { sub = SubPage.Library },
                     onOpenLocal = { sub = SubPage.LocalQueue },
                     onOpenRadio = { sub = SubPage.Radio },
+                    onOpenSettings = { sub = SubPage.Settings },
                     onGoDevices = { tab = Tab.Devices },
                 )
             }
@@ -406,56 +418,39 @@ private fun NeedDevice(onGoDevices: () -> Unit) {
     }
 }
 
-/** 媒体库入口页：三个来源，各自推进去。 */
+/**
+ * 「媒体库」Tab。
+ *
+ * 主体是原厂样式的「我的音乐」汇总（几行入口 + 真实数量）；原来那几张来源卡片
+ * 收在下方「其它入口」里，功能一个没少，只是不再占着首屏。
+ */
 @Composable
 private fun SourcesScreen(
     state: ConsoleUiState,
+    vm: ConsoleViewModel,
     onOpenNas: () -> Unit,
     onOpenLibrary: () -> Unit,
     onOpenLocal: () -> Unit,
     onOpenRadio: () -> Unit,
-    onOpenOnline: () -> Unit = {},
+    onOpenOnline: () -> Unit,
+    onOpenSettings: () -> Unit,
     onGoDevices: () -> Unit,
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = Spacing.lg),
-    ) {
-        VSpace(Spacing.md)
-        SectionTitle(
-            "媒体库",
-            if (state.selectedIp == null) "先选一台音箱" else "选一个来源，点歌即播",
-        )
-        VSpace(Spacing.md)
-
-        if (state.selectedIp == null) {
-            EmptyState("还没有选中音箱", "媒体库里的歌要投给音箱播，所以先选设备。")
-            VSpace(Spacing.sm)
-            Button(onClick = onGoDevices, modifier = Modifier.fillMaxWidth()) { Text("去设备页") }
-            return
-        }
-
-        AppCard(onClick = onOpenNas) {
-            SectionTitle("NAS 媒体库", "局域网 DLNA 服务器上的曲目，点一首即播")
-        }
-        VSpace(Spacing.sm)
-        AppCard(onClick = onOpenLocal) {
-            SectionTitle("手机本地音乐", "手机里的歌，通过本机 HTTP 服务推给音箱")
-        }
-        VSpace(Spacing.sm)
-        AppCard(onClick = onOpenOnline) {
-            SectionTitle("在线曲库", "接 Subsonic / tt-music，搜什么投什么（走设备侧队列）")
-        }
-        VSpace(Spacing.sm)
-        AppCard(onClick = onOpenRadio) {
-            SectionTitle("网络电台", "内置可用电台 + 自己粘流地址，点一下即播")
-        }
-        VSpace(Spacing.sm)
-        AppCard(onClick = onOpenLibrary) {
-            SectionTitle("音乐库", "搜索 · 收藏 · 最近播放")
-        }
-    }
+    MyMusicScreen(
+        state = state,
+        // 进页面刷一次：本地曲库/歌单/电台都可能是刚在别的页面改过的
+        onRefresh = vm::refreshMusicCounts,
+        onOpenLocal = onOpenLocal,
+        onOpenNas = onOpenNas,
+        // 「全部歌单」「最近播放」都落在音乐库页（那里有对应分区），不新开二级页
+        onOpenPlaylists = onOpenLibrary,
+        onOpenRecent = onOpenLibrary,
+        onOpenOnline = onOpenOnline,
+        onOpenRadio = onOpenRadio,
+        onOpenLibrary = onOpenLibrary,
+        onOpenDeviceSettings = onOpenSettings,
+        onGoDevices = onGoDevices,
+    )
 }
 
 /**
@@ -596,6 +591,8 @@ private fun HomeScreen(
                     masked = state.groupMembers.firstOrNull {
                         it.uuid?.equals(device.uuid, ignoreCase = true) == true
                     }?.masked == true,
+                    profile = state.cards[device.uuid]?.profile
+                        ?: io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile.UNKNOWN,
                     onCenter = { c -> centers[device.uuid] = c },
                     onOpen = { onOpenDevice(device) },
                     onSettings = { onOpenSettings(device) },
@@ -886,6 +883,8 @@ private fun DraggableDeviceCard(
     isGroupMaster: Boolean,
     /** 这台是否已被屏蔽（`mask=1`）。 */
     masked: Boolean,
+    /** 设备能力档：通用 DLNA 渲染器不显示组网/声道/屏蔽这些私有入口。 */
+    profile: io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile,
     onCenter: (Offset) -> Unit,
     onOpen: () -> Unit,
     onSettings: () -> Unit,
@@ -965,6 +964,7 @@ private fun DraggableDeviceCard(
             inGroup = groupedUnder != null || isGroupMaster,
             isMaster = isGroupMaster,
             masked = masked,
+            profile = profile,
             onOpen = onOpen,
             onSettings = onSettings,
             onVolume = onVolume,
@@ -1011,6 +1011,9 @@ private fun DeviceCardRow(
     isMaster: Boolean = false,
     /** 已被屏蔽（`mask=1`，不出声但留在组里）。 */
     masked: Boolean = false,
+    /** 设备能力档（默认 UNKNOWN：按 LinkPlay 显示，保持既有行为不变）。 */
+    profile: io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile =
+        io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile.UNKNOWN,
     onOpen: () -> Unit,
     onSettings: () -> Unit,
     onVolume: (Int) -> Unit,
@@ -1078,6 +1081,12 @@ private fun DeviceCardRow(
                         )
                     }
                 }
+            }
+            // 类型标签：必须让人一眼看出"这台是音箱还是电视盒子"——
+            // 两类设备能做的事不同（盒子没有组网/声道/预设）
+            if (profile == io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile.GENERIC_DMR) {
+                PillTag(text = "通用 DLNA", color = OnDarkPalette.muted)
+                Spacer(Modifier.width(Spacing.xs))
             }
             if (groupedUnder != null) {
                 PillTag(text = "组内", color = StatusColors.ok)
@@ -1165,10 +1174,27 @@ private fun DeviceCardRow(
                 modifier = Modifier.width(30.dp),
                 textAlign = TextAlign.End,
             )
-            if (inGroup) {
-                TextButton(onClick = onUngroup, contentPadding = PaddingValues(horizontal = 6.dp)) {
-                    Text("解除", style = MaterialTheme.typography.labelSmall, color = OnDarkPalette.muted)
+            // 屏蔽 / 解除：只有 LinkPlay 从机才有意义。通用 DLNA 渲染器整段不渲染
+            // （项目铁律：不给按了没反应的按钮）
+            if (profile != io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile.GENERIC_DMR) {
+                if (inGroup && !isMaster) {
+                    TextButton(onClick = onMask, contentPadding = PaddingValues(horizontal = 6.dp)) {
+                        Text(
+                            if (masked) "恢复" else "屏蔽",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (masked) StatusColors.warn else OnDarkPalette.muted,
+                        )
+                    }
                 }
+                if (inGroup) {
+                    TextButton(onClick = onUngroup, contentPadding = PaddingValues(horizontal = 6.dp)) {
+                        Text("解除", style = MaterialTheme.typography.labelSmall, color = OnDarkPalette.muted)
+                    }
+                }
+            }
+            if (profile == io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile.GENERIC_DMR) {
+                // 通用渲染器没有声道概念：这一格留空，而不是画一个假的 LR
+                return@Row
             }
             // 声道标签：0 立体声 / 1 仅左 / 2 仅右。
             // **可以点**：组内从机点一下就在 LR → L → R 之间循环，立刻下发

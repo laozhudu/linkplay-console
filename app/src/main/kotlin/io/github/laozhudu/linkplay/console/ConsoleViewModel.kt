@@ -12,6 +12,9 @@ import io.github.laozhudu.linkplay.protocol.DeviceHttpClient
 import io.github.laozhudu.linkplay.protocol.LinkPlayCommands
 import io.github.laozhudu.linkplay.protocol.LinkPlayStatus
 import io.github.laozhudu.linkplay.protocol.SlaveDevice
+import io.github.laozhudu.linkplay.protocol.dlna.DescriptionEndpoints
+import io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile
+import io.github.laozhudu.linkplay.protocol.dlna.detect
 import io.github.laozhudu.linkplay.protocol.identity.LinkPlayIdentity
 import io.github.laozhudu.linkplay.protocol.multiroom.DragGrouping
 import io.github.laozhudu.linkplay.protocol.multiroom.MultiroomClient
@@ -24,6 +27,8 @@ import io.github.laozhudu.linkplay.console.playback.QueueBus
 import io.github.laozhudu.linkplay.console.playback.VolumeBus
 import io.github.laozhudu.linkplay.console.library.LibraryStore
 import io.github.laozhudu.linkplay.console.library.LocalLibrary
+import io.github.laozhudu.linkplay.console.library.PlaylistStore
+import io.github.laozhudu.linkplay.protocol.mediasource.SubsonicConfig
 import io.github.laozhudu.linkplay.protocol.FirmwareUpdate
 import io.github.laozhudu.linkplay.protocol.player.PlayState
 import io.github.laozhudu.linkplay.protocol.player.PlayerStatus
@@ -85,6 +90,14 @@ data class DeviceCard(
     val plicurr: Int = 0,
     /** 是否正在播放（status=play）。 */
     val playing: Boolean = false,
+    /**
+     * 这台设备的能力档（LinkPlay / 通用 DLNA / 未知）。
+     *
+     * 为什么放在卡片上：卡片上要显示类型标签，并据此**隐藏**组网/声道/屏蔽这些入口——
+     * 给一台电视盒子摆「声道 LR」按钮，按了必然没反应（它没有 multiroom 服务），
+     * 这是项目铁律明确禁止的。判档要拉描述，所以由探活时算一次、之后随轮询带下去。
+     */
+    val profile: DeviceProfile = DeviceProfile.UNKNOWN,
 )
 
 data class ConsoleUiState(
@@ -164,6 +177,17 @@ data class ConsoleUiState(
     val nasServerCount: Int = 0,
     val favoriteCount: Int = 0,
     val recentCount: Int = 0,
+    /** 歌单数（原厂「全部歌单」，存在独立的 linkplay_playlist.db）。 */
+    val playlistCount: Int = 0,
+    /** 电台数（内置台 + 用户自己粘的流地址）。 */
+    val radioCount: Int = 0,
+    /**
+     * 在线曲库是否已经配过。
+     *
+     * 为什么只表达"配没配"而不显示曲目数：在线曲库的曲目数是服务器侧的事，
+     * 进页面就问一次会把「我的音乐」拖成网络页；配置本身是本地会话里的一个 JSON。
+     */
+    val onlineConfigured: Boolean = false,
 )
 
 class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
@@ -227,20 +251,29 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                     // 从这边直接连必然超时（真机实测），跳过去，靠主机的 slave_list 表达它的状态。
                     if (_state.value.groupedUnder.containsKey(d.uuid.lowercase())) continue
                     val ip = d.ip
-                    val card = withContext(Dispatchers.IO) {
-                        runCatching {
-                            val st = PlayerStatus.parse(client.send(ip, "getPlayerStatus"))
-                            DeviceCard(
-                                title = st.title?.takeIf { it.isNotBlank() && it != "Unknown" },
-                                volume = st.volume,
-                                mute = st.mute,
-                                mode = st.mode,
-                                channel = st.channel,
-                                plicount = st.playListCount ?: 0,
-                                plicurr = st.playListCurrent ?: 0,
-                                playing = st.playState == PlayState.PLAY,
-                            )
-                        }.getOrNull()
+                    val known = _state.value.cards[d.uuid]?.profile
+                    val card = if (known == DeviceProfile.GENERIC_DMR) {
+                        // 通用渲染器不认 httpapi（没有 getPlayerStatus），只能按标准 UPnP 读
+                        withContext(Dispatchers.IO) { runCatching { pollDmrCard(d) }.getOrNull() }
+                    } else {
+                        withContext(Dispatchers.IO) {
+                            runCatching {
+                                val st = PlayerStatus.parse(client.send(ip, "getPlayerStatus"))
+                                DeviceCard(
+                                    title = st.title?.takeIf { it.isNotBlank() && it != "Unknown" },
+                                    volume = st.volume,
+                                    mute = st.mute,
+                                    mode = st.mode,
+                                    channel = st.channel,
+                                    plicount = st.playListCount ?: 0,
+                                    plicurr = st.playListCurrent ?: 0,
+                                    playing = st.playState == PlayState.PLAY,
+                                    // 能答 getPlayerStatus 就是 LinkPlay 的私有 httpapi
+                                    profile = known ?: DeviceProfile.LINKPLAY,
+                                    // 注意：这里不写缓存 —— 只有真正探测过的才写，避免把"默认"当结论
+                                )
+                            }.getOrNull()
+                        }
                     } ?: continue
                     VolumeBus.publish(ip, card.volume, card.mute)
                     _state.update { it.copy(cards = it.cards + (d.uuid to card)) }
@@ -398,6 +431,8 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                 if (status != null && status.uuid == d.uuid) {
                     result[d.uuid] = true
                     touch(d.uuid, d.ip, status)
+                    // 能答 getStatusEx 就是 LinkPlay 的私有 httpapi —— 卡片据此显示类型标签
+                    putCardProfile(d.uuid, DeviceProfile.LINKPLAY)
                     // 电量：独立设备/主机只能从 getStatusEx 拿
                     status.batteryPercent?.let { pct ->
                         _state.update { st ->
@@ -406,7 +441,16 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 } else {
                     result[d.uuid] = false
-                    // IP 变了：扫一次，看能不能按 uuid 找回来
+                    // ① 先看它是不是「通用 DLNA 渲染器」：这类设备**永远**答不上 httpapi，
+                    //    但描述里的 AVTransport 在，一样能投流。不认这一档的话，
+                    //    电视盒子会被判成"离线"，卡片上全是点不动的入口。
+                    val upnpProfile = withContext(Dispatchers.IO) { profileOfSaved(d) }
+                    if (upnpProfile == DeviceProfile.GENERIC_DMR) {
+                        result[d.uuid] = true
+                        putCardProfile(d.uuid, DeviceProfile.GENERIC_DMR)
+                        continue
+                    }
+                    // ② IP 变了：扫一次，看能不能按 uuid 找回来
                     val found = withContext(Dispatchers.IO) {
                         runCatching { discovery.discoverLinkPlayDevices() }.getOrDefault(emptyList())
                     }.firstOrNull { it.uuid?.contains(d.uuid, ignoreCase = true) == true }
@@ -481,6 +525,77 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                     groupMembers = members,
                 )
             }
+        }
+    }
+
+    /**
+     * 通用渲染器的 UPnP 客户端缓存（按 LOCATION）。
+     *
+     * 为什么缓存：首页卡片每 3 秒轮询一次，每次都重新拉 `description.xml` 就是白花一次往返。
+     * 设备换地址/服务消失时读取会抛异常，上层按「本轮读不到」处理，下次自然重建。
+     */
+    private val dmrClients = java.util.concurrent.ConcurrentHashMap<String, UpnpRendererClient>()
+
+    private fun dmrClient(location: String?): UpnpRendererClient? {
+        val loc = location?.takeIf { it.isNotBlank() } ?: return null
+        return dmrClients[loc] ?: runCatching {
+            UpnpRendererClient(UpnpRendererClient.describe(loc))
+        }.onSuccess { dmrClients[loc] = it }.getOrNull()
+    }
+
+    /**
+     * 按标准 UPnP 读一台通用渲染器的「在放什么 / 音量 / 是否在播」。
+     *
+     * 为什么只有这一条路：这类设备没有 `getPlayerStatus`，卡片上的信息只能靠
+     * `GetTransportInfo` + `GetPositionInfo` + `GetVolume` 三个标准动作凑出来。
+     * 三个都是尽力而为：某个服务缺失（例如没有 RenderingControl）只丢那一项，不整张卡作废。
+     */
+    private fun pollDmrCard(d: SavedDevice): DeviceCard {
+        val c = dmrClient(d.location) ?: throw IllegalStateException("读不到设备描述")
+        val transport = runCatching { c.transportInfo() }.getOrNull()
+        val position = runCatching { c.positionInfo() }.getOrNull()
+        val volume = runCatching { c.volume() }.getOrNull()
+        return DeviceCard(
+            title = position?.trackMetadata?.title?.takeIf { it.isNotBlank() },
+            volume = volume?.volume ?: 0,
+            mute = volume?.mute ?: false,
+            playing = transport?.state?.isPlaying == true,
+            profile = DeviceProfile.GENERIC_DMR,
+        )
+    }
+
+    /**
+     * 只按 UPnP 描述判一台已保存设备属于哪一档。
+     *
+     * 探活时用来认「通用 DLNA 渲染器」：它答不上 httpapi 是**正常**的，不是离线。
+     * 依次试保存的 LOCATION、再试 LinkPlay 的固定路径（手动填 IP 添加的没有 LOCATION）。
+     */
+    private fun profileOfSaved(d: SavedDevice): DeviceProfile {
+        val urls = buildList {
+            d.location?.takeIf { it.isNotBlank() }?.let { add(it) }
+            addAll(DescriptionEndpoints.candidates(d.ip, 49152))
+        }.distinct()
+        for (url in urls) {
+            val desc = runCatching { UpnpRendererClient.describe(url) }.getOrNull() ?: continue
+            val (profile, _) = detect(desc, httpapiReachable = false)
+            if (profile != DeviceProfile.UNKNOWN) return profile
+        }
+        return DeviceProfile.UNKNOWN
+    }
+
+    /**
+     * 把能力档写进卡片（卡片可能还没建，先建一张空的），**同时写进能力缓存**。
+     *
+     * 为什么两处都要写：卡片是给界面看的（隐藏不支持的入口），
+     * 缓存是给起播路径看的（决定要不要走设备侧 PlayQueue）。
+     * 只写一处就会出现"界面隐藏了组网、但起播还在硬推 PlayQueue"这种半截状态。
+     */
+    private fun putCardProfile(uuid: String, profile: DeviceProfile) {
+        _state.value.saved.firstOrNull { it.uuid == uuid }?.ip?.let { ip ->
+            io.github.laozhudu.linkplay.console.playback.DeviceProfileCache.put(ip, profile)
+        }
+        _state.update { st ->
+            st.copy(cards = st.cards + (uuid to (st.cards[uuid] ?: DeviceCard()).copy(profile = profile)))
         }
     }
 
@@ -571,23 +686,30 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                 val linkplay = withContext(Dispatchers.IO) {
                     runCatching { discovery.discoverLinkPlayDevices() }.getOrDefault(emptyList())
                 }
+                // 通用 DLNA 渲染器（电视盒子等）：一样能投流，只是没有私有服务。
+                // 与 LinkPlay 结果按 IP 去重（同一台设备两边都会命中，优先按 LinkPlay 展示）。
+                val renderers = withContext(Dispatchers.IO) {
+                    runCatching { discovery.discoverMediaRenderers() }.getOrDefault(emptyList())
+                }.filter { r -> linkplay.none { it.ip == r.ip } }
                 val savedUuids = _state.value.saved.map { it.uuid.lowercase() }
-                val fresh = linkplay.filter { d ->
+                fun isNew(d: DiscoveredDevice): Boolean {
                     val u = (d.uuid ?: "").lowercase()
                     // 已保存的不再重复出现在「新设备」里
-                    d.uuid == null || savedUuids.none { u.contains(it) }
+                    return d.uuid == null || savedUuids.none { u.contains(it) }
                 }
+                val fresh = linkplay.filter(::isNew) + renderers.filter(::isNew)
                 _state.update {
                     it.copy(
                         scanning = false,
                         devices = fresh,
-                        filteredOutCount = (all.size - linkplay.size).coerceAtLeast(0),
+                        filteredOutCount = (all.size - linkplay.size - renderers.size).coerceAtLeast(0),
                     )
                 }
                 when {
-                    linkplay.isEmpty() -> log("没找到音箱。确认音箱已开机且与手机同一 Wi-Fi；路由器若隔离组播，可直接填 IP。")
-                    fresh.isEmpty() -> log("找到 ${linkplay.size} 台，都是已保存过的")
-                    else -> log("发现 ${fresh.size} 台新音箱")
+                    fresh.isEmpty() && linkplay.isEmpty() && renderers.isEmpty() ->
+                        log("没找到音箱。确认设备已开机且与手机同一 Wi-Fi；路由器若隔离组播，可直接填 IP。")
+                    fresh.isEmpty() -> log("找到 ${linkplay.size + renderers.size} 台，都是已保存过的")
+                    else -> log("发现 ${fresh.size} 台新设备")
                 }
                 if (_state.value.filteredOutCount > 0) {
                     log("已忽略 ${_state.value.filteredOutCount} 个非音箱的 UPnP 设备（电视/路由/NAS 等）")
@@ -625,7 +747,14 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 识别一个 IP：先问 httpapi（最可靠），拿不到再看描述。 */
+    /**
+     * 识别一个 IP：先问 httpapi（最可靠），拿不到再看描述。
+     *
+     * 描述这一档分两种身份：
+     * - LinkPlay 系 → 原来的记录字段（uuid 用描述 UDN，location 存 `:49152/description.xml`）；
+     * - **通用 DLNA 渲染器**（电视盒子等）→ 也收下。它们没有 httpapi，但 AVTransport 在，
+     *   投流与音量都走标准 UPnP，能控就是能控，没有必要因为它们"不是本类音箱"就拒绝添加。
+     */
     private fun identify(ip: String, port: Int): SavedDevice {
         val status = runCatching { client.status(ip) }.getOrNull()
         if (status != null && !status.uuid.isNullOrBlank()) {
@@ -639,17 +768,32 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                 lastSeenMs = System.currentTimeMillis(),
             )
         }
-        // 没有 httpapi 时退回 UPnP 描述判断
-        val desc = UpnpRendererClient.describe("http://$ip:$port/description.xml")
-        if (!LinkPlayIdentity.isLinkPlayFamily(desc)) {
-            throw IllegalStateException("$ip 不是本类音箱（${LinkPlayIdentity.reasonFor(desc)} 不成立）")
+        // 没有 httpapi 时退回 UPnP 描述判断。
+        // 两个候选地址都试：LinkPlay 在 `/description.xml`，通用渲染器常把描述放在根路径
+        // （实测 AirReceiver：`http://192.168.99.175:3500/` 就是描述，`/description.xml` 404）。
+        var desc: io.github.laozhudu.linkplay.protocol.upnp.DeviceDescription? = null
+        var usedUrl: String? = null
+        for (url in DescriptionEndpoints.candidates(ip, port)) {
+            val d = runCatching { UpnpRendererClient.describe(url) }.getOrNull() ?: continue
+            if (d.avTransportControlUrl != null) {
+                desc = d
+                usedUrl = url
+                break
+            }
+        }
+        val found = desc ?: throw IllegalStateException(
+            "$ip:$port 上没有可用的 UPnP 描述（既没有 httpapi，也没有带 AVTransport 的描述文件）",
+        )
+        val (profile, _) = detect(found, httpapiReachable = false)
+        if (profile == DeviceProfile.UNKNOWN) {
+            throw IllegalStateException("$ip:$port 不是可播放设备（${LinkPlayIdentity.reasonFor(found)} 不成立）")
         }
         return SavedDevice(
-            uuid = desc.udn?.removePrefix("uuid:") ?: ip,
-            name = desc.friendlyName ?: ip,
+            uuid = found.udn?.removePrefix("uuid:") ?: ip,
+            name = found.friendlyName ?: ip,
             ip = ip,
-            location = "http://$ip:$port/description.xml",
-            modelName = desc.modelName,
+            location = usedUrl,
+            modelName = found.modelName,
             lastSeenMs = System.currentTimeMillis(),
         )
     }
@@ -1122,7 +1266,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 刷新「我的音乐」四个入口的数量。 */
+    /** 刷新「我的音乐」六个入口的数量。 */
     fun refreshMusicCounts() {
         viewModelScope.launch {
             val app = getApplication<Application>()
@@ -1135,11 +1279,30 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
             val recent = withContext(Dispatchers.IO) {
                 runCatching { LibraryStore.get(app).recents.recent(200).size }.getOrDefault(0)
             }
+            val radios = withContext(Dispatchers.IO) {
+                runCatching { LibraryStore.get(app).radios.all().size }.getOrDefault(0)
+            }
+            // 家庭音乐共享 = 记住的 DLNA **服务器**数，而不是"当前设备有没有"。
+            // 原来按 selectedUuid 判 1/0，换个设备看就变成 0，跟"家里有台 NAS"这个事实不符。
+            // 同一台 NAS 可能被多台音箱各记一份会话，所以按 host:port 去重。
             val nas = withContext(Dispatchers.IO) {
                 runCatching {
-                    // 家庭音乐共享 = 本机记住的 DLNA 服务器数量（键是设备 uuid）
-                    store.loadNasSession(_state.value.selectedUuid.orEmpty()) != null
-                }.getOrDefault(false).let { if (it) 1 else 0 }
+                    _state.value.saved
+                        .mapNotNull { store.loadNasSession(it.uuid)?.server }
+                        .map { "${it.host}:${it.port}" }
+                        .distinct()
+                        .size
+                }.getOrDefault(0)
+            }
+            // 在线曲库：只要本地存过一份能解析出地址的配置就算"已连接"（不 ping，避免进页面就卡网络）
+            val online = withContext(Dispatchers.IO) {
+                runCatching {
+                    val cfg = SubsonicConfig.decode(store.loadSubsonic())
+                    cfg != null && cfg.baseUrl.isNotBlank() && cfg.enabled
+                }.getOrDefault(false)
+            }
+            val lists = withContext(Dispatchers.IO) {
+                runCatching { PlaylistStore.get(app).count() }.getOrDefault(0)
             }
             _state.update {
                 it.copy(
@@ -1147,8 +1310,27 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                     nasServerCount = nas,
                     favoriteCount = fav,
                     recentCount = recent,
+                    radioCount = radios,
+                    onlineConfigured = online,
+                    playlistCount = lists,
                 )
             }
+        }
+    }
+
+    /**
+     * 只刷歌单数。
+     *
+     * 为什么要单独一个：歌单是在「音乐库」页里就地增删的，从那里返回「我的音乐」时
+     * 只需要更新这一个数字，没必要把本地曲库（要扫 MediaStore）和电台一起重读一遍。
+     * 与 [refreshMusicCounts] 并存，不改动已有调用方。
+     */
+    fun refreshPlaylistCount() {
+        viewModelScope.launch {
+            val lists = withContext(Dispatchers.IO) {
+                runCatching { PlaylistStore.get(getApplication()).count() }.getOrDefault(0)
+            }
+            _state.update { it.copy(playlistCount = lists) }
         }
     }
 
