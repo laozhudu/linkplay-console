@@ -16,6 +16,12 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- 桌面悬浮控制（原厂 FloatingWindowService 的等价）：
+         TYPE_APPLICATION_OVERLAY 需要 SYSTEM_ALERT_WINDOW；
+         服务本身是前台服务，所以还要一条 SPECIAL_USE 类型声明。 -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
     <!-- 应用图标：自适应图标（v26+）+ 传统 PNG 兜底（24-25）。
          前景是「音箱箱体 + 音量滑轨」，一眼读作音箱遥控。 -->
     <application
@@ -37,6 +43,17 @@
             android:name=".library.MediaServerService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- 悬浮控制条：exported=false（只由本 App 启动）；
+             specialUse 是 Android 14 起对"不属于既有类型"的前台服务的要求。 -->
+        <service
+            android:name=".floating.FloatingControlService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="floating playback remote control overlaid on other apps" />
+        </service>
 
         <activity
             android:name=".MainActivity"

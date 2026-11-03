@@ -1,5 +1,9 @@
 package io.github.laozhudu.linkplay.console.device
 
+import io.github.laozhudu.linkplay.console.floating.FloatingControlService
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -126,6 +130,55 @@ fun DeviceSettingsScreen(
         }
 
         VSpace(Spacing.md)
+
+        // ---- 桌面悬浮控制（原厂 FloatingWindowService 的等价）----
+        AppCard {
+            SectionTitle("桌面悬浮控制", "在桌面或别的 App 上也能暂停/切歌")
+            VSpace(Spacing.xs)
+            val context = LocalContext.current
+            val running by FloatingControlService.running.collectAsState()
+            // 权限每次进页面都重读：用户可能在系统设置里刚给过/刚收回
+            var canOverlay by remember { mutableStateOf(FloatingControlService.canDrawOverlays(context)) }
+            LaunchedEffect(Unit) { canOverlay = FloatingControlService.canDrawOverlays(context) }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    when {
+                        !canOverlay -> "需要「显示在其他应用上层」权限"
+                        running -> "正在显示"
+                        else -> "未开启"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = when {
+                        !canOverlay -> StatusColors.warn
+                        running -> StatusColors.ok
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+                if (!canOverlay) {
+                    TextButton(onClick = {
+                        // 引导到本 App 的悬浮窗权限页；不加包名会落到设置首页，用户找不到
+                        runCatching { context.startActivity(FloatingControlService.overlayPermissionIntent(context)) }
+                    }) { Text("去授权") }
+                } else {
+                    TextButton(onClick = {
+                        if (running) {
+                            FloatingControlService.stop(context)
+                        } else {
+                            // 没有权限时 start() 返回 false，这里只会在有权限分支执行
+                            FloatingControlService.start(context, state.selectedIp)
+                        }
+                    }) { Text(if (running) "关闭" else "开启") }
+                }
+            }
+            if (!canOverlay) {
+                Text(
+                    "悬浮窗要在桌面显示，必须由你在系统设置里授权；App 不能替你点。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
 
         // ---- 输入源 ----
         AppCard {
