@@ -18,6 +18,7 @@ import io.github.laozhudu.linkplay.protocol.player.DeviceQueueState
 import io.github.laozhudu.linkplay.protocol.player.PlayerSource
 import io.github.laozhudu.linkplay.protocol.player.PlayerStatus
 import io.github.laozhudu.linkplay.protocol.player.PlaybackSnapshot
+import io.github.laozhudu.linkplay.protocol.player.DeviceGeneration
 import io.github.laozhudu.linkplay.protocol.player.UpnpPlaybackEngine
 import io.github.laozhudu.linkplay.protocol.upnp.PositionInfo
 import io.github.laozhudu.linkplay.protocol.upnp.TransportState
@@ -97,10 +98,20 @@ data class PlaybackUiState(
  * 两条都探不通时明确告知用户，而不是给一个点不动的界面。
  */
 class PlaybackViewModel(
-    private val deviceIp: String,
-    private val location: String?,
+    /**
+     * 当前设备。**刻意不是 val**：一台 App 只应有一个 PlaybackViewModel，
+     * 换设备走 [switchTo] 原地切换。
+     *
+     * 为什么（真 bug）：以前 PlayerScreen 用 `viewModel(key = "player-$deviceIp")`，
+     * 换设备会**新建**一个 VM，但旧 VM 留在 Activity 的 ViewModelStore 里、
+     * 它的轮询循环照旧每秒往 VolumeBus / QueueBus / 快照里写**上一台设备**的数据。
+     * 表现就是「切到另一台后先是报错/串台，等一会儿又自己好了」
+     * —— 其实是旧设备那次响应被新设备盖过去了。用户实测反馈过这个现象。
+     */
+    private var deviceIp: String,
+    private var location: String?,
     /** 设备 uuid：播放快照按它存盘，换 IP 也能找回上次的队列。 */
-    private val deviceUuid: String? = null,
+    private var deviceUuid: String? = null,
     /** 会话仓库。传 null 表示"不恢复上次状态"（预览/测试用）。 */
     private val sessionStore: SessionStore? = null,
 ) : ViewModel() {
@@ -112,7 +123,16 @@ class PlaybackViewModel(
 
     /** 直接的 httpapi 客户端：切换输入源这类命令不属于"播放通道"，不该塞进 PlaybackEngine。 */
     private val device = DeviceHttpClient()
-    private var polling = false
+
+    /**
+     * 代际号：每次 [switchTo] +1。
+     *
+     * 为什么需要：切设备的瞬间可能还有上一次请求在飞（读描述、快照、队列），
+     * 它们回来时不能把结果写进新设备的状态。所有异步写状态前都比一下代际号，
+     * 不一致直接丢弃 —— 这比"取消协程"更可靠，因为 HTTP 请求可能刚好在取消前返回。
+     */
+    private val generation = DeviceGeneration()
+    private var pollJob: kotlinx.coroutines.Job? = null
 
     /**
      * 同一台设备的 httpapi 客户端。
@@ -135,12 +155,57 @@ class PlaybackViewModel(
         viewModelScope.launch { prepare() }
     }
 
+    /**
+     * 切换到另一台设备（原地切换，不新建 ViewModel）。
+     *
+     * 做的事：代际号 +1（作废所有在飞请求）→ 停轮询 → 停转发服务 → 丢引擎 →
+     * 状态清成"准备中"（**不保留上一台的曲名/音量/队列，否则界面会短暂显示错的内容**）
+     * → 重新建通道 → 重新从新设备读回状态与列表。
+     */
+    fun switchTo(ip: String, newLocation: String?, uuid: String?) {
+        // 同一台设备、且描述地址没有从 null 补成真实值 → 什么都不做
+        // （首次组合时 LaunchedEffect 一定会调到这里，不能白白重连一次）
+        if (ip == deviceIp && (newLocation == null || newLocation == location)) return
+
+        generation.bump()
+        pollJob?.cancel()
+        pollJob = null
+        relay?.stop()
+        relay = null
+        engine = null
+        deviceIp = ip
+        location = newLocation
+        deviceUuid = uuid
+
+        // 只保留用户正在输入的投流参数；其余全清（尤其是 error 与设备队列数字）
+        _state.update {
+            PlaybackUiState(
+                preparing = true,
+                castUrl = it.castUrl,
+                castNeedsHeaders = it.castNeedsHeaders,
+                castReferer = it.castReferer,
+                log = it.log + "切换到设备 $ip",
+            )
+        }
+        VolumeBus.forget(ip)
+
+        viewModelScope.launch {
+            prepare()
+            restoreLastSession()
+        }
+    }
+
     private suspend fun prepare() {
+        val gen = generation.current()
         val notes = mutableListOf<String>()
+        val location = location
+        val deviceIp = deviceIp
 
         if (!location.isNullOrBlank()) {
             try {
                 val description = withContext(Dispatchers.IO) { UpnpRendererClient.describe(location) }
+                // 读描述的这段时间里用户可能已经切走 —— 那就别再往新设备的状态里写旧设备的信息
+                if (generation.isStale(gen)) return
                 if (description.avTransportControlUrl != null) {
                     engine = withContext(Dispatchers.IO) { UpnpPlaybackEngine(UpnpRendererClient(description)) }
                     _state.update {
@@ -167,6 +232,7 @@ class PlaybackViewModel(
         // 兜底：httpapi 播放控制
         val fallback = HttpApiPlaybackEngine(DeviceHttpClient(), deviceIp)
         val probed = withContext(Dispatchers.IO) { fallback.probe() }
+        if (generation.isStale(gen)) return
         if (probed) {
             engine = fallback
             _state.update {
@@ -189,11 +255,12 @@ class PlaybackViewModel(
     }
 
     private fun startPolling() {
-        if (polling) return
-        polling = true
-        viewModelScope.launch {
+        pollJob?.cancel()
+        val gen = generation.current()
+        pollJob = viewModelScope.launch {
             while (isActive) {
                 delay(POLL_INTERVAL_MS)
+                if (generation.isStale(gen)) return@launch
                 refreshOnce(silent = true)
             }
         }
@@ -214,9 +281,12 @@ class PlaybackViewModel(
 
     private suspend fun refreshOnce(silent: Boolean = false) {
         val e = engine ?: return
+        val gen = generation.current()
         if (!silent) _state.update { it.copy(busy = true, error = null) }
         try {
             val snapshot: PlaybackSnapshot = withContext(Dispatchers.IO) { e.snapshot() }
+            // 请求在飞的过程中用户切了设备 → 这份快照属于上一台，丢弃
+            if (generation.isStale(gen)) return
             // 设备侧的真实音量同步给全站（首页多房间卡片也订阅它）
             VolumeBus.publish(deviceIp, snapshot.volume, snapshot.mute)
             // 设备侧队列位置（1 基转 0 基在 DeviceQueueState 里做）同步给列表高亮
@@ -546,7 +616,9 @@ class PlaybackViewModel(
         }
 
         // 2) 队列：优先把设备上的整份列表读回来（原厂 BrowseQueue），读不到再用本地快照
+        val gen = generation.current()
         val deviceList = DevicePlaylistGateway.read(deviceIp, location)
+        if (generation.isStale(gen)) return
         if (deviceList != null && !deviceList.isEmpty) {
             val items = DevicePlaylistGateway.toQueueItems(deviceList)
             val idx = deviceList.currentIndex.coerceIn(0, items.lastIndex)

@@ -44,6 +44,17 @@ object VolumeBus {
 
     fun volumeOf(ip: String?): DeviceVolume? = ip?.let { _state.value[it] }
 
+    /**
+     * 丢掉某台设备的音量记录。
+     *
+     * 切设备时用：否则新设备第一次回读之前，界面会显示上一台设备的音量
+     * （用户体感是「切过去音量是错的，等一下才对」）。
+     */
+    fun forget(ip: String) {
+        if (ip.isBlank()) return
+        _state.update { current -> if (current.containsKey(ip)) current - ip else current }
+    }
+
     /** 只改音量（拖动时用，静音状态保持原样）。 */
     fun publishVolume(ip: String, volume: Int) {
         val mute = _state.value[ip]?.mute ?: false

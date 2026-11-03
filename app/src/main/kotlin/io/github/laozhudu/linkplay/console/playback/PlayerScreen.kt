@@ -138,8 +138,11 @@ fun PlayerScreen(
     onOpenLocalQueue: () -> Unit = {},
 ) {
     val appContext = LocalContext.current.applicationContext
+    // **刻意不加 key**：整台 App 只有一个 PlaybackViewModel，换设备走 vm.switchTo()。
+    // 以前是 key = "player-$deviceIp"，换设备会新建一个 VM，旧的那只留在 ViewModelStore 里
+    // 继续每秒轮询、往共享状态里写上一台设备的数据 —— 这才是「切设备后报错/串台、
+    // 等一会儿又自己好了」的真因（用户反馈过）。
     val vm: PlaybackViewModel = viewModel(
-        key = "player-$deviceIp",
         factory = viewModelFactory {
             initializer {
                 PlaybackViewModel(
@@ -151,6 +154,10 @@ fun PlayerScreen(
             }
         },
     )
+    // 设备变了就地切换（首次组合时是同一条设备，switchTo 内部会直接返回，不会重连）
+    LaunchedEffect(deviceIp, deviceLocation, deviceUuid) {
+        vm.switchTo(deviceIp, deviceLocation, deviceUuid)
+    }
     val state by vm.state.collectAsState()
     val queue by QueueBus.state.collectAsState()
     val palette = remember(state.title, state.artist) { seedOf(state.title, state.artist) }
