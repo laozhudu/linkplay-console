@@ -22,6 +22,14 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
+    <!-- 语音命令词：只需要录音权限，识别交给系统 SpeechRecognizer（不引云端 SDK） -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
+
     <!-- 应用图标：自适应图标（v26+）+ 传统 PNG 兜底（24-25）。
          前景是「音箱箱体 + 音量滑轨」，一眼读作音箱遥控。 -->
     <application
