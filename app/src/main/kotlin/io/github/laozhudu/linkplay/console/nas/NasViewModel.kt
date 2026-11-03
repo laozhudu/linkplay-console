@@ -21,6 +21,7 @@ import io.github.laozhudu.linkplay.console.playback.DevicePlaylistGateway
 import io.github.laozhudu.linkplay.console.playback.DeviceQueuePush
 import io.github.laozhudu.linkplay.console.playback.QueueBus
 import io.github.laozhudu.linkplay.console.playback.QueuePlaybackService
+import io.github.laozhudu.linkplay.console.library.PlayJournal
 import io.github.laozhudu.linkplay.console.session.SessionStore
 import io.github.laozhudu.linkplay.protocol.queue.QueueItem
 import io.github.laozhudu.linkplay.protocol.queue.QueueTarget
@@ -403,6 +404,8 @@ class NasViewModel(
         _state.update { it.copy(playing = true, error = null, playedCount = 0, controlLost = false) }
         val start = startIndex.coerceIn(0, items.lastIndex)
         log("开始推送 ${items.size} 首（从第 ${start + 1} 首起）到 $rendererIp")
+        // 最近播放：NAS 目录起播也要记（以前只有音乐库那页记，从 NAS 点过的歌进不了最近播放）
+        PlayJournal.recordCurrent(getApplication(), items, start)
 
         // 先试「整列表交给设备」：这样 App 退出后设备仍能自己往下播，设备的上一首/下一首也生效
         viewModelScope.launch {

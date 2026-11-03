@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -46,6 +47,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.compose.ui.platform.LocalContext
 import io.github.laozhudu.linkplay.console.ui.components.AppCard
+import io.github.laozhudu.linkplay.console.ui.components.PillButton
 import io.github.laozhudu.linkplay.console.ui.components.AppShapesExpressive
 import io.github.laozhudu.linkplay.console.ui.components.EmptyState
 import io.github.laozhudu.linkplay.console.ui.components.PageHeader
@@ -56,6 +58,7 @@ import io.github.laozhudu.linkplay.console.ui.components.VSpace
 import io.github.laozhudu.linkplay.console.ui.theme.Spacing
 import io.github.laozhudu.linkplay.console.ui.theme.StatusColors
 import io.github.laozhudu.linkplay.protocol.library.TrackRecord
+import io.github.laozhudu.linkplay.protocol.playlist.PlaylistOps
 import io.github.laozhudu.linkplay.protocol.radio.RadioStation
 
 /**
@@ -142,6 +145,7 @@ fun LibraryScreen(
                 LibraryTab.SEARCH to "搜索",
                 LibraryTab.FAVORITES to "收藏 ${state.favorites.size}",
                 LibraryTab.RECENT to "最近 ${state.recents.size}",
+                LibraryTab.PLAYLISTS to "歌单 ${state.playlists.size}",
             ).forEach { (tab, label) ->
                 val active = state.tab == tab
                 Box(
@@ -186,6 +190,8 @@ fun LibraryScreen(
                 onToggleFav = vm::toggleFavorite,
                 favoriteKeys = state.favorites.map { it.dedupeKey }.toSet(),
             )
+            LibraryTab.PLAYLISTS -> PlaylistSection(state, vm)
+
             LibraryTab.RECENT -> TrackList(
                 title = "最近播放",
                 subtitle = "${state.recents.size} 首",
@@ -255,6 +261,148 @@ fun LibraryScreen(
 }
 
 // ---------------------------------------------------------------- 搜索
+
+/**
+ * 歌单分区（原厂「全部歌单」）。
+ *
+ * 只做四件事，都对应原厂实际有的行为：新建、看里面有什么、整单播放、改名/删除。
+ * 「把收藏加入」是当前唯一的批量入口：曲目行没有长按菜单，不做看不见的手势。
+ */
+@Composable
+private fun PlaylistSection(state: LibraryUiState, vm: LibraryViewModel) {
+    var newName by remember { mutableStateOf("") }
+    var renaming by remember { mutableStateOf<PlaylistOps.Playlist?>(null) }
+    var deleting by remember { mutableStateOf<PlaylistOps.Playlist?>(null) }
+
+    val open = state.playlists.firstOrNull { it.id == state.openPlaylistId }
+
+    if (open != null) {
+        AppCard {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("‹", style = MaterialTheme.typography.titleLarge, modifier = Modifier.clickable { vm.openPlaylist(null) })
+                Spacer(Modifier.width(Spacing.sm))
+                Column(Modifier.weight(1f)) {
+                    Text(open.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("${open.size} 首 · 点一行从这首起播", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                TextButton(onClick = { vm.playPlaylist(open.id, 0) }, enabled = open.size > 0) { Text("整单播放") }
+            }
+            if (open.tracks.isEmpty()) {
+                VSpace(Spacing.sm)
+                Text("这个歌单还是空的。在「收藏 / 最近 / 搜索」里长按一首歌加入。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            open.tracks.forEachIndexed { index, item ->
+                VSpace(Spacing.xs)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "${index + 1}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.width(22.dp),
+                    )
+                    Column(
+                        Modifier.weight(1f).clickable { vm.playPlaylist(open.id, index) },
+                    ) {
+                        Text(item.title, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        item.artist?.takeIf { it.isNotBlank() }?.let {
+                            Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                        }
+                    }
+                    TextButton(onClick = { vm.removeFromPlaylist(open.id, index) }) { Text("移除") }
+                }
+            }
+        }
+        VSpace(Spacing.sm)
+    }
+
+    AppCard {
+        Text("歌单", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "把收藏、最近的歌攒成一个列表，整单推给音箱（走设备侧队列，App 退出照播）。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        VSpace(Spacing.sm)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = newName,
+                onValueChange = { newName = it },
+                label = { Text("新歌单名字") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(Spacing.sm))
+            PillButton(
+                text = "新建",
+                enabled = newName.isNotBlank() && !state.busy,
+                onClick = {
+                    vm.createPlaylist(newName)
+                    newName = ""
+                },
+            )
+        }
+        if (state.favorites.isNotEmpty()) {
+            VSpace(Spacing.xs)
+            TextButton(
+                onClick = { vm.addToPlaylist(newName.ifBlank { "我的收藏" }, state.favorites) },
+                enabled = !state.busy,
+            ) { Text("把 ${state.favorites.size} 首收藏加入「${newName.ifBlank { "我的收藏" }}」") }
+        }
+    }
+
+    if (state.playlists.isEmpty()) {
+        VSpace(Spacing.sm)
+        Text("还没有歌单。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+    state.playlists.forEach { list ->
+        VSpace(Spacing.sm)
+        AppCard {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(
+                    Modifier.weight(1f).clickable { vm.openPlaylist(list.id) },
+                ) {
+                    Text(list.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("${list.size} 首", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                TextButton(onClick = { vm.playPlaylist(list.id, 0) }, enabled = list.size > 0) { Text("播放") }
+                TextButton(onClick = { renaming = list }) { Text("改名") }
+                TextButton(onClick = { deleting = list }) { Text("删除") }
+            }
+        }
+    }
+
+    renaming?.let { target ->
+        var name by remember(target.id) { mutableStateOf(target.name) }
+        AlertDialog(
+            onDismissRequest = { renaming = null },
+            title = { Text("重命名歌单") },
+            text = {
+                OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true)
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.renamePlaylist(target.id, name)
+                    renaming = null
+                }) { Text("保存") }
+            },
+            dismissButton = { TextButton(onClick = { renaming = null }) { Text("取消") } },
+        )
+    }
+    deleting?.let { target ->
+        AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { Text("删除「${target.name}」") },
+            text = { Text("只会删这个歌单，收藏和最近播放不动。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.deletePlaylist(target.id)
+                    deleting = null
+                }) { Text("删除") }
+            },
+            dismissButton = { TextButton(onClick = { deleting = null }) { Text("取消") } },
+        )
+    }
+}
 
 @Composable
 private fun SearchSection(
