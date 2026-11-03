@@ -41,6 +41,8 @@ data class QueueRunState(
      * 所以设备报的 `plicurr` 要加上这个偏移才对得上本地列表。
      */
     val deviceOffset: Int = 0,
+    /** 这份列表从哪来的（设备 / 本地快照 / 占位），直接显示给用户，避免"看起来像同步了其实没有"。 */
+    val sourceNote: String? = null,
     val error: String? = null,
     val log: List<String> = emptyList(),
 ) {
@@ -97,7 +99,14 @@ object QueueBus {
      * （没有 controller）。如实标记成「已恢复，未接管」，界面上点某一首就会直接投流接管，
      * 而不是假装有个正在运行的队列。
      */
-    fun restore(items: List<QueueItem>, index: Int, title: String?) = _state.update {
+    fun restore(
+        items: List<QueueItem>,
+        index: Int,
+        title: String?,
+        deviceOwned: Boolean = false,
+        offset: Int = 0,
+        note: String? = null,
+    ) = _state.update {
         QueueRunState(
             running = false,
             items = items,
@@ -105,6 +114,9 @@ object QueueBus {
             nowPlaying = title ?: items.getOrNull(index)?.title,
             total = items.size,
             playedCount = index + 1,
+            deviceOwned = deviceOwned,
+            deviceOffset = offset,
+            sourceNote = note,
         )
     }
 

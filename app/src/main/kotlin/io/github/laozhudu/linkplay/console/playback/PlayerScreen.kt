@@ -81,6 +81,7 @@ import io.github.laozhudu.linkplay.console.ui.theme.OnDarkPalette
 import io.github.laozhudu.linkplay.console.ui.theme.Spacing
 import io.github.laozhudu.linkplay.console.ui.theme.StatusColors
 import io.github.laozhudu.linkplay.console.ui.theme.seedOf
+import io.github.laozhudu.linkplay.protocol.playback.QueueRestore
 import io.github.laozhudu.linkplay.protocol.player.LoopMode
 import io.github.laozhudu.linkplay.protocol.player.PlayerSource
 import io.github.laozhudu.linkplay.protocol.queue.QueueItem
@@ -452,6 +453,14 @@ fun PlayerScreen(
                         style = MaterialTheme.typography.labelSmall,
                         color = StatusColors.ok,
                     )
+                } else if (!showAdvanced && queue.sourceNote.isNullOrBlank().not()) {
+                    Text(
+                        queue.sourceNote.orEmpty(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (queue.deviceOwned) StatusColors.ok else OnDarkPalette.muted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 } else if (queue.items.isEmpty() && !showAdvanced) {
                     Text(
                         "从媒体库点歌",
@@ -507,7 +516,7 @@ fun PlayerScreen(
                                 playing = index == queue.index && queue.running,
                                 current = index == queue.index,
                                 onClick = { vm.playQueueItem(index) },
-                                onRemove = { vm.removeQueueItem(index) },
+                                onRemove = if (QueueRestore.isPlaceholder(item)) null else ({ vm.removeQueueItem(index) }),
                             )
                         }
                     }
@@ -543,7 +552,7 @@ private fun PlaylistRow(
     playing: Boolean,
     current: Boolean,
     onClick: () -> Unit,
-    onRemove: () -> Unit,
+    onRemove: (() -> Unit)?,
 ) {
     val extras = LocalExtraColors.current
     Row(
@@ -583,14 +592,17 @@ private fun PlaylistRow(
                 )
             }
         }
-        Box(
-            modifier = Modifier
-                .size(34.dp)
-                .clip(CircleShape)
-                .clickable(onClick = onRemove),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text("✕", style = MaterialTheme.typography.labelSmall, color = OnDarkPalette.muted)
+        // 占位行（设备有队列但本机没曲目单）不能删：设备侧的列表我们改不了
+        onRemove?.let {
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = it),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("✕", style = MaterialTheme.typography.labelSmall, color = OnDarkPalette.muted)
+            }
         }
     }
 }

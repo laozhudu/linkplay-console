@@ -10,6 +10,8 @@ import io.github.laozhudu.linkplay.protocol.player.PlayState
 import io.github.laozhudu.linkplay.protocol.player.PlayerStatus
 import io.github.laozhudu.linkplay.protocol.radio.RadioStation
 import io.github.laozhudu.linkplay.protocol.radio.RadioStationStore
+import io.github.laozhudu.linkplay.protocol.session.PlaybackKey
+import io.github.laozhudu.linkplay.protocol.session.PlaybackSession
 import io.github.laozhudu.linkplay.protocol.radio.VerifiedRadioCatalog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -72,10 +74,13 @@ class RadioViewModel(
     app: Application,
     private val deviceIp: String,
     private val deviceName: String?,
+    /** 设备 uuid：播放快照按它存（不能只用名字/IP，前者不稳、后者会漂）。 */
+    private val deviceUuid: String? = null,
 ) : AndroidViewModel(app) {
 
     private val client = DeviceHttpClient()
     private val store: RadioStationStore = LibraryStore.get(app).radios
+    private val sessions = io.github.laozhudu.linkplay.console.session.SessionStore.of(app)
     private val _state = MutableStateFlow(RadioUiState())
     val state: StateFlow<RadioUiState> = _state.asStateFlow()
 
@@ -201,6 +206,26 @@ class RadioViewModel(
             }
 
             if (started) {
+                // 电台也是"在设备上播"，重开 App 要让播放页有东西可显示
+                withContext(Dispatchers.IO) {
+                    runCatching {
+                        sessions.savePlayback(
+                            PlaybackKey.of(deviceUuid, deviceIp),
+                            PlaybackSession(
+                                deviceUuid = deviceName ?: deviceIp,
+                                deviceIp = deviceIp,
+                                items = listOf(
+                                    io.github.laozhudu.linkplay.protocol.queue.QueueItem(
+                                        url = url,
+                                        title = name ?: RadioStation.suggestName(url),
+                                    ),
+                                ),
+                                index = 0,
+                                loopMode = 0,
+                            ),
+                        )
+                    }
+                }
                 val id = if (storeId != 0L) storeId else autoSave(url, name)
                 _state.update {
                     it.copy(

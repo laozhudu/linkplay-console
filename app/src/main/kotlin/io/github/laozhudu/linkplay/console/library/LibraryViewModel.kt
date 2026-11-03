@@ -15,6 +15,7 @@ import io.github.laozhudu.linkplay.protocol.library.TrackRecord
 import io.github.laozhudu.linkplay.protocol.queue.PlayFromList
 import io.github.laozhudu.linkplay.protocol.queue.QueueItem
 import io.github.laozhudu.linkplay.protocol.queue.ClientSideQueue
+import io.github.laozhudu.linkplay.protocol.session.PlaybackKey
 import io.github.laozhudu.linkplay.protocol.session.PlaybackSession
 import io.github.laozhudu.linkplay.protocol.radio.RadioStation
 import kotlinx.coroutines.Dispatchers
@@ -54,9 +55,17 @@ class LibraryViewModel(
     private val location: String?,
     /** 设备显示名（用来给电台做「按设备分组」；拿不到就退回 IP）。 */
     private val deviceLabel: String? = null,
+    /**
+     * 设备 uuid。**播放快照必须按它存**，不能再用 SSID：
+     * 之前这里存的键是 deviceLabel（SSID），而恢复时按 uuid / `ip:` 找，永远对不上 ——
+     * 这就是「重开 App 列表不同步」的最后一个缺口。
+     */
+    private val deviceUuid: String? = null,
 ) : AndroidViewModel(app) {
 
     private val store = LibraryStore.get(app)
+    /** 播放快照需要另一个库（会话 vs 业务内容分开，见 docs/12） */
+    private val sessions = io.github.laozhudu.linkplay.console.session.SessionStore.of(app)
     private val _state = MutableStateFlow(LibraryUiState())
     val state: StateFlow<LibraryUiState> = _state.asStateFlow()
 
@@ -177,8 +186,19 @@ class LibraryViewModel(
                 val pushed = withContext(Dispatchers.IO) {
                     DeviceQueuePush.push(DeviceHttpClient(), deviceIp, items, startAt)
                 }
+                // **必须落快照**：设备不回填曲目元数据，重开 App 时只能靠这份本地记录
+                // 把设备报的 plicount/plicurr 翻成"第几首、叫什么"。之前这里没存，
+                // 于是从音乐库推的列表重开必丢 —— 这是用户反馈的主因。
+                withContext(Dispatchers.IO) {
+                    runCatching {
+                        sessions.savePlayback(
+                            PlaybackKey.of(deviceUuid, deviceIp),
+                            session.copy(index = startAt, deviceOffset = pushed.offset),
+                        )
+                    }
+                }
                 if (pushed.ok) {
-                    QueueBus.restore(items, startAt, items.getOrNull(startAt)?.title)
+                    QueueBus.restore(items, startAt, items.getOrNull(startAt)?.title, deviceOwned = true, offset = pushed.offset)
                     QueueBus.markDeviceOwned(pushed.offset)
                     log(pushed.detail + "（设备侧队列）")
                 } else {
