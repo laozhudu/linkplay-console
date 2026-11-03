@@ -12,6 +12,9 @@ kotlin {
 
 dependencies {
     testImplementation(libs.junit)
+    // 只给测试用：MediaProvider 的 search/resolve 是 suspend，单测需要 runBlocking。
+    // 主代码保持零依赖（纯 JVM、无 Android），发布出去的 jar 不带协程。
+    testImplementation(libs.kotlinx.coroutines.core)
 }
 
 java {
