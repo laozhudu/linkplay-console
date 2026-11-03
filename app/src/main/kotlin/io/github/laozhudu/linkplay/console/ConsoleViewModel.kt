@@ -21,7 +21,11 @@ import io.github.laozhudu.linkplay.console.playback.DevicePlaylistGateway
 import io.github.laozhudu.linkplay.console.playback.DeviceVolumeControl
 import io.github.laozhudu.linkplay.console.playback.QueueBus
 import io.github.laozhudu.linkplay.console.playback.VolumeBus
+import io.github.laozhudu.linkplay.console.library.LibraryStore
+import io.github.laozhudu.linkplay.console.library.LocalLibrary
+import io.github.laozhudu.linkplay.protocol.player.PlayState
 import io.github.laozhudu.linkplay.protocol.player.PlayerStatus
+import io.github.laozhudu.linkplay.protocol.player.SleepTimer
 import io.github.laozhudu.linkplay.protocol.player.VolumeStep
 import io.github.laozhudu.linkplay.protocol.session.SavedDevice
 import io.github.laozhudu.linkplay.protocol.upnp.UpnpRendererClient
@@ -49,6 +53,26 @@ data class GroupMember(
     /** 声道：0=立体声 1=仅左 2=仅右。主机固定立体声，为 null。 */
     val channel: Int? = null,
     val isMaster: Boolean = false,
+)
+
+/**
+ * 首页设备卡片的实时信息（原厂设备列表就是这么显示的）。
+ *
+ * 为什么要单独一份：原厂卡片上每台音箱都显示「现在放的是哪首 + 音量 + 声道」，
+ * 而不只是设备名。这些必须**逐台轮询**（不同设备内容不同），
+ * 所以不能复用只针对当前选中设备的 `status`。
+ */
+data class DeviceCard(
+    val title: String? = null,
+    val volume: Int = 0,
+    val mute: Boolean = false,
+    /** 设备回报的 mode（判断在哪一路上播）。 */
+    val mode: Int? = null,
+    /** 设备侧队列长度/当前序号（`plicount`/`plicurr`），0 表示没有列表。 */
+    val plicount: Int = 0,
+    val plicurr: Int = 0,
+    /** 是否正在播放（status=play）。 */
+    val playing: Boolean = false,
 )
 
 data class ConsoleUiState(
@@ -109,6 +133,20 @@ data class ConsoleUiState(
      */
     val joinChannel: Int = 0,
     val joinPassword: String = "",
+
+    /** 首页卡片：`uuid → 实时信息`。逐台轮询出来的，见 [DeviceCard]。 */
+    val cards: Map<String, DeviceCard> = emptyMap(),
+
+    /** 定时关闭（原厂设备菜单第四项）。到点由 App 自己下发停止。 */
+    val sleepTimer: SleepTimer = SleepTimer(),
+    /** 定时器显示用的"现在"，每秒刷新一次，让倒计时能走。 */
+    val nowMs: Long = 0L,
+
+    /** 「我的音乐」页要显示的数量。 */
+    val localMusicCount: Int = 0,
+    val nasServerCount: Int = 0,
+    val favoriteCount: Int = 0,
+    val recentCount: Int = 0,
 )
 
 class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
@@ -155,6 +193,60 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                     runCatching {
                         val st = PlayerStatus.parse(client.send(masterIp, "getPlayerStatus"))
                         VolumeBus.publish(masterIp, st.volume, st.mute)
+                    }
+                }
+            }
+        }
+        // 首页卡片心跳：每 3 秒逐台读 getPlayerStatus（原厂设备列表就显示每台的曲名/音量）。
+        // 为什么不用 1 秒：卡片信息变化慢，3 秒够了；设备只有 2 台，但别把老固件打爆。
+        viewModelScope.launch {
+            while (true) {
+                delay(3_000)
+                val saved = _state.value.saved
+                if (saved.isEmpty()) continue
+                for (d in saved) {
+                    if (_state.value.online[d.uuid] == false) continue
+                    // 只轮询"路由器侧够得着"的设备：入组的从机在主机 AP 网段里，
+                    // 从这边直接连必然超时（真机实测），跳过去，靠主机的 slave_list 表达它的状态。
+                    if (_state.value.groupedUnder.containsKey(d.uuid.lowercase())) continue
+                    val ip = d.ip
+                    val card = withContext(Dispatchers.IO) {
+                        runCatching {
+                            val st = PlayerStatus.parse(client.send(ip, "getPlayerStatus"))
+                            DeviceCard(
+                                title = st.title?.takeIf { it.isNotBlank() && it != "Unknown" },
+                                volume = st.volume,
+                                mute = st.mute,
+                                mode = st.mode,
+                                plicount = st.playListCount ?: 0,
+                                plicurr = st.playListCurrent ?: 0,
+                                playing = st.playState == PlayState.PLAY,
+                            )
+                        }.getOrNull()
+                    } ?: continue
+                    VolumeBus.publish(ip, card.volume, card.mute)
+                    _state.update { it.copy(cards = it.cards + (d.uuid to card)) }
+                }
+            }
+        }
+        // 定时关闭的时钟：每秒推进一次，到点下发停止。
+        viewModelScope.launch {
+            while (true) {
+                delay(1_000)
+                val now = System.currentTimeMillis()
+                val timer = _state.value.sleepTimer
+                if (now - _state.value.nowMs < 900 && !timer.active) continue
+                _state.update { it.copy(nowMs = now) }
+                if (timer.isDue(now)) {
+                    val ip = _state.value.selectedIp
+                        ?: _state.value.saved.firstOrNull()?.ip
+                    _state.update { it.copy(sleepTimer = SleepTimer()) }
+                    if (ip != null) {
+                        withContext(Dispatchers.IO) {
+                            runCatching { client.send(ip, "setPlayerCmd:stop") }
+                        }
+                        log("定时关闭到点：已停止 $ip")
+                        QueueBus.stopped()
                     }
                 }
             }
@@ -640,6 +732,110 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         val ip = _state.value.selectedIp ?: return false
         if (_state.value.online[ip] == false) return false
         return VolumeBus.volumeOf(ip) != null || _state.value.groupMembers.any { it.ip == ip }
+    }
+
+    /** 开定时关闭（分钟）。0 = 取消。原厂设备菜单第四项。 */
+    fun setSleepTimer(minutes: Int) {
+        val timer = if (minutes <= 0) SleepTimer().cancel()
+        else SleepTimer().start(minutes, System.currentTimeMillis())
+        _state.update { it.copy(sleepTimer = timer, nowMs = System.currentTimeMillis()) }
+        log(if (timer.active) "定时关闭：${minutes} 分钟后停止" else "定时关闭：已取消")
+    }
+
+    fun cancelSleepTimer() = setSleepTimer(0)
+
+    /**
+     * 首页卡片上拖音量（原厂卡片就是这个交互）。
+     *
+     * 走 [deviceVolumeChannel] 合并通道：拖动会连续产生几十个值，
+     * 每个都发一次 HTTP 会把老固件压垮，合并只保留最新值。
+     */
+    fun setCardVolume(device: SavedDevice, volume: Int) {
+        val ip = device.ip
+        VolumeBus.publishVolume(ip, volume)
+        deviceVolumeChannel.trySend(ip to volume.coerceIn(0, 100))
+    }
+
+    /**
+     * 「全部播放」（原厂设备列表底部那个按钮）。
+     *
+     * 语义是**把这批设备当成一组一起放**：优先用设备侧已有的队列（`plicount>0`），
+     * 因为那是唯一能在 App 退出后继续播的形态；没有队列就退回收起队列的本地播放。
+     */
+    fun playAll() {
+        run("全部播放") {
+            val online = _state.value.saved.filter { _state.value.online[it.uuid] != false }
+            if (online.isEmpty()) {
+                _state.update { it.copy(error = "没有在线设备") }
+                return@run
+            }
+            // 先把在线设备按组主机的 IP 归位：组内从机必须由主机代放
+            val masterIp = _state.value.groupMasterIp
+            val ip = masterIp ?: _state.value.selectedIp ?: online.first().ip
+            val card = _state.value.saved.firstOrNull { it.ip == ip }
+                ?.let { d -> _state.value.cards[d.uuid] }
+            val res = withContext(Dispatchers.IO) {
+                runCatching<String> {
+                    if ((card?.plicount ?: 0) > 0) {
+                        // 设备自己握着队列：直接续播，连索引都不用给（设备记得 LastPlayIndex）
+                        client.send(ip, "setPlayerCmd:resume")
+                    } else {
+                        // 没队列：从上次的队列恢复
+                        val uuid = _state.value.selectedUuid
+                        val saved = PlaybackKey.candidates(uuid, ip).firstNotNullOfOrNull { key ->
+                            runCatching { store.loadPlayback(key) }.getOrNull()
+                        }
+                        if (saved == null || saved.items.isEmpty()) {
+                            _state.update { it.copy(error = "设备上没有列表，先去「我的音乐」点一首") }
+                            ""
+                        } else {
+                            QueueBus.restore(
+                                items = saved.items,
+                                index = saved.index.coerceIn(0, saved.items.lastIndex),
+                                title = saved.items.getOrNull(saved.index)?.title,
+                                deviceOwned = false,
+                                note = "从上次播放继续",
+                            )
+                            "restore"
+                        }
+                    }
+                }.getOrElse { t ->
+                    _state.update { it.copy(error = "全部播放失败：${t.message}") }
+                    ""
+                }
+            }
+            if (res.isNotEmpty()) log("全部播放 → $ip")
+        }
+    }
+
+    /** 刷新「我的音乐」四个入口的数量。 */
+    fun refreshMusicCounts() {
+        viewModelScope.launch {
+            val app = getApplication<Application>()
+            val local = withContext(Dispatchers.IO) {
+                runCatching { LocalLibrary.query(app).size }.getOrDefault(0)
+            }
+            val fav = withContext(Dispatchers.IO) {
+                runCatching { LibraryStore.get(app).favorites.all().size }.getOrDefault(0)
+            }
+            val recent = withContext(Dispatchers.IO) {
+                runCatching { LibraryStore.get(app).recents.recent(200).size }.getOrDefault(0)
+            }
+            val nas = withContext(Dispatchers.IO) {
+                runCatching {
+                    // 家庭音乐共享 = 本机记住的 DLNA 服务器数量（键是设备 uuid）
+                    store.loadNasSession(_state.value.selectedUuid.orEmpty()) != null
+                }.getOrDefault(false).let { if (it) 1 else 0 }
+            }
+            _state.update {
+                it.copy(
+                    localMusicCount = local,
+                    nasServerCount = nas,
+                    favoriteCount = fav,
+                    recentCount = recent,
+                )
+            }
+        }
     }
 
     /** 把某台从机移出组。 */
