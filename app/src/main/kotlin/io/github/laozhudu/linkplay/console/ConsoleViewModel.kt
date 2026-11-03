@@ -20,6 +20,9 @@ import io.github.laozhudu.linkplay.protocol.identity.UuidMatch
 import io.github.laozhudu.linkplay.protocol.multiroom.DragGrouping
 import io.github.laozhudu.linkplay.protocol.multiroom.GroupPlan
 import io.github.laozhudu.linkplay.protocol.multiroom.MultiroomClient
+import io.github.laozhudu.linkplay.protocol.snapshot.DeviceSnapshot
+import io.github.laozhudu.linkplay.protocol.snapshot.DeviceSnapshotReader
+import io.github.laozhudu.linkplay.protocol.snapshot.toSnapshot
 import io.github.laozhudu.linkplay.protocol.playback.QueueRestore
 import io.github.laozhudu.linkplay.protocol.player.DeviceQueueState
 import io.github.laozhudu.linkplay.protocol.session.PlaybackKey
@@ -290,33 +293,15 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                     // 只轮询"路由器侧够得着"的设备：入组的从机在主机 AP 网段里，
                     // 从这边直接连必然超时（真机实测），跳过去，靠主机的 slave_list 表达它的状态。
                     if (_state.value.groupedUnder.containsKey(UuidMatch.key(d.uuid))) continue
-                    val ip = d.ip
+                    // 走**唯一**的取数入口：一次拿全（含电量/声道/设备名），
+                    // 再由 applySnapshot 合并进卡片。之前这里自己拼一张全新 DeviceCard 整体覆盖，
+                    // 把另一条通道刚写的电量清成 null —— 用户报的"电量时有时无"就是这个。
                     val known = _state.value.cards[d.uuid]?.profile
-                    val card = if (known == DeviceProfile.GENERIC_DMR) {
-                        // 通用渲染器不认 httpapi（没有 getPlayerStatus），只能按标准 UPnP 读
-                        withContext(Dispatchers.IO) { runCatching { pollDmrCard(d) }.getOrNull() }
-                    } else {
-                        withContext(Dispatchers.IO) {
-                            runCatching {
-                                val st = PlayerStatus.parse(client.send(ip, "getPlayerStatus"))
-                                DeviceCard(
-                                    title = st.title?.takeIf { it.isNotBlank() && it != "Unknown" },
-                                    volume = st.volume,
-                                    mute = st.mute,
-                                    mode = st.mode,
-                                    channel = st.channel,
-                                    plicount = st.playListCount ?: 0,
-                                    plicurr = st.playListCurrent ?: 0,
-                                    playing = st.playState == PlayState.PLAY,
-                                    // 能答 getPlayerStatus 就是 LinkPlay 的私有 httpapi
-                                    profile = known ?: DeviceProfile.LINKPLAY,
-                                    // 注意：这里不写缓存 —— 只有真正探测过的才写，避免把"默认"当结论
-                                )
-                            }.getOrNull()
-                        }
+                    val snap = withContext(Dispatchers.IO) {
+                        if (known == DeviceProfile.GENERIC_DMR) snapshots.readGenericDmr(d.ip)
+                        else snapshots.read(d.ip)
                     } ?: continue
-                    VolumeBus.publish(ip, card.volume, card.mute)
-                    _state.update { it.copy(cards = it.cards + (d.uuid to card)) }
+                    applySnapshot(d.uuid, snap)
                 }
             }
         }
@@ -465,22 +450,16 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val result = mutableMapOf<String, Boolean>()
             for (d in targets) {
-                // 优先用 Wiimu 扩展动作 GetControlDeviceInfo：**一次**拿到
-                // 音量/静音/声道/从机列表/整份 getStatusEx（含电量与 DeviceName）。
-                // 原厂就是这么读的；分三次请求时任一失败都会把界面上的值冲掉。
-                val info = withContext(Dispatchers.IO) {
-                    runCatching { rendererFor(d).controlDeviceInfo() }.getOrNull()
-                }
-                val status = info?.status ?: withContext(Dispatchers.IO) {
-                    runCatching { client.status(d.ip) }.getOrNull()
-                }
+                // 走唯一的取数入口（最短路径：GetControlDeviceInfo + getPlayerStatus）
+                val snap = withContext(Dispatchers.IO) { snapshots.read(d.ip) }
                 // uuid 必须宽容比较：设备两种格式（无连字符 24 位 / 带 uuid: 前缀 32 位）永远不"相等"
-                if (status != null && UuidMatch.same(status.uuid, d.uuid)) {
+                if (snap != null && (snap.uuid == null || UuidMatch.same(snap.uuid, d.uuid))) {
                     result[d.uuid] = true
-                    touch(d.uuid, d.ip, status)
+                    // 名字/固件等来自快照；touch 负责写回本地记录（名字以设备 DeviceName 为准）
+                    touch(d.uuid, d.ip, snap)
                     // 能答 getStatusEx 就是 LinkPlay 的私有 httpapi —— 卡片据此显示类型标签
                     putCardProfile(d.uuid, DeviceProfile.LINKPLAY)
-                    if (info != null) mergeCardInfo(d.uuid, info, status.batteryPercent)
+                    applySnapshot(d.uuid, snap)
                 } else {
                     result[d.uuid] = false
                     // ① 先看它是不是「通用 DLNA 渲染器」：这类设备**永远**答不上 httpapi，
@@ -591,58 +570,72 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * 唯一的取数入口。所有轮询、所有页面都通过它读设备状态。
+     *
+     * 最短路径：`GetControlDeviceInfo`（音量/静音/声道/从机/整份 Status，含电量与设备名）
+     * + `getPlayerStatus`（曲名/进度/播放态）—— 真机 80ms + 32ms。
+     * UPnP 不通时自动退 `getStatusEx`，电量不会因为 UPnP 挂了而消失。
+     */
+    private val snapshots: DeviceSnapshotReader by lazy {
+        DeviceSnapshotReader(
+            http = client,
+            controlInfo = { ip -> runCatching { rendererByIp(ip).controlDeviceInfo() }.getOrNull() },
+            dmrProbe = { ip -> probeGenericDmr(ip) },
+        )
+    }
+
+    /** 取一台设备的 UPnP 客户端（按 ip 缓存；描述拉一次就够）。 */
+    private fun rendererByIp(ip: String): UpnpRendererClient {
+        val key = "lp:$ip"
+        dmrClients[key]?.let { return it }
+        val c = UpnpRendererClient.ofDevice(ip)
+        dmrClients[key] = c
+        return c
+    }
+
+    /** 通用 DMR 的探测：标准 UPnP 三连，缺项就少项。 */
+    private fun probeGenericDmr(ip: String): DeviceSnapshot? {
+        val d = _state.value.saved.firstOrNull { it.ip == ip } ?: return null
+        val c = runCatching { dmrClient(d.location) ?: rendererByIp(ip) }.getOrNull() ?: return null
+        val transport = runCatching { c.transportInfo() }.getOrNull()
+        val position = runCatching { c.positionInfo() }.getOrNull()
+        val volume = runCatching { c.volume() }.getOrNull()
+        if (transport == null && position == null && volume == null) return null
+        return DeviceSnapshot(
+            title = position?.trackMetadata?.title?.takeIf { it.isNotBlank() },
+            volume = volume?.volume,
+            mute = volume?.mute,
+            playing = transport?.state?.isPlaying,
+            answered = setOf(DeviceSnapshot.Channel.GENERIC_DMR),
+        )
+    }
+
+    /**
+     * 把一份快照写进界面状态 —— **全项目唯一的写卡片路径**。
+     *
+     * 之前有 4 处各写各的（心跳、设备信息、组刷新、DMR），每处都只填自己知道的字段
+     * 然后整体覆盖，所以电量刚写进去就被下一轮清成 null。现在全部收敛到这里。
+     */
+    private fun applySnapshot(uuid: String, snap: DeviceSnapshot) {
+        val ip = _state.value.saved.firstOrNull { it.uuid == uuid }?.ip
+        val vol = snap.volume
+        if (ip != null && vol != null) {
+            VolumeBus.publish(ip, vol, snap.mute ?: false)
+        }
+        _state.update { st ->
+            val old = st.cards[uuid] ?: DeviceCard()
+            st.copy(cards = st.cards + (uuid to CardMerge.apply(old, snap)))
+        }
+    }
+
+    /**
      * 取一台**已保存 LinkPlay 设备**的 UPnP 客户端（按 ip 缓存）。
      *
      * 为什么要 UPnP 客户端：声道与「一次读全」都只有 Wiimu 扩展动作能做
      * （`RenderingControl.SetChannel` / `GetControlDeviceInfo`），httpapi 没有对应命令。
      * 描述文件拉一次就缓存，卡片 3 秒一轮不会反复往返。
      */
-    private fun rendererFor(d: SavedDevice): UpnpRendererClient {
-        val key = "lp:${d.ip}"
-        dmrClients[key]?.let { return it }
-        val client = UpnpRendererClient.ofDevice(d.ip)
-        dmrClients[key] = client
-        return client
-    }
-
-    /**
-     * 用 [ControlDeviceInfo] 更新卡片，**只覆盖设备真的报了值的字段**。
-     *
-     * 为什么不整体替换：`GetControlDeviceInfo` 的 `<Status>` 偶尔缺 `battery_percent`
-     * （电量采样在变），整体替换会让卡片上的电量时有时无。曲名/列表这类只有
-     * `getPlayerStatus` 才有的字段也不该被这条抹掉。
-     */
-    private fun mergeCardInfo(
-        uuid: String,
-        info: io.github.laozhudu.linkplay.protocol.upnp.ControlDeviceInfo,
-        battery: Int?,
-    ) {
-        _state.update { st ->
-            val old = st.cards[uuid] ?: DeviceCard()
-            st.copy(cards = st.cards + (uuid to CardMerge.applyDeviceInfo(old, info, battery)))
-        }
-    }
-
-    /**
-     * 按标准 UPnP 读一台通用渲染器的「在放什么 / 音量 / 是否在播」。
-     *
-     * 为什么只有这一条路：这类设备没有 `getPlayerStatus`，卡片上的信息只能靠
-     * `GetTransportInfo` + `GetPositionInfo` + `GetVolume` 三个标准动作凑出来。
-     * 三个都是尽力而为：某个服务缺失（例如没有 RenderingControl）只丢那一项，不整张卡作废。
-     */
-    private fun pollDmrCard(d: SavedDevice): DeviceCard {
-        val c = dmrClient(d.location) ?: throw IllegalStateException("读不到设备描述")
-        val transport = runCatching { c.transportInfo() }.getOrNull()
-        val position = runCatching { c.positionInfo() }.getOrNull()
-        val volume = runCatching { c.volume() }.getOrNull()
-        return DeviceCard(
-            title = position?.trackMetadata?.title?.takeIf { it.isNotBlank() },
-            volume = volume?.volume ?: 0,
-            mute = volume?.mute ?: false,
-            playing = transport?.state?.isPlaying == true,
-            profile = DeviceProfile.GENERIC_DMR,
-        )
-    }
+    private fun rendererFor(d: SavedDevice): UpnpRendererClient = rendererByIp(d.ip)
 
     /**
      * 只按 UPnP 描述判一台已保存设备属于哪一档。
@@ -691,14 +684,14 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
      * 与热点 SSID 是两回事。这里改成：拿描述里的 friendlyName 同步名字，
      * 只在它非空且与本地不同时写回 —— 这样"在别处改的名字"也能同步过来。
      */
-    private fun touch(uuid: String, ip: String, status: LinkPlayStatus?, location: String? = null) {
+    private fun touch(uuid: String, ip: String, snap: DeviceSnapshot?, location: String? = null) {
         val existing = _state.value.saved.firstOrNull { it.uuid == uuid } ?: return
         // 名字的优先级（真机实测出来的顺序，别改回去）：
         //   ① getStatusEx.DeviceName —— setDeviceName 之后**立刻**就是新名字
         //   ② description.xml 的 friendlyName —— 同一个值，但要滞后几秒（.153 实测 2s 还是旧名）
         //   ③ 都没有就保留本地值
         // 绝不能落到 ssid（那是设备热点名 `DOSS DS-1831_xxx`，不是用户设的名字）
-        val friendly = status?.deviceName ?: runCatching {
+        val friendly = snap?.deviceName ?: runCatching {
             val loc = location ?: existing.location ?: "http://$ip:49152/description.xml"
             UpnpRendererClient.describe(loc).friendlyName?.takeIf { it.isNotBlank() }
         }.getOrNull()
@@ -706,7 +699,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
             ip = ip,
             name = friendly ?: existing.name,
             location = location ?: existing.location,
-            modelName = status?.hardware ?: existing.modelName,
+            modelName = snap?.firmware ?: existing.modelName,
             lastSeenMs = System.currentTimeMillis(),
         )
         val next = runCatching { store.upsertDevice(updated) }.getOrDefault(_state.value.saved)
@@ -919,7 +912,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
             val slaves = runCatching { client.slaveList(ip) }.getOrDefault(emptyList())
             // UUID 在这里落定：SSDP 只给 IP/LOCATION，UUID 必须问设备要
             _state.update { it.copy(status = status, slaves = slaves, selectedUuid = status.uuid) }
-            status.uuid?.let { touch(it, ip, status) }
+            status.uuid?.let { touch(it, ip, status.toSnapshot()) }
         }
     }
 
@@ -1495,18 +1488,9 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         }.distinct()
         for (ip in ips) {
             val uuid = st.saved.firstOrNull { it.ip == ip }?.uuid ?: continue
-            val fresh = withContext(Dispatchers.IO) {
-                runCatching { PlayerStatus.parse(client.send(ip, "getPlayerStatus")) }.getOrNull()
-            } ?: continue
-            VolumeBus.publish(ip, fresh.volume, fresh.mute)
-            _state.update { st ->
-                // **合并**而不是替换：这条轮询只提供「在放什么 / 进度 / 是否在播」，
-                // 电量、声道、能力档是别的通道拿到的。原来这里 `cards + (uuid to card)`
-                // 用一张全新卡片覆盖，每次轮询都把 battery/channel/profile 清成 null ——
-                // 用户看到的就是「电量有时有有时没有」「声道标签永远是 LR」。
-                val old = st.cards[uuid] ?: DeviceCard()
-                st.copy(cards = st.cards + (uuid to CardMerge.applyPlayerStatus(old, fresh)))
-            }
+            // 与其他轮询共用同一个取数入口与同一条合并规则 —— 这样"谁后跑"不再影响结果
+            val snap = withContext(Dispatchers.IO) { snapshots.read(ip) } ?: continue
+            applySnapshot(uuid, snap)
         }
     }
 

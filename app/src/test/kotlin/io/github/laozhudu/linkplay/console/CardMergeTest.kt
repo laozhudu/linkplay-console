@@ -1,7 +1,6 @@
 package io.github.laozhudu.linkplay.console
 
-import io.github.laozhudu.linkplay.protocol.player.PlayerStatus
-import io.github.laozhudu.linkplay.protocol.upnp.ControlDeviceInfo
+import io.github.laozhudu.linkplay.protocol.snapshot.DeviceSnapshot
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -9,92 +8,79 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 卡片合并规则。
+ * 卡片合并规则 —— 全项目唯一的写卡片路径。
  *
  * 这些用例锁的是两条真实故障：
- * 1. 每 3 秒的播放轮询把电量清空 → 「电量有时有有时没有」
- * 2. 同一轮询把声道清回默认 → 「声道切换后界面不变」
+ * 1. 每 3 秒的心跳只读播放态，却整体覆盖卡片 → 「电量有时有有时没有」
+ * 2. 同一次覆盖把声道清回默认 → 「声道切换后界面不变」
  */
 class CardMergeTest {
 
-    private val realGetPlayerStatus = """
-        {"type":"0","ch":"2","mode":"10","loop":"0","eq":"0","status":"play",
-         "curpos":"12000","totlen":"240000","vol":"34","mute":"0",
-         "plicount":"28","plicurr":"3","Title":"e4b889e68993e799bde9aaa8e9aaa8","Artist":"",
-         "Album":"","uri":""}
-    """.trimIndent()
-
-    private val realDeviceInfo = ControlDeviceInfo(
-        volume = 41,
-        mute = false,
-        channel = 2,
-        status = io.github.laozhudu.linkplay.protocol.LinkPlayStatus.parse(
-            """{"uuid":"FF31F0174FE5C9B2A2ACEAE3","battery_percent":"40","battery":"1","DeviceName":"doss3"}""",
-        ),
-    )
-
     @Test
-    fun `player status poll keeps battery and channel from previous card`() {
-        // 上一轮已经有电量和声道（由 GetControlDeviceInfo 写入）
-        val before = DeviceCard(battery = 40, channel = 1, title = "旧曲名", profile = io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile.LINKPLAY)
+    fun `player-only snapshot keeps battery channel and charging flag`() {
+        val before = DeviceCard(
+            battery = 40,
+            charging = false,
+            channel = 1,
+            title = "旧曲名",
+            profile = io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile.LINKPLAY,
+        )
 
-        val after = CardMerge.applyPlayerStatus(before, PlayerStatus.parse(realGetPlayerStatus))
+        // 心跳这一轮只拿到播放态（没有电量/声道）
+        val after = CardMerge.apply(
+            before,
+            DeviceSnapshot(title = "三打白骨精", playing = true, volume = 34, plicount = 28, plicurr = 3),
+        )
 
-        assertEquals(40, after.battery)      // ← 关键：不能被轮询清空
-        assertEquals(2, after.channel)       // getPlayerStatus 的 ch 是权威值，允许覆盖
+        assertEquals(40, after.battery)     // ← 关键：不能被清空
+        assertEquals(1, after.channel)      // ← 声道也不能被清回 0
+        assertFalse(after.charging)
+        assertEquals("三打白骨精", after.title)
         assertEquals(34, after.volume)
-        assertTrue(after.playing)
-        assertEquals(28, after.plicount)
+        assertTrue(after.playing == true)
         assertEquals(io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile.LINKPLAY, after.profile)
     }
 
     @Test
-    fun `player status poll keeps previous title when device reports Unknown`() {
-        val before = DeviceCard(title = "三打白骨精")
-        val status = PlayerStatus.parse(realGetPlayerStatus.replace("\"e4b889e68993e799bde9aaa8e9aaa8\"", "\"556E6B6E6F776E\""))
-        assertEquals("三打白骨精", CardMerge.applyPlayerStatus(before, status).title)
-    }
-
-    @Test
-    fun `device info fills channel battery and charging flag`() {
-        val before = DeviceCard(volume = 10)
-        val after = CardMerge.applyDeviceInfo(before, realDeviceInfo, battery = null)
-
-        assertEquals(2, after.channel)
+    fun `control-info snapshot fills battery and channel`() {
+        val after = CardMerge.apply(
+            DeviceCard(volume = 10),
+            DeviceSnapshot(volume = 41, mute = false, channel = 2, batteryPercent = 40, onBattery = true),
+        )
         assertEquals(41, after.volume)
+        assertEquals(2, after.channel)
         assertEquals(40, after.battery)
-        // battery="1" → 在用电池 → 不是充电态
-        assertFalse(after.charging)
+        assertFalse(after.charging)   // 在用电池 → 不是充电态
     }
 
     @Test
-    fun `device info without battery keeps previous value instead of nulling it`() {
-        val before = DeviceCard(battery = 40, charging = false)
-        val noBattery = ControlDeviceInfo(
-            volume = 41,
-            channel = 0,
-            status = io.github.laozhudu.linkplay.protocol.LinkPlayStatus.parse("""{"uuid":"X"}"""),
-        )
-        val after = CardMerge.applyDeviceInfo(before, noBattery, battery = null)
-        assertEquals(40, after.battery)
-        assertEquals(0, after.channel)
+    fun `charging is true when device reports on power`() {
+        val after = CardMerge.apply(DeviceCard(), DeviceSnapshot(batteryPercent = 100, onBattery = false))
+        assertEquals(100, after.battery)
+        assertTrue(after.charging)
     }
 
     @Test
-    fun `charging is true when device is on power`() {
-        val info = ControlDeviceInfo(
-            status = io.github.laozhudu.linkplay.protocol.LinkPlayStatus.parse(
-                """{"uuid":"FF310096A5760623673F81F1","battery_percent":"100","battery":"0"}""",
-            ),
-        )
-        assertTrue(CardMerge.applyDeviceInfo(DeviceCard(), info, null).charging)
+    fun `blank snapshot changes nothing`() {
+        val before = DeviceCard(battery = 40, channel = 1, title = "曲名", volume = 33, playing = true)
+        assertEquals(before, CardMerge.apply(before, DeviceSnapshot()))
     }
 
     @Test
     fun `empty card stays empty rather than inventing values`() {
-        val after = CardMerge.applyDeviceInfo(DeviceCard(), ControlDeviceInfo(), null)
+        val after = CardMerge.apply(DeviceCard(), DeviceSnapshot())
         assertNull(after.battery)
         assertNull(after.channel)
         assertEquals(0, after.volume)
+    }
+
+    @Test
+    fun `battery recovers on the next successful read`() {
+        // 先有电量 → 一轮只拿到播放态（保留）→ 再一轮拿到新电量（更新）
+        val first = CardMerge.apply(DeviceCard(), DeviceSnapshot(batteryPercent = 40, onBattery = true))
+        val kept = CardMerge.apply(first, DeviceSnapshot(playing = true))
+        val updated = CardMerge.apply(kept, DeviceSnapshot(batteryPercent = 39, onBattery = true))
+        assertEquals(40, kept.battery)
+        assertEquals(39, updated.battery)
     }
 }
