@@ -1,5 +1,6 @@
 package io.github.laozhudu.linkplay.console
 
+import io.github.laozhudu.linkplay.protocol.identity.UuidMatch
 import io.github.laozhudu.linkplay.protocol.multiroom.DragGrouping
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -632,22 +633,20 @@ private fun HomeScreen(
                 DraggableDeviceCard(
                     device = device,
                     online = state.online[device.uuid],
-                    groupedUnder = state.groupedUnder[device.uuid.lowercase()],
+                    groupedUnder = state.groupedUnder[UuidMatch.key(device.uuid)],
                     card = state.cards[device.uuid],
                     // 拖拽组网：松手时命中了另一台就把"被拖的"挂到"被命中的"上
                     drag = dragState,
                     siblingCount = state.saved.size,
                     isGroupMaster = state.groupMasterIp != null && device.ip == state.groupMasterIp,
-                    masked = state.groupMembers.firstOrNull {
-                        it.uuid?.equals(device.uuid, ignoreCase = true) == true
-                    }?.masked == true,
+                    masked = UuidMatch.find(device.uuid, state.groupMembers) { it.uuid }?.masked == true,
                     profile = state.cards[device.uuid]?.profile
                         ?: io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile.UNKNOWN,
                     onCenter = { c -> centers[device.uuid] = c },
                     onOpen = { onOpenDevice(device) },
                     onSettings = { onOpenSettings(device) },
                     onVolume = { vm.setCardVolume(device, it) },
-                    onChannel = { vm.cycleCardChannel(device) },
+                    onSetChannel = { ch -> vm.setCardChannel(device, ch) },
                     onUngroup = { vm.ungroupCard(device) },
                     onMask = { vm.toggleMask(device) },
                     onTogglePlay = { vm.toggleDevicePlay(device) },
@@ -794,18 +793,22 @@ private fun HomeScreen(
         val masterName = state.saved.firstOrNull { it.ip == masterIp }?.title ?: "未选主机"
         AlertDialog(
             onDismissRequest = { vm.closeGrouping() },
-            title = { Text("同步播放") },
+            // 字体按用户要求放大一档：这个面板是要"读"的（勾选哪几台、谁是主机），
+            // 原来的 labelSmall 在手机上基本靠猜
+            title = { Text("同步播放", style = MaterialTheme.typography.headlineSmall) },
             text = {
                 Column {
                     Text(
                         "主机：$masterName。勾选要一起出声的音箱，应用后主机不变。",
-                        style = MaterialTheme.typography.labelSmall,
+                        style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     VSpace(Spacing.xs)
                     // 「Everywhere」：Sonos 在 3 台以上才给（两台时"全选"没有额外价值）
                     if (io.github.laozhudu.linkplay.protocol.multiroom.GroupPlan.showEverywhere(state.saved.size)) {
-                        TextButton(onClick = { vm.selectEverywhere() }) { Text("全部同步（Everywhere）") }
+                        TextButton(onClick = { vm.selectEverywhere() }) {
+                            Text("全部同步（Everywhere）", style = MaterialTheme.typography.bodyLarge)
+                        }
                     }
                     state.saved.forEach { device ->
                         val isMaster = device.ip == masterIp
@@ -821,27 +824,27 @@ private fun HomeScreen(
                         ) {
                             Text(
                                 if (checked) "☑" else "☐",
-                                style = MaterialTheme.typography.titleMedium,
+                                style = MaterialTheme.typography.headlineSmall,
                                 color = if (isMaster) MaterialTheme.colorScheme.primary
                                 else MaterialTheme.colorScheme.onSurface,
                             )
                             Spacer(Modifier.width(Spacing.sm))
                             Column(Modifier.weight(1f)) {
-                                Text(device.title, style = MaterialTheme.typography.bodyMedium)
+                                Text(device.title, style = MaterialTheme.typography.titleMedium)
                                 Text(
                                     if (isMaster) "主机（始终同步）" else device.ip,
-                                    style = MaterialTheme.typography.labelSmall,
+                                    style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
                             if (state.cards[device.uuid]?.playing == true) {
-                                Text("在放", style = MaterialTheme.typography.labelSmall, color = StatusColors.ok)
+                                Text("在放", style = MaterialTheme.typography.bodySmall, color = StatusColors.ok)
                             }
                         }
                     }
                     state.groupingProgress?.let {
                         VSpace(Spacing.xs)
-                        Text(it, style = MaterialTheme.typography.labelSmall, color = StatusColors.warn)
+                        Text(it, style = MaterialTheme.typography.bodyMedium, color = StatusColors.warn)
                     }
                 }
             },
@@ -1019,7 +1022,7 @@ private fun DraggableDeviceCard(
     onOpen: () -> Unit,
     onSettings: () -> Unit,
     onVolume: (Int) -> Unit,
-    onChannel: () -> Unit,
+    onSetChannel: (Int) -> Unit,
     onUngroup: () -> Unit,
     onMask: () -> Unit,
     onTogglePlay: () -> Unit,
@@ -1099,7 +1102,7 @@ private fun DraggableDeviceCard(
             onOpen = onOpen,
             onSettings = onSettings,
             onVolume = onVolume,
-            onChannel = onChannel,
+            onSetChannel = onSetChannel,
             onUngroup = onUngroup,
             onMask = onMask,
             onTogglePlay = onTogglePlay,
@@ -1149,7 +1152,7 @@ private fun DeviceCardRow(
     onOpen: () -> Unit,
     onSettings: () -> Unit,
     onVolume: (Int) -> Unit,
-    onChannel: () -> Unit = {},
+    onSetChannel: (Int) -> Unit = {},
     onUngroup: () -> Unit = {},
     onMask: () -> Unit = {},
     onTogglePlay: () -> Unit = {},
@@ -1160,6 +1163,8 @@ private fun DeviceCardRow(
     // 拖动时的本地乐观值：不这样会出现"手指在动、旋钮不动"（要等 3 秒轮询回读）
     var dragging by remember(device.uuid) { mutableStateOf<Int?>(null) }
     var confirmUngroup by remember(device.uuid) { mutableStateOf(false) }
+    // 声道面板：三选一（M3 single-select / Sonos 立体声对的取值方式），而不是"点一下轮一个"
+    var channelDialog by remember(device.uuid) { mutableStateOf(false) }
     val volume = dragging ?: card?.volume ?: 0
     val channel = card?.channel
     val title = card?.title
@@ -1208,7 +1213,7 @@ private fun DeviceCardRow(
                     card?.battery?.let { pct ->
                         Spacer(Modifier.width(Spacing.xs))
                         Text(
-                            "🔋$pct%",
+                            if (card.charging) "⚡$pct%" else "🔋$pct%",
                             style = MaterialTheme.typography.labelSmall,
                             color = OnDarkPalette.muted,
                             maxLines = 1,
@@ -1346,32 +1351,76 @@ private fun DeviceCardRow(
                 // 通用渲染器没有声道概念：这一格留空，而不是画一个假的 LR
                 return@Row
             }
-            // 声道标签：0 立体声 / 1 仅左 / 2 仅右。
-            // **可以点**：组内从机点一下就在 LR → L → R 之间循环，立刻下发
-            // `multiroom:SlaveChannel:<从机IP>:<n>`（真机验证过回读生效）。
-            // 不在组里的设备点了给一句说明，不装作能改。
+            // 声道：0 立体声 / 1 仅左 / 2 仅右。
+            //
+            // 显示的是**设备现在报的声道**（`GetControlDeviceInfo.CurrentChannel`），
+            // 不是我们点了几次 —— 所以每次下发后都会回读真值再刷新（VM 的 applyChannel）。
+            // 点一下按 立体声 → 仅左 → 仅右 循环：
+            //   · 独立设备 / 主机 → UPnP `RenderingControl.SetChannel`（真机 .153 实测 200 + 回读一致）
+            //   · 组内从机       → 主机转达 `multiroom:SlaveChannel`
+            // 两种情况都不需要先组网 —— 上一版只做从机那条，所以"没组网就点不动"。
             Box(
                 modifier = Modifier
-                    .size(28.dp)
-                    .clip(CircleShape)
+                    .clip(AppShapesExpressive.pill)
                     .background(
-                        if (inGroup) OnDarkPalette.text.copy(alpha = 0.20f)
-                        else OnDarkPalette.text.copy(alpha = 0.10f),
+                        if (channel == 1 || channel == 2) StatusColors.ok.copy(alpha = 0.22f)
+                        else OnDarkPalette.text.copy(alpha = 0.14f),
                     )
-                    .clickable(onClick = onChannel),
+                    .clickable { channelDialog = true }
+                    .padding(horizontal = Spacing.sm, vertical = 4.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     when (channel) {
-                        1 -> "L"
-                        2 -> "R"
-                        else -> "LR"
+                        1 -> "仅左"
+                        2 -> "仅右"
+                        else -> "立体声"
                     },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (inGroup) OnDarkPalette.text else OnDarkPalette.muted,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = OnDarkPalette.text,
                 )
             }
         }
+    }
+
+    // 声道三选一。显示的是设备当前回报的声道（不是我们点过几次）
+    if (channelDialog) {
+        AlertDialog(
+            onDismissRequest = { channelDialog = false },
+            title = { Text("「${device.title}」的声道", style = MaterialTheme.typography.headlineSmall) },
+            text = {
+                Column {
+                    Text(
+                        "只影响这台设备的输出。选「仅左/仅右」就只从那一侧的单元出声。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    VSpace(Spacing.sm)
+                    listOf(0 to "立体声（左右都出声）", 1 to "仅左声道", 2 to "仅右声道").forEach { (value, label) ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    channelDialog = false
+                                    onSetChannel(value)
+                                }
+                                .padding(vertical = Spacing.sm),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                if (channel == value) "●" else "○",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = if (channel == value) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.width(Spacing.sm))
+                            Text(label, style = MaterialTheme.typography.bodyLarge)
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { channelDialog = false }) { Text("关闭") } },
+        )
     }
 
     // 解除确认：从机会离开当前 Wi-Fi（真机约 3 秒回来），误触的代价是"音箱不见了"

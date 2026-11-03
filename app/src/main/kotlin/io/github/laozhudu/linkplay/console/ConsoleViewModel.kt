@@ -16,6 +16,7 @@ import io.github.laozhudu.linkplay.protocol.dlna.DescriptionEndpoints
 import io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile
 import io.github.laozhudu.linkplay.protocol.dlna.detect
 import io.github.laozhudu.linkplay.protocol.identity.LinkPlayIdentity
+import io.github.laozhudu.linkplay.protocol.identity.UuidMatch
 import io.github.laozhudu.linkplay.protocol.multiroom.DragGrouping
 import io.github.laozhudu.linkplay.protocol.multiroom.GroupPlan
 import io.github.laozhudu.linkplay.protocol.multiroom.MultiroomClient
@@ -86,6 +87,8 @@ data class DeviceCard(
      * - 组内从机 → `multiroom:getSlaveList` 的 `battery`（从机在主机 AP 网段，我们连不上）
      */
     val battery: Int? = null,
+    /** 是否接着电（`getStatusEx.battery=0`）；false 时电量前显示 ⚡ 而不是 🔋。 */
+    val charging: Boolean = false,
     /** 设备侧队列长度/当前序号（`plicount`/`plicurr`），0 表示没有列表。 */
     val plicount: Int = 0,
     val plicurr: Int = 0,
@@ -286,7 +289,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                     if (_state.value.online[d.uuid] == false) continue
                     // 只轮询"路由器侧够得着"的设备：入组的从机在主机 AP 网段里，
                     // 从这边直接连必然超时（真机实测），跳过去，靠主机的 slave_list 表达它的状态。
-                    if (_state.value.groupedUnder.containsKey(d.uuid.lowercase())) continue
+                    if (_state.value.groupedUnder.containsKey(UuidMatch.key(d.uuid))) continue
                     val ip = d.ip
                     val known = _state.value.cards[d.uuid]?.profile
                     val card = if (known == DeviceProfile.GENERIC_DMR) {
@@ -462,20 +465,22 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val result = mutableMapOf<String, Boolean>()
             for (d in targets) {
-                val status = withContext(Dispatchers.IO) {
+                // 优先用 Wiimu 扩展动作 GetControlDeviceInfo：**一次**拿到
+                // 音量/静音/声道/从机列表/整份 getStatusEx（含电量与 DeviceName）。
+                // 原厂就是这么读的；分三次请求时任一失败都会把界面上的值冲掉。
+                val info = withContext(Dispatchers.IO) {
+                    runCatching { rendererFor(d).controlDeviceInfo() }.getOrNull()
+                }
+                val status = info?.status ?: withContext(Dispatchers.IO) {
                     runCatching { client.status(d.ip) }.getOrNull()
                 }
-                if (status != null && status.uuid == d.uuid) {
+                // uuid 必须宽容比较：设备两种格式（无连字符 24 位 / 带 uuid: 前缀 32 位）永远不"相等"
+                if (status != null && UuidMatch.same(status.uuid, d.uuid)) {
                     result[d.uuid] = true
                     touch(d.uuid, d.ip, status)
                     // 能答 getStatusEx 就是 LinkPlay 的私有 httpapi —— 卡片据此显示类型标签
                     putCardProfile(d.uuid, DeviceProfile.LINKPLAY)
-                    // 电量：独立设备/主机只能从 getStatusEx 拿
-                    status.batteryPercent?.let { pct ->
-                        _state.update { st ->
-                            st.copy(cards = st.cards + (d.uuid to (st.cards[d.uuid] ?: DeviceCard()).copy(battery = pct)))
-                        }
-                    }
+                    if (info != null) mergeCardInfo(d.uuid, info, status.batteryPercent)
                 } else {
                     result[d.uuid] = false
                     // ① 先看它是不是「通用 DLNA 渲染器」：这类设备**永远**答不上 httpapi，
@@ -509,8 +514,11 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                     runCatching { MultiroomClient(client).slaves(d.ip) }.getOrDefault(emptyList())
                 }
                 if (slaves.isEmpty()) continue
+                // 归属表用**归一化 key**（UuidMatch.key），界面查表也用同一套 key ——
+                // 设备两种 uuid 格式混着来，任何一处用原始字符串比都会漏
                 slaves.forEach { sl ->
-                    sl.uuid?.removePrefix("uuid:")?.lowercase()?.let { grouped[it] = d.title }
+                    val saved = UuidMatch.find(sl.uuid, targets) { it.uuid } ?: return@forEach
+                    grouped[UuidMatch.key(saved.uuid)] = d.title
                 }
                 if (masterIp == null) {
                     masterIp = d.ip
@@ -526,14 +534,16 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     // 从机电量/声道只有主机知道（从机在 10.10.10.x，直连必超时）
                     slaves.forEach { sl ->
-                        val su = sl.uuid?.removePrefix("uuid:")?.lowercase() ?: return@forEach
-                        val savedUuid = _state.value.saved.firstOrNull { it.uuid.equals(su, ignoreCase = true) }?.uuid
-                            ?: return@forEach
+                        val saved = UuidMatch.find(sl.uuid, targets) { it.uuid } ?: return@forEach
                         _state.update { st ->
+                            val old = st.cards[saved.uuid] ?: DeviceCard()
+                            // 只覆盖设备**真的报了值**的字段：主机有时不带 battery/channel，
+                            // 直接 `copy(battery = null)` 会把上一轮的电量抹掉 —— 这就是
+                            // 「电量有时有有时没有」的直接原因。
                             st.copy(
-                                cards = st.cards + (savedUuid to (st.cards[savedUuid] ?: DeviceCard()).copy(
-                                    battery = sl.battery,
-                                    channel = sl.channel,
+                                cards = st.cards + (saved.uuid to old.copy(
+                                    battery = sl.battery ?: old.battery,
+                                    channel = sl.channel ?: old.channel,
                                 )),
                             )
                         }
@@ -578,6 +588,39 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         return dmrClients[loc] ?: runCatching {
             UpnpRendererClient(UpnpRendererClient.describe(loc))
         }.onSuccess { dmrClients[loc] = it }.getOrNull()
+    }
+
+    /**
+     * 取一台**已保存 LinkPlay 设备**的 UPnP 客户端（按 ip 缓存）。
+     *
+     * 为什么要 UPnP 客户端：声道与「一次读全」都只有 Wiimu 扩展动作能做
+     * （`RenderingControl.SetChannel` / `GetControlDeviceInfo`），httpapi 没有对应命令。
+     * 描述文件拉一次就缓存，卡片 3 秒一轮不会反复往返。
+     */
+    private fun rendererFor(d: SavedDevice): UpnpRendererClient {
+        val key = "lp:${d.ip}"
+        dmrClients[key]?.let { return it }
+        val client = UpnpRendererClient.ofDevice(d.ip)
+        dmrClients[key] = client
+        return client
+    }
+
+    /**
+     * 用 [ControlDeviceInfo] 更新卡片，**只覆盖设备真的报了值的字段**。
+     *
+     * 为什么不整体替换：`GetControlDeviceInfo` 的 `<Status>` 偶尔缺 `battery_percent`
+     * （电量采样在变），整体替换会让卡片上的电量时有时无。曲名/列表这类只有
+     * `getPlayerStatus` 才有的字段也不该被这条抹掉。
+     */
+    private fun mergeCardInfo(
+        uuid: String,
+        info: io.github.laozhudu.linkplay.protocol.upnp.ControlDeviceInfo,
+        battery: Int?,
+    ) {
+        _state.update { st ->
+            val old = st.cards[uuid] ?: DeviceCard()
+            st.copy(cards = st.cards + (uuid to CardMerge.applyDeviceInfo(old, info, battery)))
+        }
     }
 
     /**
@@ -650,8 +693,12 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
      */
     private fun touch(uuid: String, ip: String, status: LinkPlayStatus?, location: String? = null) {
         val existing = _state.value.saved.firstOrNull { it.uuid == uuid } ?: return
-        // 名字：UPnP friendlyName 优先（原厂口径）；读不到才保留原值，绝不用 SSID 顶替
-        val friendly = runCatching {
+        // 名字的优先级（真机实测出来的顺序，别改回去）：
+        //   ① getStatusEx.DeviceName —— setDeviceName 之后**立刻**就是新名字
+        //   ② description.xml 的 friendlyName —— 同一个值，但要滞后几秒（.153 实测 2s 还是旧名）
+        //   ③ 都没有就保留本地值
+        // 绝不能落到 ssid（那是设备热点名 `DOSS DS-1831_xxx`，不是用户设的名字）
+        val friendly = status?.deviceName ?: runCatching {
             val loc = location ?: existing.location ?: "http://$ip:49152/description.xml"
             UpnpRendererClient.describe(loc).friendlyName?.takeIf { it.isNotBlank() }
         }.getOrNull()
@@ -680,7 +727,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                 saved = next,
                 online = it.online - uuid,
                 cards = it.cards - uuid,
-                groupedUnder = it.groupedUnder - uuid.lowercase(),
+                groupedUnder = it.groupedUnder - UuidMatch.key(uuid),
                 // 删的正好是当前选中/组主机，就把选中态一并清掉，避免播放页对着空气操作
                 selectedUuid = if (it.selectedUuid == uuid) null else it.selectedUuid,
                 selectedIp = if (it.selectedUuid == uuid) null else it.selectedIp,
@@ -973,18 +1020,46 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         }
         run("改名 ${device.title} → $name") {
             val st = _state.value
-            val member = st.groupMembers.firstOrNull { it.uuid?.equals(device.uuid, true) == true }
+            val member = UuidMatch.find(device.uuid, st.groupMembers) { it.uuid }
             val masterIp = st.groupMasterIp
-            if (member != null && !member.isMaster && masterIp != null) {
-                client.send(masterIp, LinkPlayCommands.slaveDeviceName(member.ip, name))
+            val viaSlave = member != null && !member.isMaster && masterIp != null
+            if (viaSlave) {
+                client.send(masterIp!!, LinkPlayCommands.slaveDeviceName(member!!.ip, name))
             } else {
                 client.send(device.ip, LinkPlayCommands.deviceName(name))
             }
-            delay(800)
-            // 回读：从机看主机的 slave_list，独立设备看 UPnP friendlyName
+            // 回读真值：`getStatusEx.DeviceName` 是立刻生效的那个字段；
+            // `description.xml` 的 friendlyName 要滞后几秒（.153 实测 2s 仍是旧名）。
+            // 上一版 800ms 就去读 friendlyName，读回旧名又把用户设的名字覆盖回去 —— 表现为"改名不成功"。
+            var applied: String? = null
+            for (attempt in 0 until 8) {
+                delay(if (attempt == 0) 300 else 450)
+                applied = withContext(Dispatchers.IO) {
+                    if (viaSlave) {
+                        runCatching {
+                            MultiroomClient(client).slaves(masterIp!!).firstOrNull { it.ip == member!!.ip }?.name
+                        }.getOrNull()
+                    } else {
+                        runCatching { client.status(device.ip).deviceName }.getOrNull()
+                    }
+                }
+                if (applied == name) break
+            }
+            if (applied == name) {
+                // 以设备回报为准写回本地记录（名称只有一个真相源：设备）
+                val next = _state.value.saved.map { if (it.uuid == device.uuid) it.copy(name = name) else it }
+                runCatching { store.upsertDevice(next.first { it.uuid == device.uuid }) }
+                _state.update { it.copy(saved = next, multiroomNote = "已改名为「$name」") }
+                log("改名生效：${device.title} → $name")
+            } else {
+                // 不假装成功：把设备实际报的名字写进提示
+                _state.update {
+                    it.copy(multiroomNote = "改名没生效：设备仍报「${applied ?: "无响应"}」")
+                }
+                log("改名未生效：期望 $name，设备报 ${applied ?: "无响应"}")
+            }
             probeSaved()
             refreshDevicesInGroup()
-            log("改名已下发：$name")
         }
     }
 
@@ -999,7 +1074,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     fun ungroupCard(device: SavedDevice) {
         val st = _state.value
         val masterIp = st.groupMasterIp
-        val member = st.groupMembers.firstOrNull { it.uuid?.equals(device.uuid, true) == true }
+        val member = UuidMatch.find(device.uuid, st.groupMembers) { it.uuid }
         if (masterIp == null || member == null) {
             _state.update { it.copy(multiroomNote = "「${device.title}」不在组里，无需解除") }
             return
@@ -1026,21 +1101,75 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
 
     fun cycleCardChannel(device: SavedDevice) {
         val st = _state.value
-        val member = st.groupMembers.firstOrNull { it.uuid?.equals(device.uuid, ignoreCase = true) == true }
-            ?: st.groupMembers.firstOrNull { it.ip == device.ip }
-        if (member == null) {
-            _state.update { it.copy(multiroomNote = "「${device.title}」不在组里，声道只能对组内从机设置") }
+        // 组内从机匹配必须用宽容 uuid：设备在 slave_list 里给的是 `uuid:FF31F017-…`（32 位带连字符），
+        // 我们保存的是 `FF31F0174FE5C9B2A2ACEAE3`（24 位）。用 equals 永远匹配不上，
+        // 于是点一下只会得到"不在组里"—— 这就是上一版"声道又不能用"的真因。
+        val member = UuidMatch.find(device.uuid, st.groupMembers) { it.uuid }
+            ?: UuidMatch.find(device.ip, st.groupMembers) { it.ip }
+        if (member != null && !member.isMaster) {
+            // 组内从机在主机 AP 网段（10.10.10.x），我们连不上，只能由主机转达
+            val next = ((member.channel ?: 0) + 1) % 3
+            setGroupChannel(member, next)
             return
         }
-        if (member.isMaster) {
-            _state.update { it.copy(multiroomNote = "主机是左右两个单元，不单独设声道") }
-            return
-        }
-        val next = ((member.channel ?: 0) + 1) % 3
-        setGroupChannel(member, next)
-        log("声道 → $next（${member.name}）")
+        // 独立设备 / 主机：走 UPnP RenderingControl.SetChannel（原厂 master 分支）。
+        // 真机实测 .153 未组网时 SetChannel 1/2/0 均 200 且回读一致 —— 声道不依赖组网。
+        val next = ((st.cards[device.uuid]?.channel ?: 0) + 1) % 3
+        applyChannel(device, next)
     }
 
+    /**
+     * 直接指定声道（界面上的三选一）。
+     *
+     * 为什么要有这条：成熟产品（Sonos 建立立体声对、M3 的 single-select segmented button）
+     * 都是**一步选定**左/右，而不是"点一下轮一个"。循环点击的毛病是：
+     * 想从「仅左」回到「立体声」得点两下，中间那一下会真的把声音切到「仅右」。
+     */
+    fun setCardChannel(device: SavedDevice, channel: Int) {
+        val st = _state.value
+        val member = UuidMatch.find(device.uuid, st.groupMembers) { it.uuid }
+        if (member != null && !member.isMaster) {
+            setGroupChannel(member, channel)
+            return
+        }
+        applyChannel(device, channel)
+    }
+
+    /**
+     * 给独立设备/主机设声道，并在下发后**回读真实值**。
+     *
+     * 为什么必须回读：这个项目反复验证过「命令回 OK ≠ 功能生效」。
+     * 界面显示的值只能是设备报的值；乐观更新只用于让点击立刻有反馈，随后被真值覆盖。
+     */
+    private fun applyChannel(device: SavedDevice, channel: Int) {
+        val ch = channel.coerceIn(0, 2)
+        _state.update { st ->
+            st.copy(cards = st.cards + (device.uuid to (st.cards[device.uuid] ?: DeviceCard()).copy(channel = ch)))
+        }
+        viewModelScope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                runCatching { rendererFor(device).setChannel(ch) }.isSuccess
+            }
+            if (!ok) {
+                // 拿不到 UPnP 控制地址（描述读不到）才走到这里；如实说，不假装成功
+                _state.update { it.copy(multiroomNote = "「${device.title}」读不到控制地址，声道改不了") }
+                log("设声道失败：${device.title}")
+                return@launch
+            }
+            delay(500)
+            val readBack = withContext(Dispatchers.IO) {
+                runCatching { rendererFor(device).controlDeviceInfo().channel }.getOrNull()
+            }
+            if (readBack != null) {
+                _state.update { st ->
+                    st.copy(cards = st.cards + (device.uuid to (st.cards[device.uuid] ?: DeviceCard()).copy(channel = readBack)))
+                }
+            }
+            log("声道 → ${readBack ?: ch}（${device.title}）")
+        }
+    }
+
+    /** 组内从机声道：只能由主机转达 `multiroom:SlaveChannel`，改完回读 `slave_list`。 */
     fun setGroupChannel(member: GroupMember, channel: Int) {
         val master = _state.value.groupMasterIp ?: return
         if (member.isMaster) return
@@ -1049,9 +1178,21 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
             st.copy(groupMembers = st.groupMembers.map { if (it.ip == member.ip) it.copy(channel = ch) else it })
         }
         viewModelScope.launch {
-            withContext(Dispatchers.IO) {
-                runCatching { client.send(master, "multiroom:SlaveChannel:${member.ip}:$ch") }
-                    .onFailure { log("调声道失败：${it.message}") }
+            val reply = withContext(Dispatchers.IO) {
+                runCatching { client.send(master, "multiroom:SlaveChannel:${member.ip}:$ch") }.getOrNull()
+            }
+            log("SlaveChannel(${member.ip}:$ch) → ${reply ?: "ERR"}")
+            delay(700)
+            // 回读真值：主机转述的 slave_list 才是这台从机的真实声道
+            val real = withContext(Dispatchers.IO) {
+                runCatching { MultiroomClient(client).slaves(master) }.getOrDefault(emptyList())
+                    .firstOrNull { it.ip == member.ip }?.channel
+            }
+            if (real != null) {
+                _state.update { st ->
+                    st.copy(groupMembers = st.groupMembers.map { if (it.ip == member.ip) it.copy(channel = real) else it })
+                }
+                log("从机声道回读 = $real")
             }
         }
     }
@@ -1187,7 +1328,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
 
             // ① 先移出：一台设备只能在一个组里，留在旧组会"取消了还在同步"
             for (uuid in plan.leave) {
-                val member = st.groupMembers.firstOrNull { it.uuid?.equals(uuid, true) == true } ?: continue
+                val member = UuidMatch.find(uuid, st.groupMembers) { it.uuid } ?: continue
                 _state.update { it.copy(groupingProgress = "移出 ${member.name}…") }
                 withContext(Dispatchers.IO) {
                     runCatching { client.send(masterIp, LinkPlayCommands.slaveKickout(member.ip)) }
@@ -1246,7 +1387,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun toggleDevicePlay(device: SavedDevice) {
         val st = _state.value
-        val member = st.groupMembers.firstOrNull { it.uuid?.equals(device.uuid, true) == true }
+        val member = UuidMatch.find(device.uuid, st.groupMembers) { it.uuid }
         if (member != null && !member.isMaster) {
             _state.update { it.copy(multiroomNote = "「${device.title}」跟随主机播放，请在主机上控制") }
             return
@@ -1354,23 +1495,18 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         }.distinct()
         for (ip in ips) {
             val uuid = st.saved.firstOrNull { it.ip == ip }?.uuid ?: continue
-            val card = withContext(Dispatchers.IO) {
-                runCatching {
-                    val p = PlayerStatus.parse(client.send(ip, "getPlayerStatus"))
-                    DeviceCard(
-                        title = p.title?.takeIf { it.isNotBlank() && it != "Unknown" },
-                        volume = p.volume,
-                        mute = p.mute,
-                        mode = p.mode,
-                        channel = p.channel,
-                        plicount = p.playListCount ?: 0,
-                        plicurr = p.playListCurrent ?: 0,
-                        playing = p.playState == PlayState.PLAY,
-                    )
-                }.getOrNull()
+            val fresh = withContext(Dispatchers.IO) {
+                runCatching { PlayerStatus.parse(client.send(ip, "getPlayerStatus")) }.getOrNull()
             } ?: continue
-            VolumeBus.publish(ip, card.volume, card.mute)
-            _state.update { it.copy(cards = it.cards + (uuid to card)) }
+            VolumeBus.publish(ip, fresh.volume, fresh.mute)
+            _state.update { st ->
+                // **合并**而不是替换：这条轮询只提供「在放什么 / 进度 / 是否在播」，
+                // 电量、声道、能力档是别的通道拿到的。原来这里 `cards + (uuid to card)`
+                // 用一张全新卡片覆盖，每次轮询都把 battery/channel/profile 清成 null ——
+                // 用户看到的就是「电量有时有有时没有」「声道标签永远是 LR」。
+                val old = st.cards[uuid] ?: DeviceCard()
+                st.copy(cards = st.cards + (uuid to CardMerge.applyPlayerStatus(old, fresh)))
+            }
         }
     }
 
@@ -1440,7 +1576,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     fun toggleMask(device: SavedDevice) {
         val st = _state.value
         val masterIp = st.groupMasterIp
-        val member = st.groupMembers.firstOrNull { it.uuid?.equals(device.uuid, true) == true }
+        val member = UuidMatch.find(device.uuid, st.groupMembers) { it.uuid }
         if (masterIp == null || member == null || member.isMaster) {
             _state.update { it.copy(multiroomNote = "只有组内从机能屏蔽") }
             return
@@ -1621,7 +1757,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                 uuid = d.uuid,
                 name = d.title,
                 online = _state.value.online[d.uuid] != false,
-                groupedUnder = _state.value.groupedUnder[d.uuid.lowercase()],
+                groupedUnder = _state.value.groupedUnder[UuidMatch.key(d.uuid)],
             )
         }
         when (val decision = DragGrouping.resolve(nodes[dragged.uuid], nodes[target.uuid])) {

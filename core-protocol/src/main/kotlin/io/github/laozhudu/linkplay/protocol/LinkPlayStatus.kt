@@ -31,6 +31,25 @@ data class LinkPlayStatus(
      * 只能从 `getStatusEx` 拿到电量，所以两边都读：主机/独立=这里，从机=`slave_list[].battery`。
      */
     val batteryPercent: Int? = null,
+    /**
+     * 设备名（`DeviceName`）。
+     *
+     * **这才是改名的真值来源**：真机实测 `setDeviceName:<名字>` 之后
+     * `getStatusEx.DeviceName` 立刻变，而 `description.xml` 的 `friendlyName` 要滞后几秒
+     * （`.153` 实测：2 秒时还是旧名，5 秒才更新）。
+     * 之前我们只用 friendlyName 回读，改完 800ms 就读 → 读回旧名 → 把用户设的名字又写回去，
+     * 表现就是"改名不成功"。
+     */
+    val deviceName: String? = null,
+    /**
+     * 是否在用电池（`battery` 字段，真机 `"1"`=用电池、`"0"`=接电/充电）。
+     *
+     * 真机对照：`.164` 插着电 → `battery_percent=100` 且 `battery=0`；
+     * `.153` 在放电 → `battery_percent=40` 且 `battery=1`。
+     * 原厂把它当 `BatteryFlag` 用（见 `GetControlDeviceInfo` 的 map 解析），
+     * 所以界面可以区分「⚡充电中 100%」和「🔋40%」—— 这也是 Sonos 等成熟产品的做法。
+     */
+    val onBattery: Boolean? = null,
 ) {
     val isOnline: Boolean get() = internet == 1
 
@@ -56,6 +75,8 @@ data class LinkPlayStatus(
                 // 真机返回的是**字符串** "100"（不是数字），两种都认
                 batteryPercent = root.string("battery_percent")?.toIntOrNull()
                     ?: root.int("battery_percent"),
+                deviceName = root.string("DeviceName")?.takeIf { it.isNotBlank() },
+                onBattery = (root.string("battery") ?: root.int("battery")?.toString())?.trim()?.let { it == "1" },
             )
         }
     }

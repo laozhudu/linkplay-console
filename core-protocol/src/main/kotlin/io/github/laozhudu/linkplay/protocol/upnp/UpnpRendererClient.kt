@@ -195,6 +195,42 @@ class UpnpRendererClient(
         )
     }
 
+    /**
+     * Wiimu 扩展动作：一次拿到音量/静音/声道/从机列表/整份 getStatusEx。
+     *
+     * 原厂就是这么读的（`org/teleal/cling/support/d/a/a.java` →
+     * `GetControlDeviceInfo`，参数只有 `InstanceID=0`）。真机 `.153`/`.164` 均 200。
+     *
+     * 为什么值得单独一条：我们要显示的"音量 + 声道 + 电量 + 组状态"原本要打三次请求
+     * （`getPlayerStatus` / `getStatusEx` / `getSlaveList`），任一次失败就会把界面上的
+     * 已有值冲掉 —— 这正是"电量有时有有时没有"的成因之一。合并成一条后是原子的。
+     */
+    fun controlDeviceInfo(): ControlDeviceInfo {
+        val url = requireRenderingControl()
+        return ControlDeviceInfo.parse(
+            call(UpnpServices.RENDERING_CONTROL, url, "GetControlDeviceInfo", instanceArgs()),
+        )
+    }
+
+    /**
+     * Wiimu 扩展动作：设声道（`SetChannel`，`Channel=Master` + `DesiredChannel=0|1|2`）。
+     *
+     * **独立设备/主机也能改** —— 这是原厂 `com/wifiaudio/b/bl.java` 里 master 走的分支
+     * （`g.a.d(int)` → `RenderingControl.SetChannel`），从机才走 `multiroom:SlaveChannel`。
+     * 我们之前只做从机那条，所以"没组网就点不动"。
+     */
+    fun setChannel(channelValue: Int) {
+        val url = requireRenderingControl()
+        call(
+            UpnpServices.RENDERING_CONTROL, url, "SetChannel",
+            listOf(
+                "InstanceID" to instanceId,
+                "Channel" to "Master",
+                "DesiredChannel" to channelValue.coerceIn(0, 2).toString(),
+            ),
+        )
+    }
+
     private fun requireRenderingControl(): String =
         renderingControlUrl ?: throw IllegalStateException("设备没有 RenderingControl 服务，无法调音量")
 
