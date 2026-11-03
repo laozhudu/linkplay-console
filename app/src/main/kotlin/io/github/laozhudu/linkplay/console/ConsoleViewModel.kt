@@ -71,6 +71,12 @@ data class DeviceCard(
     val mode: Int? = null,
     /** 声道：0 立体声 / 1 仅左 / 2 仅右（`getPlayerStatus` 的 `ch`）。 */
     val channel: Int? = null,
+    /**
+     * 电量百分比。两类来源：
+     * - 独立设备/主机 → `getStatusEx.battery_percent`
+     * - 组内从机 → `multiroom:getSlaveList` 的 `battery`（从机在主机 AP 网段，我们连不上）
+     */
+    val battery: Int? = null,
     /** 设备侧队列长度/当前序号（`plicount`/`plicurr`），0 表示没有列表。 */
     val plicount: Int = 0,
     val plicurr: Int = 0,
@@ -384,6 +390,12 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                 if (status != null && status.uuid == d.uuid) {
                     result[d.uuid] = true
                     touch(d.uuid, d.ip, status)
+                    // 电量：独立设备/主机只能从 getStatusEx 拿
+                    status.batteryPercent?.let { pct ->
+                        _state.update { st ->
+                            st.copy(cards = st.cards + (d.uuid to (st.cards[d.uuid] ?: DeviceCard()).copy(battery = pct)))
+                        }
+                    }
                 } else {
                     result[d.uuid] = false
                     // IP 变了：扫一次，看能不能按 uuid 找回来
@@ -423,6 +435,20 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                             }
                         }.getOrNull() ?: VolumeBus.volumeOf(d.ip)?.volume
                     }
+                    // 从机电量/声道只有主机知道（从机在 10.10.10.x，直连必超时）
+                    slaves.forEach { sl ->
+                        val su = sl.uuid?.removePrefix("uuid:")?.lowercase() ?: return@forEach
+                        val savedUuid = _state.value.saved.firstOrNull { it.uuid.equals(su, ignoreCase = true) }?.uuid
+                            ?: return@forEach
+                        _state.update { st ->
+                            st.copy(
+                                cards = st.cards + (savedUuid to (st.cards[savedUuid] ?: DeviceCard()).copy(
+                                    battery = sl.battery,
+                                    channel = sl.channel,
+                                )),
+                            )
+                        }
+                    }
                     members = listOf(
                         GroupMember(ip = d.ip, name = d.title, uuid = d.uuid, volume = masterVolume, isMaster = true),
                     ) + slaves.map { sl ->
@@ -449,11 +475,28 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * 更新一条已保存设备。
+     *
+     * ## 一个真 bug（本轮修掉）
+     *
+     * 原来这里 `name = status?.ssid ?: existing.name` —— 每次探活都把**用户设的名字**
+     * 覆盖成设备热点名（`DOSS DS-1831_400C`）。所以改名能下发成功，但一刷新就"变回去"。
+     *
+     * 原厂的设备名来自 **UPnP friendlyName**（`setDeviceName` 改的也是它），
+     * 与热点 SSID 是两回事。这里改成：拿描述里的 friendlyName 同步名字，
+     * 只在它非空且与本地不同时写回 —— 这样"在别处改的名字"也能同步过来。
+     */
     private fun touch(uuid: String, ip: String, status: LinkPlayStatus?, location: String? = null) {
         val existing = _state.value.saved.firstOrNull { it.uuid == uuid } ?: return
+        // 名字：UPnP friendlyName 优先（原厂口径）；读不到才保留原值，绝不用 SSID 顶替
+        val friendly = runCatching {
+            val loc = location ?: existing.location ?: "http://$ip:49152/description.xml"
+            UpnpRendererClient.describe(loc).friendlyName?.takeIf { it.isNotBlank() }
+        }.getOrNull()
         val updated = existing.copy(
             ip = ip,
-            name = status?.ssid?.takeIf { it.isNotBlank() } ?: existing.name,
+            name = friendly ?: existing.name,
             location = location ?: existing.location,
             modelName = status?.hardware ?: existing.modelName,
             lastSeenMs = System.currentTimeMillis(),
@@ -462,10 +505,28 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(saved = next) }
     }
 
+    /**
+     * 移除一条已保存设备（原厂长按菜单的「删除」/ 我们的设置页「移除这台设备」）。
+     *
+     * 只删本机记录，不动音箱本身。同时清掉卡片状态、在线状态、组内归属 ——
+     * 否则列表里走了、组里还挂着一台幽灵设备。
+     */
     fun forget(uuid: String) {
+        val removed = _state.value.saved.firstOrNull { it.uuid == uuid }
         val next = runCatching { store.removeDevice(uuid) }.getOrDefault(_state.value.saved)
-        _state.update { it.copy(saved = next, online = it.online - uuid) }
-        log("已移除设备记录")
+        _state.update {
+            it.copy(
+                saved = next,
+                online = it.online - uuid,
+                cards = it.cards - uuid,
+                groupedUnder = it.groupedUnder - uuid.lowercase(),
+                // 删的正好是当前选中/组主机，就把选中态一并清掉，避免播放页对着空气操作
+                selectedUuid = if (it.selectedUuid == uuid) null else it.selectedUuid,
+                selectedIp = if (it.selectedUuid == uuid) null else it.selectedIp,
+                selectedLocation = if (it.selectedUuid == uuid) null else it.selectedLocation,
+            )
+        }
+        log("已移除设备记录${removed?.let { "：${it.title}" } ?: ""}")
     }
 
     /** 点已保存的设备：带上记下的 IP/LOCATION 直接进，不再走扫描。 */
@@ -703,6 +764,76 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
      * 真机验证（2026-11-03，`.164` 主机 + `10.10.10.92` 从机）：
      * `multiroom:SlaveChannel:10.10.10.92:1` → 回读 `channel=1`；`:2` → `2`；`:0` → `0`。
      */
+    /**
+     * 给某台设备改名（原厂「重命名」）。
+     *
+     * 两条通道，按设备身份选：
+     * - 独立设备 / 主机 → `setDeviceName:<urlenc>` 直发自己；
+     * - 组内从机 → 必须由**主机**转达 `multiroom:SlaveDeviceName:<从机IP>:<urlenc>`，
+     *   因为从机已经掉到主机 AP 网段（`10.10.10.x`），我们连不上。
+     *
+     * 改完立刻回读一次（`getStatusEx` 的 UPnP friendlyName / 主机的 `slave_list`），
+     * 用设备回报覆盖本地记录 —— 命令回 OK 不等于名字真变了（本项目反复吃过这个亏）。
+     */
+    fun renameCard(device: SavedDevice, rawName: String) {
+        val name = rawName.trim()
+        if (name.isEmpty()) {
+            _state.update { it.copy(error = "名字不能为空") }
+            return
+        }
+        run("改名 ${device.title} → $name") {
+            val st = _state.value
+            val member = st.groupMembers.firstOrNull { it.uuid?.equals(device.uuid, true) == true }
+            val masterIp = st.groupMasterIp
+            if (member != null && !member.isMaster && masterIp != null) {
+                client.send(masterIp, LinkPlayCommands.slaveDeviceName(member.ip, name))
+            } else {
+                client.send(device.ip, LinkPlayCommands.deviceName(name))
+            }
+            delay(800)
+            // 回读：从机看主机的 slave_list，独立设备看 UPnP friendlyName
+            probeSaved()
+            refreshDevicesInGroup()
+            log("改名已下发：$name")
+        }
+    }
+
+    /**
+     * 解除这台设备的组网（原厂拖出去 / 长按菜单「解除」）。
+     *
+     * 只对**从机**有意义：`multiroom:SlaveKickout:<从机IP>` 发给主机，
+     * 从机会自己回到原来的 Wi-Fi。真机实测：3 秒后主机 `slaves=0`，从机回到 `192.168.99.153`。
+     *
+     * 主机被踢（解散整组）依赖 `SlaveKickout` 对每台从机分别下发 —— 这里对组内所有从机各发一次。
+     */
+    fun ungroupCard(device: SavedDevice) {
+        val st = _state.value
+        val masterIp = st.groupMasterIp
+        val member = st.groupMembers.firstOrNull { it.uuid?.equals(device.uuid, true) == true }
+        if (masterIp == null || member == null) {
+            _state.update { it.copy(multiroomNote = "「${device.title}」不在组里，无需解除") }
+            return
+        }
+        run("解除组网 ${device.title}") {
+            val targets = if (member.isMaster) {
+                st.groupMembers.filter { !it.isMaster }.map { it.ip }
+            } else {
+                listOf(member.ip)          // 用主机自报的 10.10.10.x，不是保存记录里的旧 IP
+            }
+            targets.forEach { ip ->
+                log("SlaveKickout($ip) → " + runCatching { client.send(masterIp, "multiroom:SlaveKickout:$ip") }.getOrDefault("ERR"))
+            }
+            // 等从机回到原 Wi-Fi 再刷，否则界面会先显示"离线"
+            delay(3_500)
+            probeSaved()
+            refreshDevicesInGroup()
+            _state.update {
+                it.copy(multiroomNote = if (targets.isEmpty()) "组里没有从机" else "已解除 ${targets.size} 台从机")
+            }
+            log("解除组网完成")
+        }
+    }
+
     fun cycleCardChannel(device: SavedDevice) {
         val st = _state.value
         val member = st.groupMembers.firstOrNull { it.uuid?.equals(device.uuid, ignoreCase = true) == true }
