@@ -333,6 +333,7 @@ private fun ConsoleBody(vm: ConsoleViewModel) {
                         sub = SubPage.Settings
                     },
                     onOpenContent = { sub = SubPage.DeviceContent },
+                    onOpenPlayer = { tab = Tab.Player },
                 )
 
                 Tab.Player -> if (state.selectedIp == null) {
@@ -479,6 +480,8 @@ private fun HomeScreen(
     onOpenSettings: (SavedDevice) -> Unit,
     /** 齿轮菜单里的「设备内容」（预设键 / 固件升级）。 */
     onOpenContent: () -> Unit = {},
+    /** 聚合播放条点一下进播放页。 */
+    onOpenPlayer: () -> Unit = {},
 ) {
     val extras = LocalExtraColors.current
     var showAdd by remember { mutableStateOf(false) }
@@ -542,9 +545,56 @@ private fun HomeScreen(
                 Text("↻", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
+        // ---------- 聚合播放条（Sonos 的 Now Playing 条 / Music Assistant 的 Player Bar）----------
+        // 主页最需要但之前一直缺的一块：**现在在放什么、一键停**。
+        // 之前要点进播放页才能看到，首页只有一堆卡片。
+        if (state.saved.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = Spacing.sm)
+                    .clip(AppShapesExpressive.squircle)
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .clickable { onOpenPlayer() }
+                    .padding(horizontal = Spacing.md, vertical = Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        state.playingTitle ?: if (state.anyPlaying) "正在播放" else "未在播放",
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        buildString {
+                            append(state.groupMasterName ?: state.saved.firstOrNull { it.ip == state.selectedIp }?.title ?: "未选设备")
+                            if (state.groupSize > 1) append(" · ${state.groupSize} 台同步")
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
+                // 播放/暂停：与底部大按钮共用同一个判定（state.anyPlaying），
+                // 两处各自算一次必然出现"条上说暂停、按钮说播放"
+                CircleIcon(onClick = { vm.togglePlayAll() }, size = 44.dp) {
+                    Text(
+                        if (state.anyPlaying) "⏸" else "▶",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                Spacer(Modifier.width(Spacing.xs))
+                // 组网入口：勾选式（Sonos Grouping 菜单），拖拽保留但不再是唯一路径
+                CircleIcon(onClick = { vm.openGrouping() }, size = 44.dp) {
+                    Text("⧉", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
         if (state.saved.size >= 2) {
             Text(
-                "长按一张卡片拖到另一台上，松手即可组网（被拖到的那台当主机）",
+                "点 ⧉ 勾选要同步的音箱；也可以长按卡片拖到另一台上",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = Spacing.xs),
@@ -600,6 +650,7 @@ private fun HomeScreen(
                     onChannel = { vm.cycleCardChannel(device) },
                     onUngroup = { vm.ungroupCard(device) },
                     onMask = { vm.toggleMask(device) },
+                    onTogglePlay = { vm.toggleDevicePlay(device) },
                     onRename = { menuTarget = device },
                     onDropOn = { targetUuid ->
                         state.saved.firstOrNull { it.uuid == targetUuid }?.let { vm.groupByDrag(device, it) }
@@ -702,19 +753,31 @@ private fun HomeScreen(
             if (state.saved.isNotEmpty()) {
                 item {
                     VSpace(Spacing.md)
+                    // 媒体播放器的通行约定：播放/暂停按钮显示**点了会发生什么**，
+                    // 不是当前状态（UX StackExchange 上 572 赞的结论，主流播放器全都如此）。
+                    // 所以正在放的时候这里必须是「全部暂停」—— 用户反馈的就是这一点。
+                    val playing = state.anyPlaying
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(52.dp)
                             .clip(AppShapesExpressive.pill)
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
-                            .clickable(enabled = !state.busy, onClick = { vm.playAll() }),
+                            .background(
+                                if (playing) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.surfaceVariant,
+                            )
+                            .clickable(enabled = !state.busy, onClick = { vm.togglePlayAll() }),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
-                            if (state.busy) "正在准备…" else "全部播放",
+                            when {
+                                state.busy -> "正在准备…"
+                                playing -> "⏸  全部暂停"
+                                else -> "▶  全部播放"
+                            },
                             style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
+                            color = if (playing) MaterialTheme.colorScheme.onPrimary
+                            else MaterialTheme.colorScheme.onSurface,
                         )
                     }
                 }
@@ -723,6 +786,73 @@ private fun HomeScreen(
             // 多房间卡片已删除：拖拽组网能直接成组，再放一张"组起来"的卡片就是两套入口。
             // 组内状态（谁是从机、属哪台）已经画在各自的设备卡片上。
         }
+    }
+
+    // ---- 分组面板（Sonos Grouping 菜单：勾选 + 应用）----
+    if (state.groupingOpen) {
+        val masterIp = state.groupMasterIp ?: state.selectedIp
+        val masterName = state.saved.firstOrNull { it.ip == masterIp }?.title ?: "未选主机"
+        AlertDialog(
+            onDismissRequest = { vm.closeGrouping() },
+            title = { Text("同步播放") },
+            text = {
+                Column {
+                    Text(
+                        "主机：$masterName。勾选要一起出声的音箱，应用后主机不变。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    VSpace(Spacing.xs)
+                    // 「Everywhere」：Sonos 在 3 台以上才给（两台时"全选"没有额外价值）
+                    if (io.github.laozhudu.linkplay.protocol.multiroom.GroupPlan.showEverywhere(state.saved.size)) {
+                        TextButton(onClick = { vm.selectEverywhere() }) { Text("全部同步（Everywhere）") }
+                    }
+                    state.saved.forEach { device ->
+                        val isMaster = device.ip == masterIp
+                        val checked = isMaster || device.uuid.lowercase() in state.groupingSelected
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable(enabled = !isMaster && state.groupingProgress == null) {
+                                    vm.toggleGroupingDevice(device.uuid)
+                                }
+                                .padding(vertical = Spacing.xs),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                if (checked) "☑" else "☐",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = if (isMaster) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurface,
+                            )
+                            Spacer(Modifier.width(Spacing.sm))
+                            Column(Modifier.weight(1f)) {
+                                Text(device.title, style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    if (isMaster) "主机（始终同步）" else device.ip,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            if (state.cards[device.uuid]?.playing == true) {
+                                Text("在放", style = MaterialTheme.typography.labelSmall, color = StatusColors.ok)
+                            }
+                        }
+                    }
+                    state.groupingProgress?.let {
+                        VSpace(Spacing.xs)
+                        Text(it, style = MaterialTheme.typography.labelSmall, color = StatusColors.warn)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = state.groupingProgress == null,
+                    onClick = { vm.applyGrouping() },
+                ) { Text(if (state.groupingProgress == null) "应用" else "处理中…") }
+            },
+            dismissButton = { TextButton(onClick = { vm.closeGrouping() }) { Text("取消") } },
+        )
     }
 
     // ---- 设备操作菜单（齿轮）：改名 / 删除 / 进设置 ----
@@ -892,6 +1022,7 @@ private fun DraggableDeviceCard(
     onChannel: () -> Unit,
     onUngroup: () -> Unit,
     onMask: () -> Unit,
+    onTogglePlay: () -> Unit,
     onRename: () -> Unit,
     onDropOn: (String) -> Unit,
 ) {
@@ -971,6 +1102,7 @@ private fun DraggableDeviceCard(
             onChannel = onChannel,
             onUngroup = onUngroup,
             onMask = onMask,
+            onTogglePlay = onTogglePlay,
             onRename = onRename,
         )
     }
@@ -1020,12 +1152,14 @@ private fun DeviceCardRow(
     onChannel: () -> Unit = {},
     onUngroup: () -> Unit = {},
     onMask: () -> Unit = {},
+    onTogglePlay: () -> Unit = {},
     /** 齿轮：打开这台设备的操作菜单。 */
     onRename: () -> Unit = {},
 ) {
     val palette = remember(device.uuid) { seedOf(device.name, device.ip) }
     // 拖动时的本地乐观值：不这样会出现"手指在动、旋钮不动"（要等 3 秒轮询回读）
     var dragging by remember(device.uuid) { mutableStateOf<Int?>(null) }
+    var confirmUngroup by remember(device.uuid) { mutableStateOf(false) }
     val volume = dragging ?: card?.volume ?: 0
     val channel = card?.channel
     val title = card?.title
@@ -1174,6 +1308,17 @@ private fun DeviceCardRow(
                 modifier = Modifier.width(30.dp),
                 textAlign = TextAlign.End,
             )
+            // 卡片内的播放/暂停：媒体惯例显示"将发生的动作"。
+            // 组内从机不显示 —— 它跟随主机，单独下发是无效命令（点了没反应最伤人）。
+            if (!(inGroup && !isMaster)) {
+                TextButton(onClick = onTogglePlay, contentPadding = PaddingValues(horizontal = 6.dp)) {
+                    Text(
+                        if (card?.playing == true) "⏸" else "▶",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = if (card?.playing == true) StatusColors.ok else OnDarkPalette.text,
+                    )
+                }
+            }
             // 屏蔽 / 解除：只有 LinkPlay 从机才有意义。通用 DLNA 渲染器整段不渲染
             // （项目铁律：不给按了没反应的按钮）
             if (profile != io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile.GENERIC_DMR) {
@@ -1187,7 +1332,12 @@ private fun DeviceCardRow(
                     }
                 }
                 if (inGroup) {
-                    TextButton(onClick = onUngroup, contentPadding = PaddingValues(horizontal = 6.dp)) {
+                    // 解除要二次确认：它会让从机离开当前 Wi-Fi（真机 3 秒后才回来），
+                    // 误触一次就是"音箱不见了"的体验
+                    TextButton(
+                        onClick = { confirmUngroup = true },
+                        contentPadding = PaddingValues(horizontal = 6.dp),
+                    ) {
                         Text("解除", style = MaterialTheme.typography.labelSmall, color = OnDarkPalette.muted)
                     }
                 }
@@ -1222,6 +1372,27 @@ private fun DeviceCardRow(
                 )
             }
         }
+    }
+
+    // 解除确认：从机会离开当前 Wi-Fi（真机约 3 秒回来），误触的代价是"音箱不见了"
+    if (confirmUngroup) {
+        AlertDialog(
+            onDismissRequest = { confirmUngroup = false },
+            title = { Text("解除「${device.title}」的同步？") },
+            text = {
+                Text(
+                    if (isMaster) "会把组内所有从机都解除，它们会各自回到原来的 Wi-Fi。"
+                    else "这台会退出同步并回到原来的 Wi-Fi，大约 3 秒后重新出现。",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmUngroup = false
+                    onUngroup()
+                }) { Text("解除") }
+            },
+            dismissButton = { TextButton(onClick = { confirmUngroup = false }) { Text("取消") } },
+        )
     }
 }
 
