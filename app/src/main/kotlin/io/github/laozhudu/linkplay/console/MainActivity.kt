@@ -67,6 +67,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.laozhudu.linkplay.console.device.DeviceContentScreen
 import io.github.laozhudu.linkplay.console.device.DeviceSettingsScreen
 import io.github.laozhudu.linkplay.console.library.LibraryScreen
+import io.github.laozhudu.linkplay.console.library.MyMusicScreen
 import io.github.laozhudu.linkplay.console.library.QueueScreen
 import io.github.laozhudu.linkplay.console.nas.NasScreen
 import io.github.laozhudu.linkplay.console.online.OnlineScreen
@@ -342,11 +343,13 @@ private fun ConsoleBody(vm: ConsoleViewModel) {
 
                 Tab.Sources -> SourcesScreen(
                     state = state,
+                    vm = vm,
                     onOpenOnline = { sub = SubPage.Online },
                     onOpenNas = { sub = SubPage.Nas },
                     onOpenLibrary = { sub = SubPage.Library },
                     onOpenLocal = { sub = SubPage.LocalQueue },
                     onOpenRadio = { sub = SubPage.Radio },
+                    onOpenSettings = { sub = SubPage.Settings },
                     onGoDevices = { tab = Tab.Devices },
                 )
             }
@@ -406,56 +409,39 @@ private fun NeedDevice(onGoDevices: () -> Unit) {
     }
 }
 
-/** 媒体库入口页：三个来源，各自推进去。 */
+/**
+ * 「媒体库」Tab。
+ *
+ * 主体是原厂样式的「我的音乐」汇总（几行入口 + 真实数量）；原来那几张来源卡片
+ * 收在下方「其它入口」里，功能一个没少，只是不再占着首屏。
+ */
 @Composable
 private fun SourcesScreen(
     state: ConsoleUiState,
+    vm: ConsoleViewModel,
     onOpenNas: () -> Unit,
     onOpenLibrary: () -> Unit,
     onOpenLocal: () -> Unit,
     onOpenRadio: () -> Unit,
-    onOpenOnline: () -> Unit = {},
+    onOpenOnline: () -> Unit,
+    onOpenSettings: () -> Unit,
     onGoDevices: () -> Unit,
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = Spacing.lg),
-    ) {
-        VSpace(Spacing.md)
-        SectionTitle(
-            "媒体库",
-            if (state.selectedIp == null) "先选一台音箱" else "选一个来源，点歌即播",
-        )
-        VSpace(Spacing.md)
-
-        if (state.selectedIp == null) {
-            EmptyState("还没有选中音箱", "媒体库里的歌要投给音箱播，所以先选设备。")
-            VSpace(Spacing.sm)
-            Button(onClick = onGoDevices, modifier = Modifier.fillMaxWidth()) { Text("去设备页") }
-            return
-        }
-
-        AppCard(onClick = onOpenNas) {
-            SectionTitle("NAS 媒体库", "局域网 DLNA 服务器上的曲目，点一首即播")
-        }
-        VSpace(Spacing.sm)
-        AppCard(onClick = onOpenLocal) {
-            SectionTitle("手机本地音乐", "手机里的歌，通过本机 HTTP 服务推给音箱")
-        }
-        VSpace(Spacing.sm)
-        AppCard(onClick = onOpenOnline) {
-            SectionTitle("在线曲库", "接 Subsonic / tt-music，搜什么投什么（走设备侧队列）")
-        }
-        VSpace(Spacing.sm)
-        AppCard(onClick = onOpenRadio) {
-            SectionTitle("网络电台", "内置可用电台 + 自己粘流地址，点一下即播")
-        }
-        VSpace(Spacing.sm)
-        AppCard(onClick = onOpenLibrary) {
-            SectionTitle("音乐库", "搜索 · 收藏 · 最近播放")
-        }
-    }
+    MyMusicScreen(
+        state = state,
+        // 进页面刷一次：本地曲库/歌单/电台都可能是刚在别的页面改过的
+        onRefresh = vm::refreshMusicCounts,
+        onOpenLocal = onOpenLocal,
+        onOpenNas = onOpenNas,
+        // 「全部歌单」「最近播放」都落在音乐库页（那里有对应分区），不新开二级页
+        onOpenPlaylists = onOpenLibrary,
+        onOpenRecent = onOpenLibrary,
+        onOpenOnline = onOpenOnline,
+        onOpenRadio = onOpenRadio,
+        onOpenLibrary = onOpenLibrary,
+        onOpenDeviceSettings = onOpenSettings,
+        onGoDevices = onGoDevices,
+    )
 }
 
 /**

@@ -24,6 +24,8 @@ import io.github.laozhudu.linkplay.console.playback.QueueBus
 import io.github.laozhudu.linkplay.console.playback.VolumeBus
 import io.github.laozhudu.linkplay.console.library.LibraryStore
 import io.github.laozhudu.linkplay.console.library.LocalLibrary
+import io.github.laozhudu.linkplay.console.library.PlaylistStore
+import io.github.laozhudu.linkplay.protocol.mediasource.SubsonicConfig
 import io.github.laozhudu.linkplay.protocol.FirmwareUpdate
 import io.github.laozhudu.linkplay.protocol.player.PlayState
 import io.github.laozhudu.linkplay.protocol.player.PlayerStatus
@@ -164,6 +166,17 @@ data class ConsoleUiState(
     val nasServerCount: Int = 0,
     val favoriteCount: Int = 0,
     val recentCount: Int = 0,
+    /** 歌单数（原厂「全部歌单」，存在独立的 linkplay_playlist.db）。 */
+    val playlistCount: Int = 0,
+    /** 电台数（内置台 + 用户自己粘的流地址）。 */
+    val radioCount: Int = 0,
+    /**
+     * 在线曲库是否已经配过。
+     *
+     * 为什么只表达"配没配"而不显示曲目数：在线曲库的曲目数是服务器侧的事，
+     * 进页面就问一次会把「我的音乐」拖成网络页；配置本身是本地会话里的一个 JSON。
+     */
+    val onlineConfigured: Boolean = false,
 )
 
 class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
@@ -1122,7 +1135,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 刷新「我的音乐」四个入口的数量。 */
+    /** 刷新「我的音乐」六个入口的数量。 */
     fun refreshMusicCounts() {
         viewModelScope.launch {
             val app = getApplication<Application>()
@@ -1135,11 +1148,30 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
             val recent = withContext(Dispatchers.IO) {
                 runCatching { LibraryStore.get(app).recents.recent(200).size }.getOrDefault(0)
             }
+            val radios = withContext(Dispatchers.IO) {
+                runCatching { LibraryStore.get(app).radios.all().size }.getOrDefault(0)
+            }
+            // 家庭音乐共享 = 记住的 DLNA **服务器**数，而不是"当前设备有没有"。
+            // 原来按 selectedUuid 判 1/0，换个设备看就变成 0，跟"家里有台 NAS"这个事实不符。
+            // 同一台 NAS 可能被多台音箱各记一份会话，所以按 host:port 去重。
             val nas = withContext(Dispatchers.IO) {
                 runCatching {
-                    // 家庭音乐共享 = 本机记住的 DLNA 服务器数量（键是设备 uuid）
-                    store.loadNasSession(_state.value.selectedUuid.orEmpty()) != null
-                }.getOrDefault(false).let { if (it) 1 else 0 }
+                    _state.value.saved
+                        .mapNotNull { store.loadNasSession(it.uuid)?.server }
+                        .map { "${it.host}:${it.port}" }
+                        .distinct()
+                        .size
+                }.getOrDefault(0)
+            }
+            // 在线曲库：只要本地存过一份能解析出地址的配置就算"已连接"（不 ping，避免进页面就卡网络）
+            val online = withContext(Dispatchers.IO) {
+                runCatching {
+                    val cfg = SubsonicConfig.decode(store.loadSubsonic())
+                    cfg != null && cfg.baseUrl.isNotBlank() && cfg.enabled
+                }.getOrDefault(false)
+            }
+            val lists = withContext(Dispatchers.IO) {
+                runCatching { PlaylistStore.get(app).count() }.getOrDefault(0)
             }
             _state.update {
                 it.copy(
@@ -1147,8 +1179,27 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                     nasServerCount = nas,
                     favoriteCount = fav,
                     recentCount = recent,
+                    radioCount = radios,
+                    onlineConfigured = online,
+                    playlistCount = lists,
                 )
             }
+        }
+    }
+
+    /**
+     * 只刷歌单数。
+     *
+     * 为什么要单独一个：歌单是在「音乐库」页里就地增删的，从那里返回「我的音乐」时
+     * 只需要更新这一个数字，没必要把本地曲库（要扫 MediaStore）和电台一起重读一遍。
+     * 与 [refreshMusicCounts] 并存，不改动已有调用方。
+     */
+    fun refreshPlaylistCount() {
+        viewModelScope.launch {
+            val lists = withContext(Dispatchers.IO) {
+                runCatching { PlaylistStore.get(getApplication()).count() }.getOrDefault(0)
+            }
+            _state.update { it.copy(playlistCount = lists) }
         }
     }
 
