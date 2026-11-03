@@ -8,6 +8,7 @@ import io.github.laozhudu.linkplay.protocol.LinkPlayDevice
 import io.github.laozhudu.linkplay.protocol.library.LibrarySearch
 import io.github.laozhudu.linkplay.protocol.library.SearchHit
 import io.github.laozhudu.linkplay.console.playback.QueueBus
+import io.github.laozhudu.linkplay.console.playback.DevicePlaylistGateway
 import io.github.laozhudu.linkplay.console.playback.DeviceQueuePush
 import io.github.laozhudu.linkplay.protocol.DeviceHttpClient
 import io.github.laozhudu.linkplay.console.playback.QueuePlaybackService
@@ -182,7 +183,30 @@ class LibraryViewModel(
                     index = startAt,
                     loopMode = ClientSideQueue.LOOP_ALL,
                 )
-                // 先试「整列表交给设备」：App 退出后设备仍能继续播，设备的上一首/下一首也生效
+                // ① 原厂机制：CreateQueue + PlayQueueWithIndex（设备握住列表、可读回、退出照播）
+                val upstream = DevicePlaylistGateway.push(deviceIp, location, items, startAt)
+                if (upstream.ok) {
+                    withContext(Dispatchers.IO) {
+                        runCatching {
+                            sessions.savePlayback(
+                                PlaybackKey.of(deviceUuid, deviceIp),
+                                session.copy(index = startAt),
+                            )
+                        }
+                    }
+                    QueueBus.restore(items, startAt, items.getOrNull(startAt)?.title, deviceOwned = true,
+                        note = "设备列表 ${items.size} 首 · 第 ${startAt + 1} 首")
+                    val recent = withContext(Dispatchers.IO) {
+                        store.recents.record(track, System.currentTimeMillis())
+                        store.recents.recent()
+                    }
+                    _state.update { it.copy(busy = false, nowPlaying = track.displayName, recents = recent) }
+                    log(upstream.detail + "（设备侧队列 · 原厂 PlayQueue）")
+                    return@launch
+                }
+                log("PlayQueue 未接受：${upstream.detail}")
+
+                // ② 兜底：m3u + setPlayerCommand:playlist
                 val pushed = withContext(Dispatchers.IO) {
                     DeviceQueuePush.push(DeviceHttpClient(), deviceIp, items, startAt)
                 }
