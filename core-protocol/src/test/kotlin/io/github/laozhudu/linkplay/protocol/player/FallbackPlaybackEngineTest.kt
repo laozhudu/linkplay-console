@@ -41,6 +41,8 @@ private class FakeEngine(
     override fun seek(seconds: Long) { writeCalls++ }
     override fun setVolume(volume: Int) { writeCalls++; lastVolume = volume }
     override fun setMute(mute: Boolean) { writeCalls++ }
+    override fun next() {}
+    override fun previous() {}
 }
 
 private class Clock { var t = 0L; fun now() = t }

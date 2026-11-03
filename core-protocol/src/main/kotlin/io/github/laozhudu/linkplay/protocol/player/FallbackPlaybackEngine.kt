@@ -63,6 +63,10 @@ class FallbackPlaybackEngine(
 
     override fun setMute(mute: Boolean) = attempt(writeFailureThreshold) { it.setMute(mute) }
 
+    override fun next() = attempt(writeFailureThreshold) { it.next() }
+
+    override fun previous() = attempt(writeFailureThreshold) { it.previous() }
+
     // ---- 内部 ----
 
     /**

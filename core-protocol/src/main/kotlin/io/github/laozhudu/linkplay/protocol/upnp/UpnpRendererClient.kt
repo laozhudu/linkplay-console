@@ -121,6 +121,16 @@ class UpnpRendererClient(
     )
 
     /** `unit` 取 UPnP 标准值：`REL_TIME`（绝对秒数）或 `TRACK_NR`。 */
+    /**
+     * 下一首 / 上一首 —— 原厂走 **AVTransport 的 Next/Previous**，不是 httpapi 的 `setPlayerCmd:next`。
+     *
+     * 为什么照原厂：只有走 AVTransport，设备才会按**它自己持有的队列**（PlayQueue）切歌；
+     * 用 httpapi 那条在老固件上只会动"当前曲目的播放位置索引"，与队列不同步。
+     */
+    fun next() = call(UpnpServices.AV_TRANSPORT, avTransportUrl, "Next", instanceArgs())
+
+    fun previous() = call(UpnpServices.AV_TRANSPORT, avTransportUrl, "Previous", instanceArgs())
+
     fun seek(seconds: Long, unit: String = "REL_TIME") = call(
         UpnpServices.AV_TRANSPORT, avTransportUrl, "Seek",
         listOf(
@@ -159,6 +169,16 @@ class UpnpRendererClient(
                 "DesiredVolume" to volume.coerceIn(0, 100).toString(),
             ),
         )
+    }
+
+    /** 读静音状态（RenderingControl.GetMute）。 */
+    fun mute(): Boolean {
+        val url = requireRenderingControl()
+        val body = call(
+            UpnpServices.RENDERING_CONTROL, url, "GetMute",
+            listOf("InstanceID" to instanceId, "Channel" to channel),
+        )
+        return body.contains("<CurrentMute>1</CurrentMute>")
     }
 
     fun setMute(mute: Boolean) {

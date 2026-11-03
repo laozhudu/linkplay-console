@@ -326,9 +326,25 @@ class PlaybackViewModel(
 
     fun play() = act("播放") { engine!!.resume() }
 
-    fun next() = httpAct("下一首", "setPlayerCmd:next")
+    /**
+     * 下一首：走播放引擎（UPnP 的 AVTransport.Next，原厂做法）。
+     *
+     * 以前这里是 `httpAct("下一首", "setPlayerCmd:next")` —— 那是自研的组合，
+     * 在老固件上与设备侧 PlayQueue 不同步（只挪当前曲的索引，不动队列）。
+     * 引擎不可用时才退回 httpapi。
+     */
+    fun next() {
+        val e = engine
+        if (e == null) { httpAct("下一首", "setPlayerCmd:next"); return }
+        act("下一首") { e.next() }
+    }
 
-    fun previous() = httpAct("上一首", "setPlayerCmd:prev")
+    /** 上一首：同上，走 AVTransport.Previous。 */
+    fun previous() {
+        val e = engine
+        if (e == null) { httpAct("上一首", "setPlayerCmd:prev"); return }
+        act("上一首") { e.previous() }
+    }
 
     /**
      * 切循环模式。先改本地状态再下发：设备回读 `loop` 有延迟，
