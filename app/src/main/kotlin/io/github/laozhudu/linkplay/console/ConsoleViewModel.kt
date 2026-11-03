@@ -17,6 +17,7 @@ import io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile
 import io.github.laozhudu.linkplay.protocol.dlna.detect
 import io.github.laozhudu.linkplay.protocol.identity.LinkPlayIdentity
 import io.github.laozhudu.linkplay.protocol.multiroom.DragGrouping
+import io.github.laozhudu.linkplay.protocol.multiroom.GroupPlan
 import io.github.laozhudu.linkplay.protocol.multiroom.MultiroomClient
 import io.github.laozhudu.linkplay.protocol.playback.QueueRestore
 import io.github.laozhudu.linkplay.protocol.player.DeviceQueueState
@@ -164,8 +165,16 @@ data class ConsoleUiState(
 
     /** 定时关闭（原厂设备菜单第四项）。到点由 App 自己下发停止。 */
     val sleepTimer: SleepTimer = SleepTimer(),
+
     /** 定时器显示用的"现在"，每秒刷新一次，让倒计时能走。 */
     val nowMs: Long = 0L,
+
+    /** 分组面板是否打开（Sonos 式勾选 + 应用）。 */
+    val groupingOpen: Boolean = false,
+    /** 面板里已勾选的设备 uuid（含主机时也会被 GroupPlan 剔除）。 */
+    val groupingSelected: Set<String> = emptySet(),
+    /** 应用分组的进度文案（null = 空闲）。 */
+    val groupingProgress: String? = null,
 
     /** 固件升级状态（原厂「设备升级」页）。 */
     val firmware: FirmwareUpdate = FirmwareUpdate(),
@@ -188,7 +197,35 @@ data class ConsoleUiState(
      * 进页面就问一次会把「我的音乐」拖成网络页；配置本身是本地会话里的一个 JSON。
      */
     val onlineConfigured: Boolean = false,
-)
+) {
+
+    /**
+     * 聚合播放态：组内（或单台）现在是否在响。
+     *
+     * 为什么放在 state 里而不是界面各自算：主页聚合条、「全部播放/暂停」按钮、
+     * 迷你播放条三处都要用。各自算一次必然出现"按钮显示暂停、条上显示播放"。
+     *
+     * 判定优先用**主机**（组的锚点）：从机的播放态由主机代放，自己不一定报得准。
+     */
+    val anyPlaying: Boolean
+        get() {
+            val masterUuid = saved.firstOrNull { it.ip == groupMasterIp }?.uuid
+            if (masterUuid != null) return cards[masterUuid]?.playing == true
+            return cards.values.any { it.playing }
+        }
+
+    /** 聚合播放态对应的曲名（主页聚合条用）。 */
+    val playingTitle: String?
+        get() {
+            val masterUuid = saved.firstOrNull { it.ip == groupMasterIp }?.uuid
+            return (masterUuid?.let { cards[it] } ?: cards.values.maxByOrNull { it.plicount })
+                ?.title
+                ?.takeIf { it.isNotBlank() }
+        }
+
+    /** 组内共几台（含主机）；0 表示没有组。 */
+    val groupSize: Int get() = groupMembers.size
+}
 
 class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -1082,6 +1119,157 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         val ip = device.ip
         VolumeBus.publishVolume(ip, volume)
         deviceVolumeChannel.trySend(ip to volume.coerceIn(0, 100))
+    }
+
+    // ---- 勾选式分组（Sonos Grouping 菜单）----
+
+    /** 打开分组面板：默认勾上"现在在组里的"。 */
+    fun openGrouping() {
+        val st = _state.value
+        val current = st.groupMembers.filter { !it.isMaster }.mapNotNull { it.uuid?.lowercase() }.toSet()
+        _state.update { it.copy(groupingOpen = true, groupingSelected = current) }
+    }
+
+    fun closeGrouping() = _state.update { it.copy(groupingOpen = false, groupingProgress = null) }
+
+    fun toggleGroupingDevice(uuid: String) = _state.update { st ->
+        val key = uuid.lowercase()
+        st.copy(
+            groupingSelected = if (key in st.groupingSelected) st.groupingSelected - key
+            else st.groupingSelected + key,
+        )
+    }
+
+    fun selectEverywhere() {
+        val st = _state.value
+        val master = st.saved.firstOrNull { it.ip == st.groupMasterIp }?.uuid
+        _state.update {
+            it.copy(groupingSelected = GroupPlan.everywhere(st.saved.map { d -> d.uuid }, master))
+        }
+    }
+
+    /**
+     * 应用分组（勾选 → 逐台执行 → 回执）。
+     *
+     * 逐台**串行**而不是并发：成组命令会让从机离开当前 Wi-Fi，
+     * 同时给两台下发时第二台可能正好在重连，命令直接失败。
+     *
+     * 与 [joinSlave] 的区别：这里不跑 40 秒轮询（那会把界面卡住），
+     * 全部下发完统一等 6 秒再刷一次设备与组 —— 真机实测 8 秒左右建成。
+     */
+    fun applyGrouping() {
+        val st = _state.value
+        val masterIp = st.groupMasterIp ?: st.selectedIp
+        if (masterIp == null) {
+            _state.update { it.copy(groupingProgress = "先选一台主机") }
+            return
+        }
+        val masterUuid = st.saved.firstOrNull { it.ip == masterIp }?.uuid
+        val current = st.groupMembers.filter { !it.isMaster }.mapNotNull { it.uuid }.toSet()
+        val plan = GroupPlan.diff(current, st.groupingSelected, masterUuid)
+        if (plan.empty) {
+            _state.update { it.copy(groupingOpen = false, groupingProgress = null, multiroomNote = "分组没有变化") }
+            return
+        }
+        _state.update { it.copy(groupingProgress = plan.describe()) }
+        viewModelScope.launch {
+            val status = withContext(Dispatchers.IO) { runCatching { client.status(masterIp) }.getOrNull() }
+            val ssid = status?.ssid
+            if (ssid.isNullOrBlank()) {
+                _state.update { it.copy(groupingProgress = "读不到主机热点名，先刷新设备") }
+                return@launch
+            }
+            val mroom = MultiroomClient(client)
+            val ap = withContext(Dispatchers.IO) { runCatching { mroom.readApInfo(masterIp) }.getOrNull() }
+            val pwd = withContext(Dispatchers.IO) {
+                runCatching { mroom.readJoinPassword(masterIp) }.getOrDefault("")
+            }
+
+            // ① 先移出：一台设备只能在一个组里，留在旧组会"取消了还在同步"
+            for (uuid in plan.leave) {
+                val member = st.groupMembers.firstOrNull { it.uuid?.equals(uuid, true) == true } ?: continue
+                _state.update { it.copy(groupingProgress = "移出 ${member.name}…") }
+                withContext(Dispatchers.IO) {
+                    runCatching { client.send(masterIp, LinkPlayCommands.slaveKickout(member.ip)) }
+                }
+                log("分组：移出 ${member.name}（${member.ip}）")
+            }
+            // ② 再加入
+            for (uuid in plan.join) {
+                val device = st.saved.firstOrNull { it.uuid.equals(uuid, true) } ?: continue
+                _state.update { it.copy(groupingProgress = "加入 ${device.title}…") }
+                withContext(Dispatchers.IO) {
+                    runCatching {
+                        mroom.joinGroup(
+                            masterIp = masterIp,
+                            masterSsid = ssid,
+                            slaveIp = device.ip,
+                            channel = ap?.channel ?: 0,
+                            password = pwd,
+                        )
+                    }
+                }
+                log("分组：加入 ${device.title}（${device.ip}）")
+            }
+            // ③ 等设备之间建链（真机约 8 秒），再统一刷新
+            _state.update { it.copy(groupingProgress = "等待设备建链…") }
+            delay(6_000)
+            probeSaved()
+            refreshDevicesInGroup()
+            val after = (_state.value.groupMembers.size - 1).coerceAtLeast(0)
+            _state.update {
+                it.copy(
+                    groupingOpen = false,
+                    groupingProgress = null,
+                    multiroomNote = if (after > 0) "已同步 $after 台（共 ${after + 1} 台）"
+                    else "命令已发出，但没检测到从机",
+                )
+            }
+            log("分组完成：${plan.describe()} → 现在 $after 台从机")
+        }
+    }
+
+    /**
+     * 播放/暂停切换（媒体播放器惯例：按钮显示**将发生的动作**）。
+     *
+     * 主页聚合条、底部大按钮都调它 —— 共用一处判定，才不会"按钮说暂停、其实还在放"。
+     */
+    fun togglePlayAll() {
+        if (_state.value.anyPlaying) pauseAll() else playAll()
+    }
+
+    /**
+     * 单台设备的播放/暂停（卡片上的小按钮）。
+     *
+     * 组内从机不单独控制：它跟随主机，单独下发只会得到一条无效命令。
+     * 界面已对从机隐藏该按钮，这里再兜一层。
+     */
+    fun toggleDevicePlay(device: SavedDevice) {
+        val st = _state.value
+        val member = st.groupMembers.firstOrNull { it.uuid?.equals(device.uuid, true) == true }
+        if (member != null && !member.isMaster) {
+            _state.update { it.copy(multiroomNote = "「${device.title}」跟随主机播放，请在主机上控制") }
+            return
+        }
+        val playing = st.cards[device.uuid]?.playing == true
+        run(if (playing) "暂停 ${device.title}" else "播放 ${device.title}") {
+            val ok: Boolean = withContext(Dispatchers.IO) {
+                runCatching {
+                    if (playing) UpnpRendererClient.ofDevice(device.ip).pause()
+                    else UpnpRendererClient.ofDevice(device.ip).play()
+                    true
+                }.getOrDefault(false)
+            }
+            if (!ok) {
+                withContext(Dispatchers.IO) {
+                    runCatching {
+                        client.send(device.ip, if (playing) "setPlayerCmd:pause" else "setPlayerCmd:play")
+                    }
+                }
+            }
+            delay(800)
+            refreshDevicesInGroup()
+        }
     }
 
     /**
