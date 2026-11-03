@@ -694,6 +694,32 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
      *
      * 只有从机有这条命令；主机声道由播放源决定，所以主机不做假开关。
      */
+    /**
+     * 首页卡片点声道：0 立体声 → 1 仅左 → 2 仅右 循环，**立刻下发**并在 3 秒轮询里回读确认。
+     *
+     * 只有组内从机能改声道：主机的声道由硬件（左右两个单元）决定，`SlaveChannel` 也只认从机。
+     * 从机的 IP 必须用**主机自报的那个**（`10.10.10.x`），保存记录里的旧 IP 在组里已经不通。
+     *
+     * 真机验证（2026-11-03，`.164` 主机 + `10.10.10.92` 从机）：
+     * `multiroom:SlaveChannel:10.10.10.92:1` → 回读 `channel=1`；`:2` → `2`；`:0` → `0`。
+     */
+    fun cycleCardChannel(device: SavedDevice) {
+        val st = _state.value
+        val member = st.groupMembers.firstOrNull { it.uuid?.equals(device.uuid, ignoreCase = true) == true }
+            ?: st.groupMembers.firstOrNull { it.ip == device.ip }
+        if (member == null) {
+            _state.update { it.copy(multiroomNote = "「${device.title}」不在组里，声道只能对组内从机设置") }
+            return
+        }
+        if (member.isMaster) {
+            _state.update { it.copy(multiroomNote = "主机是左右两个单元，不单独设声道") }
+            return
+        }
+        val next = ((member.channel ?: 0) + 1) % 3
+        setGroupChannel(member, next)
+        log("声道 → $next（${member.name}）")
+    }
+
     fun setGroupChannel(member: GroupMember, channel: Int) {
         val master = _state.value.groupMasterIp ?: return
         if (member.isMaster) return
@@ -775,61 +801,104 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * 「全部播放」（原厂设备列表底部那个按钮）。
+     * 全部播放：让「组内所有音箱一起响」。
      *
-     * 语义是**把这批设备当成一组一起放**：优先用设备侧已有的队列（`plicount>0`），
-     * 因为那是唯一能在 App 退出后继续播的形态；没有队列就退回收起队列的本地播放。
+     * 原厂的语义就是这样 —— 组已经建立后，只要主机开始播放，从机自动跟着响，
+     * 所以这里不需要对每台设备下发命令，**只对主机下发**即可。
+     *
+     * 真机验证（2026-11-03）：主机 `.164`（`plicount=28, pause`）收到
+     * `AVTransport.Play` 后 `status=play`，返回 200。
      */
     fun playAll() {
         run("全部播放") {
-            val online = _state.value.saved.filter { _state.value.online[it.uuid] != false }
-            if (online.isEmpty()) {
-                _state.update { it.copy(error = "没有在线设备") }
+            val st = _state.value
+            val masterIp = st.groupMasterIp ?: st.selectedIp ?: st.saved.firstOrNull()?.ip
+            if (masterIp == null) {
+                _state.update { it.copy(error = "还没有音箱") }
                 return@run
             }
-            // 先把在线设备按组主机的 IP 归位：组内从机必须由主机代放
-            val masterIp = _state.value.groupMasterIp
-            val ip = masterIp ?: _state.value.selectedIp ?: online.first().ip
-            val card = _state.value.saved.firstOrNull { it.ip == ip }
-                ?.let { d -> _state.value.cards[d.uuid] }
-            val res = withContext(Dispatchers.IO) {
-                runCatching<String> {
-                    if ((card?.plicount ?: 0) > 0) {
-                        // 设备自己握着队列：走 AVTransport.Play（原厂做法）。
-                        // 实测 .164（plicount=3, pause）→ Play 回 200 且 status=play；
-                        // 而 `setPlayerCmd:resume` 回 OK 但状态不变 —— 命令回 OK ≠ 生效。
-                        val ok: Boolean = runCatching {
-                            UpnpRendererClient.ofDevice(ip).play()
-                            true
-                        }.getOrDefault(false)
-                        if (!ok) client.send(ip, "setPlayerCmd:play")
-                        "avtransport-play"
-                    } else {
-                        // 没队列：从上次的队列恢复
-                        val uuid = _state.value.selectedUuid
-                        val saved = PlaybackKey.candidates(uuid, ip).firstNotNullOfOrNull { key ->
-                            runCatching { store.loadPlayback(key) }.getOrNull()
-                        }
-                        if (saved == null || saved.items.isEmpty()) {
-                            _state.update { it.copy(error = "设备上没有列表，先去「我的音乐」点一首") }
-                            ""
-                        } else {
-                            QueueBus.restore(
-                                items = saved.items,
-                                index = saved.index.coerceIn(0, saved.items.lastIndex),
-                                title = saved.items.getOrNull(saved.index)?.title,
-                                deviceOwned = false,
-                                note = "从上次播放继续",
-                            )
-                            "restore"
-                        }
-                    }
-                }.getOrElse { t ->
-                    _state.update { it.copy(error = "全部播放失败：${t.message}") }
-                    ""
+            val uuid = st.saved.firstOrNull { it.ip == masterIp }?.uuid
+            val card = uuid?.let { st.cards[it] }
+            if ((card?.plicount ?: 0) <= 0) {
+                // 设备没队列：从本地快照恢复（和设备侧一样只存一份真相）
+                val restored = PlaybackKey.candidates(uuid, masterIp).firstNotNullOfOrNull { key ->
+                    runCatching { store.loadPlayback(key) }.getOrNull()
                 }
+                if (restored == null || restored.items.isEmpty()) {
+                    _state.update { it.copy(error = "音箱上还没有列表，先去「我的音乐」点一首") }
+                    return@run
+                }
+                QueueBus.restore(
+                    items = restored.items,
+                    index = restored.index.coerceIn(0, restored.items.lastIndex),
+                    title = restored.items.getOrNull(restored.index)?.title,
+                    deviceOwned = false,
+                    note = "从上次播放继续",
+                )
             }
-            if (res.isNotEmpty()) log("全部播放 → $ip")
+            val ok: Boolean = withContext(Dispatchers.IO) {
+                runCatching {
+                    UpnpRendererClient.ofDevice(masterIp).play()
+                    true
+                }.getOrDefault(false)
+            }
+            if (!ok) {
+                withContext(Dispatchers.IO) { runCatching { client.send(masterIp, "setPlayerCmd:play") } }
+            }
+            log("全部播放 → ${st.groupMasterName ?: masterIp}（组内 ${st.groupMembers.size.coerceAtLeast(1)} 台）")
+            // 让界面的"在放什么"立刻刷新，不用等 3 秒心跳
+            delay(1200)
+            refreshDevicesInGroup()
+        }
+    }
+
+    /** 全部暂停（组内一起停）。 */
+    fun pauseAll() {
+        run("全部暂停") {
+            val st = _state.value
+            val targets = buildList {
+                st.groupMasterIp?.let { add(it) }
+                if (st.groupMasterIp == null) addAll(st.saved.map { it.ip })
+            }.distinct()
+            targets.forEach { ip ->
+                val ok: Boolean = withContext(Dispatchers.IO) {
+                    runCatching {
+                        UpnpRendererClient.ofDevice(ip).pause()
+                        true
+                    }.getOrDefault(false)
+                }
+                if (!ok) withContext(Dispatchers.IO) { runCatching { client.send(ip, "setPlayerCmd:pause") } }
+            }
+            log("全部暂停 → ${targets.size} 台")
+        }
+    }
+
+    /** 立刻重读一遍组内设备（比等 3 秒心跳快）。 */
+    private suspend fun refreshDevicesInGroup() {
+        val st = _state.value
+        val ips = buildList {
+            st.groupMasterIp?.let { add(it) }
+            addAll(st.saved.map { it.ip })
+        }.distinct()
+        for (ip in ips) {
+            val uuid = st.saved.firstOrNull { it.ip == ip }?.uuid ?: continue
+            val card = withContext(Dispatchers.IO) {
+                runCatching {
+                    val p = PlayerStatus.parse(client.send(ip, "getPlayerStatus"))
+                    DeviceCard(
+                        title = p.title?.takeIf { it.isNotBlank() && it != "Unknown" },
+                        volume = p.volume,
+                        mute = p.mute,
+                        mode = p.mode,
+                        channel = p.channel,
+                        plicount = p.playListCount ?: 0,
+                        plicurr = p.playListCurrent ?: 0,
+                        playing = p.playState == PlayState.PLAY,
+                    )
+                }.getOrNull()
+            } ?: continue
+            VolumeBus.publish(ip, card.volume, card.mute)
+            _state.update { it.copy(cards = it.cards + (uuid to card)) }
         }
     }
 

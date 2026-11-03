@@ -97,12 +97,30 @@ class MultiroomClient(
 ) {
 
     /**
-     * 让 [slaveIp] 接入 [masterIp] 的组。
+     * 让 [slaveIp] 接入 [masterIp] 的组 —— **原厂两参重载 `b.a(gVar, gVar2)` 的命令，逐字复刻**。
      *
-     * @param masterSsid 主机的**自身热点名**（`getStatusEx.ssid`，如 `DOSS DS-1831_400C`），
-     *   不是它连着的上游 Wi-Fi（那是 `essid`，容易搞混）
-     * @param channel 主机热点信道；拿不到就传 0（固件会自己选）
-     * @param password 主机热点密码；真机 `securemode=0` 表示无密码，传空串即可
+     * ```java
+     * // jadx: com/wifiaudio/a/b.java 的第一个 a(g, g2)
+     * "http://" + slave.ip + "/httpapi.asp?command="
+     *   + "ConnectMasterAp:ssid=" + hexUpper(master.apSsid)
+     *   + ":ch=" + master.WifiChannel
+     *   + ":auth=" + (pwd.isEmpty() ? "OPEN" : "WPA2PSK")
+     *   + ":encry=" + (pwd.isEmpty() ? "NONE" : "AES")
+     *   + ":pwd=" + hexUpper(pwd)
+     *   + ":chext=0"
+     * ```
+     *
+     * ## 三个必须照抄的细节（之前全错了，所以一台都组不上）
+     *
+     * 1. **没有 `multiroom:` 前缀**。那是另一个重载 `a(g, g2, g3)`（`multiroom:ConnnectAP:<ip>:ConnectMasterAp:…:chext=1`），
+     *    语义是"把一个**已在组里**的从机搬到别的主机下"。两台独立设备组网用的是这一条。
+     * 2. **大写 hex**（`utils.a.b(...)toUpperCase()`）。`chext=0` 的普通配网也是大写；
+     *    只有 `chext=1` 的搬迁命令用小写。
+     * 3. **密码来自 `getNetwork` 的解析结果**，`securemode != 1` 时是空串（见 [readJoinPassword]）。
+     *
+     * 真机验证（`.153` → `.164`，2026-11-03）：
+     * `ConnectMasterAp:…:ch=11:auth=OPEN:encry=NONE:pwd=:chext=0` 发给 `.153`，
+     * 第 **8 秒** 主机的 `getSlaveList` 就出现 `slaves:1`，从机落到 `10.10.10.92`。
      */
     fun joinGroup(
         masterIp: String,
@@ -111,9 +129,32 @@ class MultiroomClient(
         channel: Int = 0,
         password: String = "",
     ): String {
-        // 忠实照抄原厂：`auth` 只看「密码串是否非空」，不看它是真密码还是脏数据。
-        // 真机教训 —— 我曾按 securemode=0 自作聪明改用 OPEN，命令照样回 OK，但从机根本不来；
-        // 原厂走的是 WPA2PSK 分支，用它就能组上。宁可照抄，不要"优化"协议。
+        val secured = password.isNotEmpty()
+        val cmd = buildString {
+            append("ConnectMasterAp:ssid=").append(hexUpper(masterSsid))
+            append(":ch=").append(channel)
+            append(":auth=").append(if (secured) "WPA2PSK" else "OPEN")
+            append(":encry=").append(if (secured) "AES" else "NONE")
+            append(":pwd=").append(if (secured) hexUpper(password) else "")
+            append(":chext=0")
+        }
+        return http.send(slaveIp, cmd)
+    }
+
+    /**
+     * 把一台**已经在组里**的从机搬到另一台主机下（原厂三参重载 `b.a(g, g2, g3)`）。
+     *
+     * 与 [joinGroup] 的区别：命令带 `multiroom:` 前缀、`chext=1`、**小写 hex**。
+     * 目前 UI 不用它（拖拽只会把独立设备挂到主机上），保留是为了与协议表一致 ——
+     * 以后要做"组间搬家"时不用再去反编译一遍。
+     */
+    fun moveExistingSlave(
+        masterIp: String,
+        masterSsid: String,
+        existingSlaveIp: String,
+        channel: Int = 0,
+        password: String = "",
+    ): String {
         val secured = password.isNotEmpty()
         val cmd = buildString {
             append("multiroom:ConnnectAP:").append(masterIp)
@@ -124,7 +165,7 @@ class MultiroomClient(
             append(":pwd=").append(if (secured) hexLower(password) else "")
             append(":chext=1")
         }
-        return http.send(slaveIp, cmd)
+        return http.send(existingSlaveIp, cmd)
     }
 
     /**
@@ -196,26 +237,35 @@ class MultiroomClient(
     }
 
     /**
-     * 读主机热点密码 —— 就照原厂的做法，把 `getNetwork` 的**整段返回值**当密码。
+     * 主机热点的配对密码 —— **逐字复刻原厂 `ax.a(String)` 的解析**。
      *
-     * 听起来很脏，但这正是原厂 `ax.a(String)` 干的事：
+     * 原厂链路：`getNetwork` → `x.a(str)` 解析 → 写进 `apInfo.f.n` → `b.a(master, slave, apInfo)`，
+     * 而 `b.a()` 只看「这个串是否非空」决定 `auth=WPA2PSK` 还是 `OPEN`。
+     *
+     * `x.a(str)` 的规则（jadx 反编译原文）：
      * ```java
-     * this.f1415a.f.n = str;                       // str = getNetwork 的返回
-     * com.wifiaudio.a.b.a(this.b, this.c, this.f1415a);
+     * String[] split = str.split(",");
+     * if (split[0].substring(split[0].lastIndexOf(":")+1).replace("\"","").equals("1")) {
+     *     str2 = split[1].replace("}","");
+     *     if (str2.contains(":")) str2 = str2.substring(str2.lastIndexOf(":")+1).replace("\"","");
+     * } else {
+     *     str2 = "";                     // ← securemode != 1 时密码就是空串
+     * }
      * ```
-     * 然后 `b.a()` 用 `str.length() != 0 ? "WPA2PSK" : "OPEN"` 决定 auth。
      *
-     * 这批固件 `getNetwork` 只返回 `{"securemode":"0",}`（不是密码），于是原厂实际发出的是
-     * `auth=WPA2PSK:encry=AES:pwd=<那段 JSON 的 hex>`。**这个"错"的命令能组上**，
-     * 而按 `securemode=0` 推断出的 `auth=OPEN` 组不上 —— 真机两台机器对照验证过。
+     * 即：
+     * - `{"securemode":"1","password":"12345678",}` → `12345678` → auth=WPA2PSK / encry=AES
+     * - `{"securemode":"0",}`                      → `""`       → auth=OPEN    / encry=NONE
      *
-     * 结论：这里不做"美化"，原样返回，让 [joinGroup] 走与原厂完全相同的分支。
-     * 用户在 UI 里手填密码时，会覆盖这里的结果。
+     * ## 更正一条之前的错误结论
+     *
+     * 上一版这里**原样返回整段 JSON**，理由是"整段非空所以走 WPA2PSK，真机对照验证过能组上"。
+     * 读了 `ax.a(String)` 后可以确认那是**推断错误**：原厂对 `securemode=0` 发的是空密码。
+     * 那次"对照验证"其实是用户用原厂 App 完成的组网，我们的命令从未被证明有效。
      */
     fun readJoinPassword(masterIp: String): String {
         val raw = runCatching { http.send(masterIp, "getNetwork") }.getOrNull() ?: return ""
-        val t = raw.trim()
-        return if (t.startsWith("<ERR") || t == "unknown command") "" else t
+        return pairingSecret(raw)
     }
 
     fun setSlaveVolume(masterIp: String, slaveIp: String, volume: Int): String =
@@ -252,6 +302,27 @@ class MultiroomClient(
 
     companion object {
         /** 小写 hex（多房间命令用这种；普通配网命令用大写，两者不要混）。 */
+        /**
+         * `getNetwork` 的返回值 → 主机热点密码（空串 = 无密码，走 OPEN）。
+         *
+         * 纯函数，单测锁死原厂 `x.a(String)` 那条解析。
+         */
+        fun pairingSecret(raw: String): String {
+            val t = raw.trim()
+            if (t.isEmpty() || t.startsWith("<ERR") || t == "unknown command") return ""
+            val parts = t.split(",")
+            if (parts.size < 2) return ""
+            val mode = parts[0].substringAfterLast(':').replace("\"", "").trim()
+            if (mode != "1") return ""
+            var pwd = parts[1].replace("}", "")
+            if (pwd.contains(":")) pwd = pwd.substringAfterLast(':')
+            return pwd.replace("\"", "").trim()
+        }
+
+        /** 大写 hex（`chext=0` 的配网/组网命令用这种；`chext=1` 用小写）。 */
+        internal fun hexUpper(text: String): String =
+            text.toByteArray(Charsets.UTF_8).joinToString("") { "%02X".format(it) }
+
         internal fun hexLower(text: String): String =
             text.toByteArray(Charsets.UTF_8).joinToString("") { "%02x".format(it) }
 

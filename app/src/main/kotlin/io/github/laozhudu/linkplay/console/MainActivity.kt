@@ -76,7 +76,6 @@ import io.github.laozhudu.linkplay.console.playback.VolumeOverlay
 import io.github.laozhudu.linkplay.console.playback.QueueRunState
 import io.github.laozhudu.linkplay.console.provisioning.ProvisioningScreen
 import io.github.laozhudu.linkplay.console.radio.RadioScreen
-import io.github.laozhudu.linkplay.console.room.MultiroomCard
 import io.github.laozhudu.linkplay.console.ui.components.AppCard
 import io.github.laozhudu.linkplay.console.ui.components.AppShapesExpressive
 import io.github.laozhudu.linkplay.console.ui.components.CircleIcon
@@ -272,10 +271,19 @@ private fun ConsoleBody(vm: ConsoleViewModel) {
                 // **播放页本身不显示**：那里已经有完整控制，再叠一条等于凭空多一层，
                 // 而且它一出现就顶掉播放页的高度 —— 用户说的「点击是多一层」就是这个。
                 if ((queue.nowPlaying != null || queue.running) && tab != Tab.Player) {
+                    val playingNow = state.cards[state.saved.firstOrNull { it.ip == state.selectedIp }?.uuid]?.playing
+                        ?: (state.groupMasterIp?.let { m ->
+                            state.cards[state.saved.firstOrNull { it.ip == m }?.uuid]?.playing
+                        } ?: false)
                     MiniPlayerBar(
                         queue = queue,
                         onOpen = { tab = Tab.Player },
                         modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.xs),
+                        playing = playingNow,
+                        onToggle = {
+                            // 在放就暂停，不在放就「全部播放」—— 组内一起响，和原厂一致
+                            if (playingNow) vm.pauseAll() else vm.playAll()
+                        },
                     )
                 }
                 BottomNav(current = tab, onSelect = { tab = it })
@@ -554,10 +562,12 @@ private fun HomeScreen(
                     // 拖拽组网：松手时命中了另一台就把"被拖的"挂到"被命中的"上
                     drag = dragState,
                     siblingCount = state.saved.size,
+                    isGroupMaster = state.groupMasterIp != null && device.ip == state.groupMasterIp,
                     onCenter = { c -> centers[device.uuid] = c },
                     onOpen = { onOpenDevice(device) },
                     onSettings = { onOpenSettings(device) },
                     onVolume = { vm.setCardVolume(device, it) },
+                    onChannel = { vm.cycleCardChannel(device) },
                     onDropOn = { targetUuid ->
                         state.saved.firstOrNull { it.uuid == targetUuid }?.let { vm.groupByDrag(device, it) }
                     },
@@ -653,21 +663,12 @@ private fun HomeScreen(
                 }
             }
 
-            // 原厂这页底部有一句「如何在多音箱同步和独立播放间切换？」+ 一个大按钮「全部播放」。
-            // 两者都保留：虚线是原厂的视觉分隔，帮助文案点开走多房间卡片（不新造页面）。
+            // 底部只留「全部播放」（原厂那个大按钮）。
+            // 原来上面还有一行「如何在多音箱同步和独立播放间切换？」—— 用户要求删掉：
+            // 有了拖拽，这行字既不是操作也不是链接，占位置而已。
             if (state.saved.isNotEmpty()) {
                 item {
                     VSpace(Spacing.md)
-                    DottedRule()
-                    Text(
-                        "如何在多音箱同步和独立播放间切换？",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.fillMaxWidth(),
-                        textAlign = TextAlign.Center,
-                    )
-                    DottedRule()
-                    VSpace(Spacing.sm)
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -686,14 +687,8 @@ private fun HomeScreen(
                 }
             }
 
-            // 多房间放在整个列表**最底部**（添加音箱之后）：
-            // 组网是组一次管很久的低频配置，不该占据首屏；设备列表与添加入口优先。
-            if (state.saved.size >= 2 || state.groupMembers.size > 1) {
-                item {
-                    VSpace(Spacing.lg)
-                    MultiroomCard(state = state, vm = vm, onOpenDevice = onOpenDevice)
-                }
-            }
+            // 多房间卡片已删除：拖拽组网能直接成组，再放一张"组起来"的卡片就是两套入口。
+            // 组内状态（谁是从机、属哪台）已经画在各自的设备卡片上。
         }
     }
 
@@ -736,10 +731,13 @@ private fun DraggableDeviceCard(
     card: DeviceCard?,
     drag: DragState,
     siblingCount: Int,
+    /** 这台是不是当前组的主机。 */
+    isGroupMaster: Boolean,
     onCenter: (Offset) -> Unit,
     onOpen: () -> Unit,
     onSettings: () -> Unit,
     onVolume: (Int) -> Unit,
+    onChannel: () -> Unit,
     onDropOn: (String) -> Unit,
 ) {
     val dragging = drag.draggingUuid == device.uuid
@@ -807,9 +805,12 @@ private fun DraggableDeviceCard(
             groupedUnder = groupedUnder,
             card = card,
             dimmed = dragging,
+            // 主机自己也算法"在组里"（它的 slave_list 非空）
+            inGroup = groupedUnder != null || isGroupMaster,
             onOpen = onOpen,
             onSettings = onSettings,
             onVolume = onVolume,
+            onChannel = onChannel,
         )
     }
 
@@ -843,9 +844,12 @@ private fun DeviceCardRow(
     card: DeviceCard?,
     /** 正被拖起来时压暗，让"另一台上的高亮"更显眼。 */
     dimmed: Boolean = false,
+    /** 在组里（主机或从机）—— 声道标签才可点。 */
+    inGroup: Boolean = false,
     onOpen: () -> Unit,
     onSettings: () -> Unit,
     onVolume: (Int) -> Unit,
+    onChannel: () -> Unit = {},
 ) {
     val palette = remember(device.uuid) { seedOf(device.name, device.ip) }
     // 拖动时的本地乐观值：不这样会出现"手指在动、旋钮不动"（要等 3 秒轮询回读）
@@ -977,12 +981,19 @@ private fun DeviceCardRow(
                 modifier = Modifier.width(30.dp),
                 textAlign = TextAlign.End,
             )
-            // 声道标签：0 立体声 / 1 仅左 / 2 仅右（设备 ch 字段）
+            // 声道标签：0 立体声 / 1 仅左 / 2 仅右。
+            // **可以点**：组内从机点一下就在 LR → L → R 之间循环，立刻下发
+            // `multiroom:SlaveChannel:<从机IP>:<n>`（真机验证过回读生效）。
+            // 不在组里的设备点了给一句说明，不装作能改。
             Box(
                 modifier = Modifier
                     .size(28.dp)
                     .clip(CircleShape)
-                    .background(OnDarkPalette.text.copy(alpha = 0.14f)),
+                    .background(
+                        if (inGroup) OnDarkPalette.text.copy(alpha = 0.20f)
+                        else OnDarkPalette.text.copy(alpha = 0.10f),
+                    )
+                    .clickable(onClick = onChannel),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
@@ -992,38 +1003,32 @@ private fun DeviceCardRow(
                         else -> "LR"
                     },
                     style = MaterialTheme.typography.labelSmall,
-                    color = OnDarkPalette.text,
+                    color = if (inGroup) OnDarkPalette.text else OnDarkPalette.muted,
                 )
             }
         }
     }
 }
 
-/** 原厂设备列表里的虚线分隔（用短横排出来，避免自造 Canvas 画法）。 */
-@Composable
-private fun DottedRule(color: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.outlineVariant) {
-    Text(
-        "· · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · ·",
-        style = MaterialTheme.typography.labelSmall,
-        color = color,
-        maxLines = 1,
-        overflow = TextOverflow.Clip,
-        textAlign = TextAlign.Center,
-        modifier = Modifier.fillMaxWidth(),
-    )
-}
-
 /**
- * 迷你播放条：只显示「在放什么」+ 点开。
+ * 迷你播放条：显示「在放什么」+ 播放/暂停 + 点开。
  *
- * 刻意**不放播放/暂停**：所有控制都在播放页一处。迷你条上再放一个控制，
- * 就意味着两处状态要同步，迟早不一致。
+ * ## 为什么现在加播放/暂停
+ *
+ * 原来这里刻意不放控制（"所有控制都在播放页一面"）。但用户从首页按「全部播放」之后
+ * 想停一下，必须先进播放页 —— 这条路径太绕。
+ *
+ * 状态只有一个来源：`QueueBus` / `DeviceCard.playing`，迷你条只读不存，
+ * 所以不会出现"两处各记一份、迟早不一致"的问题。
  */
 @Composable
 private fun MiniPlayerBar(
     queue: QueueRunState,
     onOpen: () -> Unit,
     modifier: Modifier = Modifier,
+    /** 当前是否在放（来自设备回报，不本地记）。 */
+    playing: Boolean = false,
+    onToggle: () -> Unit = {},
 ) {
     Row(
         modifier = modifier
@@ -1061,6 +1066,17 @@ private fun MiniPlayerBar(
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+        // 播放/暂停：与首页「全部播放」配套，不用为了停一下再进播放页
+        CircleIcon(onClick = onToggle, size = 40.dp) {
+            if (playing) {
+                Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Box(Modifier.size(4.dp, 14.dp).background(MaterialTheme.colorScheme.onSurface))
+                    Box(Modifier.size(4.dp, 14.dp).background(MaterialTheme.colorScheme.onSurface))
+                }
+            } else {
+                Text("▶", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+            }
         }
         Text("›", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
