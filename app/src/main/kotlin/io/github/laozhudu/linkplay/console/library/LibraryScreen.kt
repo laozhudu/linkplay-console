@@ -84,11 +84,13 @@ fun LibraryScreen(
     location: String?,
     deviceLabel: String?,
     onBack: () -> Unit,
+    /** 设备 uuid：播放快照按它存，重开 App 才能找回列表。 */
+    deviceUuid: String? = null,
 ) {
     val app = LocalContext.current.applicationContext as android.app.Application
     val vm: LibraryViewModel = viewModel(
         key = "library-$deviceIp",
-        factory = viewModelFactory { initializer { LibraryViewModel(app, deviceIp, location, deviceLabel) } },
+        factory = viewModelFactory { initializer { LibraryViewModel(app, deviceIp, location, deviceLabel, deviceUuid) } },
     )
     val state by vm.state.collectAsState()
 

@@ -14,6 +14,10 @@ import io.github.laozhudu.linkplay.protocol.LinkPlayStatus
 import io.github.laozhudu.linkplay.protocol.SlaveDevice
 import io.github.laozhudu.linkplay.protocol.identity.LinkPlayIdentity
 import io.github.laozhudu.linkplay.protocol.multiroom.MultiroomClient
+import io.github.laozhudu.linkplay.protocol.playback.QueueRestore
+import io.github.laozhudu.linkplay.protocol.player.DeviceQueueState
+import io.github.laozhudu.linkplay.protocol.session.PlaybackKey
+import io.github.laozhudu.linkplay.console.playback.QueueBus
 import io.github.laozhudu.linkplay.console.playback.VolumeBus
 import io.github.laozhudu.linkplay.protocol.player.PlayerStatus
 import io.github.laozhudu.linkplay.protocol.player.VolumeStep
@@ -137,6 +141,9 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         reloadSaved()
         probeSaved()
         restoreLastDevice()
+        // 队列恢复必须在**启动时**做，而不是等用户点开播放页：
+        // 否则"重开 App 列表是空的"会被当成恢复失效
+        restoreLastQueue()
         // 首页多房间卡片的低频心跳：不在播放页时也能跟上设备侧/遥控器的音量变化
         viewModelScope.launch {
             while (true) {
@@ -193,6 +200,46 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
             )
         }
         log("恢复上次设备：${target.title}（${target.ip}）")
+    }
+
+    /**
+     * 重开 App 时恢复播放列表。
+     *
+     * 判定逻辑全在 [QueueRestore]（纯函数、有单测）。这里只负责三件事：
+     * 1. 读**设备真值**（`plicount`/`plicurr`）—— 列表本来就在设备上，这是权威；
+     * 2. 读本地快照（提供曲目标题，设备不回填元数据）；
+     * 3. 两者交给 [QueueRestore.plan] 合成，结果写进 [QueueBus]。
+     *
+     * 为什么先等一小会儿：`restoreLastDevice()` 里才拿到 selectedIp/uuid，
+     * 而两者都在同一个 init 里，这里按"当前已选设备"读，拿不到就退回上次的记录。
+     */
+    private fun restoreLastQueue() {
+        viewModelScope.launch {
+            delay(150)
+            val uuid = _state.value.selectedUuid
+            val ip = _state.value.selectedIp ?: return@launch
+
+            val device = withContext(Dispatchers.IO) {
+                runCatching {
+                    DeviceQueueState.from(PlayerStatus.parse(client.send(ip, "getPlayerStatus")))
+                }.getOrNull()
+            }
+            val snapshot = withContext(Dispatchers.IO) {
+                PlaybackKey.candidates(uuid, ip).firstNotNullOfOrNull { key ->
+                    runCatching { store.loadPlayback(key) }.getOrNull()
+                }
+            }
+            val plan = QueueRestore.plan(snapshot, device) ?: return@launch
+            QueueBus.restore(
+                items = plan.items,
+                index = plan.index,
+                title = plan.items.getOrNull(plan.index)?.title,
+                deviceOwned = plan.fromDevice,
+                offset = snapshot?.deviceOffset ?: 0,
+                note = plan.note,
+            )
+            log("恢复播放列表：${plan.items.size} 首 · ${plan.note}")
+        }
     }
 
     // ---- 已保存设备 ----

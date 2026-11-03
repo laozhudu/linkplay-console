@@ -13,6 +13,7 @@ import io.github.laozhudu.linkplay.protocol.metadata.TagFetcher
 import io.github.laozhudu.linkplay.protocol.session.PlaybackKey
 import io.github.laozhudu.linkplay.protocol.LinkPlayCommands
 import io.github.laozhudu.linkplay.protocol.player.PlaybackEngine
+import io.github.laozhudu.linkplay.protocol.playback.QueueRestore
 import io.github.laozhudu.linkplay.protocol.player.DeviceQueueState
 import io.github.laozhudu.linkplay.protocol.player.PlayerSource
 import io.github.laozhudu.linkplay.protocol.player.PlayerStatus
@@ -391,6 +392,21 @@ class PlaybackViewModel(
     fun playQueueItem(index: Int) {
         val q = QueueBus.state.value
         val item = q.items.getOrNull(index) ?: return
+        // 占位列表（设备有队列但本机没有曲目单）：只能按设备的方式跳位，不能投 device:// 这种假地址
+        if (QueueRestore.isPlaceholder(item)) {
+            val delta = index - q.index
+            if (delta == 0) return
+            viewModelScope.launch {
+                repeat(kotlin.math.abs(delta)) {
+                    val cmd = if (delta > 0) "setPlayerCmd:next" else "setPlayerCmd:prev"
+                    withContext(Dispatchers.IO) { runCatching { device.send(deviceIp, cmd) } }
+                    delay(250)
+                }
+                QueueBus.syncDeviceIndex(index)
+                refreshOnce(silent = true)
+            }
+            return
+        }
         if (QueueBus.hasController) {
             QueueBus.skipTo(index)
             return
@@ -500,15 +516,24 @@ class PlaybackViewModel(
             log("恢复设备状态：${snapshot.state} vol=${snapshot.volume} src=${snapshot.sourceLabel ?: "-"}")
         }
 
-        // 2) 本地快照的队列
-        val saved = withContext(Dispatchers.IO) {
+        // 2) 队列：设备真值 + 本地快照，交给 QueueRestore 统一判定
+        //    （这里不再自己写一套恢复逻辑——两套实现必然漂移，这也是"重开列表不同步"的老根因）
+        val savedSession = withContext(Dispatchers.IO) {
             PlaybackKey.candidates(deviceUuid, deviceIp).firstNotNullOfOrNull { key ->
                 runCatching { store.loadPlayback(key) }.getOrNull()
             }
         }
-        if (saved != null && saved.items.isNotEmpty()) {
-            QueueBus.restore(saved.items, saved.index, snapshot?.title ?: saved.items.getOrNull(saved.index)?.title)
-            log("恢复播放列表：${saved.items.size} 首，上次第 ${saved.index + 1} 首")
+        val deviceQueue = readDeviceQueue()
+        QueueRestore.plan(savedSession, deviceQueue)?.let { plan ->
+            QueueBus.restore(
+                items = plan.items,
+                index = plan.index,
+                title = plan.items.getOrNull(plan.index)?.title,
+                deviceOwned = plan.fromDevice,
+                offset = savedSession?.deviceOffset ?: 0,
+                note = plan.note,
+            )
+            log("恢复播放列表：${plan.items.size} 首 · ${plan.note}")
         }
     }
 

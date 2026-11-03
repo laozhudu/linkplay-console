@@ -20,6 +20,14 @@ data class PlaybackSession(
     val items: List<QueueItem>,
     val index: Int,
     val loopMode: Int,
+    /**
+     * 设备侧第 1 首对应本地列表的第几首。
+     *
+     * 为什么必须存：设备只认 `setPlayerCmd:playlist:<url>:0`，所以下发前我们把列表旋转过
+     * （见 `M3uBuilder.rotateFrom`）。重开 App 时设备报 `plicurr=1`，要映射回本地列表
+     * 就得知道当初转了多少 —— 这个偏移丢了，列表高亮就会错位。
+     */
+    val deviceOffset: Int = 0,
 ) {
     /** 还能继续播的曲目（从 [index] 起）。 */
     val remaining: List<QueueItem> get() = items.drop(index.coerceIn(0, items.size))
@@ -31,6 +39,7 @@ data class PlaybackSession(
                 "ip" to JsonValue.Str(deviceIp),
                 "index" to JsonValue.Num(index.toDouble()),
                 "loop" to JsonValue.Num(loopMode.toDouble()),
+                "offset" to JsonValue.Num(deviceOffset.toDouble()),
                 "items" to JsonValue.Arr(
                     items.map {
                         JsonValue.Obj(
@@ -77,6 +86,8 @@ data class PlaybackSession(
                     items = items,
                     index = (root.int("index") ?: 0).coerceIn(0, items.size - 1),
                     loopMode = root.int("loop") ?: 2,
+                    // 老快照没有这个字段，默认为 0（旋转前就存下的数据）
+                    deviceOffset = root.int("offset") ?: 0,
                 )
             }.getOrNull()
         }

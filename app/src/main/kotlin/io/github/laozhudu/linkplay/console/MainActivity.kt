@@ -225,6 +225,7 @@ private fun ConsoleBody(vm: ConsoleViewModel) {
                 deviceIp = state.selectedIp.orEmpty(),
                 deviceLabel = state.status?.ssid,
                 onBack = { sub = null },
+                deviceUuid = state.selectedUuid,
             )
 
             SubPage.Library -> LibraryScreen(
@@ -232,6 +233,7 @@ private fun ConsoleBody(vm: ConsoleViewModel) {
                 location = state.selectedLocation,
                 deviceLabel = state.status?.ssid,
                 onBack = { sub = null },
+                deviceUuid = state.selectedUuid,
             )
 
             SubPage.Settings -> DeviceSettingsScreen(

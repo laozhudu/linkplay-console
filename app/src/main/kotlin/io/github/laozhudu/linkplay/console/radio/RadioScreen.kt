@@ -67,11 +67,12 @@ fun RadioScreen(
     deviceIp: String,
     deviceLabel: String?,
     onBack: () -> Unit,
+    deviceUuid: String? = null,
 ) {
     val app = LocalContext.current.applicationContext as android.app.Application
     val vm: RadioViewModel = viewModel(
         key = "radio-$deviceIp",
-        factory = viewModelFactory { initializer { RadioViewModel(app, deviceIp, deviceLabel) } },
+        factory = viewModelFactory { initializer { RadioViewModel(app, deviceIp, deviceLabel, deviceUuid) } },
     )
     val state by vm.state.collectAsState()
 
