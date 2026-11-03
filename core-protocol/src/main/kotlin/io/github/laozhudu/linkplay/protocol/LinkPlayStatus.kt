@@ -24,6 +24,13 @@ data class LinkPlayStatus(
     val release: String?,
     val build: String?,
     val secureMode: String?,
+    /**
+     * 电池百分比（`battery_percent`，真机 `.164` 返回 `100`）。
+     *
+     * 原厂不解析这个字段 —— 它在从机列表里取 `battery`。但独立设备（没组网）
+     * 只能从 `getStatusEx` 拿到电量，所以两边都读：主机/独立=这里，从机=`slave_list[].battery`。
+     */
+    val batteryPercent: Int? = null,
 ) {
     val isOnline: Boolean get() = internet == 1
 
@@ -46,6 +53,9 @@ data class LinkPlayStatus(
                 release = root.string("Release"),
                 build = root.string("build"),
                 secureMode = root.string("securemode"),
+                // 真机返回的是**字符串** "100"（不是数字），两种都认
+                batteryPercent = root.string("battery_percent")?.toIntOrNull()
+                    ?: root.int("battery_percent"),
             )
         }
     }
@@ -66,6 +76,10 @@ data class SlaveDevice(
     val name: String?,
     val ssid: String?,
     val volume: Int?,
+    /** 从机电量百分比（`battery`，真机从机返回 60/70）。 */
+    val battery: Int? = null,
+    /** 声道：0 立体声 / 1 仅左 / 2 仅右（`channel`）。 */
+    val channel: Int? = null,
 ) {
     companion object {
         fun parseList(json: String): List<SlaveDevice> {
@@ -82,6 +96,8 @@ data class SlaveDevice(
                     name = obj.string("name"),
                     ssid = obj.string("ssid")?.let { HexCodec.decodeIfHex(it) },
                     volume = obj.int("volume"),
+                    battery = obj.int("battery"),
+                    channel = obj.int("channel"),
                 )
             }
         }

@@ -33,6 +33,8 @@ data class SlaveInfo(
     val volume: Int? = null,
     /** 声道：0=立体声 1=仅左 2=仅右（`multiroom:SlaveChannel` 的取值）。 */
     val channel: Int? = null,
+    /** 电量百分比（`slave_list[].battery`，真机从机返回 60/70）。 */
+    val battery: Int? = null,
     val inGroup: Boolean = false,
 )
 
@@ -354,6 +356,7 @@ class MultiroomClient(
                     volume = (o.string("volume") ?: o.string("vol"))?.toIntOrNull()
                         ?: o.int("volume") ?: o.int("vol"),
                     channel = o.string("channel")?.toIntOrNull() ?: o.int("channel"),
+                    battery = o.string("battery")?.toIntOrNull() ?: o.int("battery"),
                     // 出现在 slave_list 里就是"在本机这一组"。
                     // 注意 **不能** 用 `mask` 推断 —— 真机上成组后 mask 仍是 0（已实测），
                     // 它表达的是"有没有被屏蔽"，与是否入组无关。

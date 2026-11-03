@@ -465,6 +465,11 @@ private fun HomeScreen(
     var showAdd by remember { mutableStateOf(false) }
     var manualIp by remember { mutableStateOf("") }
 
+    // 齿轮点开的设备操作菜单（改名 / 删除 / 进设置）
+    var menuTarget by remember { mutableStateOf<SavedDevice?>(null) }
+    var renameTarget by remember { mutableStateOf<SavedDevice?>(null) }
+    var deleteTarget by remember { mutableStateOf<SavedDevice?>(null) }
+
     // 拖拽组网的状态：整页共用一份，卡片只负责上报"我被拖了/我松手命中谁"
     val dragState = remember { DragState() }
     // 每台卡片在**根坐标**里的中心点，用来判断松手命中了哪台。
@@ -568,6 +573,8 @@ private fun HomeScreen(
                     onSettings = { onOpenSettings(device) },
                     onVolume = { vm.setCardVolume(device, it) },
                     onChannel = { vm.cycleCardChannel(device) },
+                    onUngroup = { vm.ungroupCard(device) },
+                    onRename = { menuTarget = device },
                     onDropOn = { targetUuid ->
                         state.saved.firstOrNull { it.uuid == targetUuid }?.let { vm.groupByDrag(device, it) }
                     },
@@ -692,6 +699,69 @@ private fun HomeScreen(
         }
     }
 
+    // ---- 设备操作菜单（齿轮）：改名 / 删除 / 进设置 ----
+    menuTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { menuTarget = null },
+            title = { Text(target.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            text = {
+                Column {
+                    TextButton(onClick = { renameTarget = target; menuTarget = null }) { Text("重命名") }
+                    TextButton(onClick = {
+                        deleteTarget = target
+                        menuTarget = null
+                    }) { Text("删除这台音箱") }
+                    TextButton(onClick = { onOpenSettings(target); menuTarget = null }) { Text("设备信息 / 设置") }
+                }
+            },
+            confirmButton = { TextButton(onClick = { menuTarget = null }) { Text("关闭") } },
+        )
+    }
+
+    renameTarget?.let { target ->
+        var name by remember(target.uuid) { mutableStateOf(target.name.ifBlank { target.title }) }
+        AlertDialog(
+            onDismissRequest = { renameTarget = null },
+            title = { Text("重命名") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        singleLine = true,
+                        label = { Text("音箱名字") },
+                    )
+                    Text(
+                        "组内从机会由主机转达改名；改完会回读设备确认。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.renameCard(target, name)
+                    renameTarget = null
+                }) { Text("保存") }
+            },
+            dismissButton = { TextButton(onClick = { renameTarget = null }) { Text("取消") } },
+        )
+    }
+
+    deleteTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { deleteTarget = null },
+            title = { Text("删除「${target.title}」？") },
+            text = { Text("只删本机这条记录，不影响音箱本身。以后可以重新搜索添加。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.forget(target.uuid)
+                    deleteTarget = null
+                }) { Text("删除") }
+            },
+            dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("取消") } },
+        )
+    }
 }
 
 /**
@@ -738,6 +808,8 @@ private fun DraggableDeviceCard(
     onSettings: () -> Unit,
     onVolume: (Int) -> Unit,
     onChannel: () -> Unit,
+    onUngroup: () -> Unit,
+    onRename: () -> Unit,
     onDropOn: (String) -> Unit,
 ) {
     val dragging = drag.draggingUuid == device.uuid
@@ -811,6 +883,8 @@ private fun DraggableDeviceCard(
             onSettings = onSettings,
             onVolume = onVolume,
             onChannel = onChannel,
+            onUngroup = onUngroup,
+            onRename = onRename,
         )
     }
 
@@ -850,6 +924,9 @@ private fun DeviceCardRow(
     onSettings: () -> Unit,
     onVolume: (Int) -> Unit,
     onChannel: () -> Unit = {},
+    onUngroup: () -> Unit = {},
+    /** 齿轮：打开这台设备的操作菜单。 */
+    onRename: () -> Unit = {},
 ) {
     val palette = remember(device.uuid) { seedOf(device.name, device.ip) }
     // 拖动时的本地乐观值：不这样会出现"手指在动、旋钮不动"（要等 3 秒轮询回读）
@@ -880,21 +957,35 @@ private fun DeviceCardRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Text(
-                    listOfNotNull(
-                        device.ip,
-                        groupedUnder?.let { "同步播放中 · 属 $it" }
-                            ?: when (online) {
-                                true -> "在线"
-                                false -> "离线"
-                                null -> null
-                            },
-                    ).joinToString(" · "),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = OnDarkPalette.muted,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        listOfNotNull(
+                            device.ip,
+                            groupedUnder?.let { "属 $it" }
+                                ?: when (online) {
+                                    true -> "在线"
+                                    false -> "离线"
+                                    null -> null
+                                },
+                        ).joinToString(" · "),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = OnDarkPalette.muted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    // 电量（原厂卡片上就有）：独立设备取 getStatusEx.battery_percent，
+                    // 组内从机取主机转述的 slave_list[].battery
+                    card?.battery?.let { pct ->
+                        Spacer(Modifier.width(Spacing.xs))
+                        Text(
+                            "🔋$pct%",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = OnDarkPalette.muted,
+                            maxLines = 1,
+                        )
+                    }
+                }
             }
             if (groupedUnder != null) {
                 PillTag(text = "组内", color = StatusColors.ok)
@@ -903,9 +994,10 @@ private fun DeviceCardRow(
                 PillTag(text = "离线", color = StatusColors.error)
                 Spacer(Modifier.width(Spacing.xs))
             }
-            // 齿轮：原厂在卡片右上角，直接进这台设备的设置
-            CircleIcon(onClick = onSettings, size = 36.dp) {
-                Text("⚙", style = MaterialTheme.typography.titleMedium, color = OnDarkPalette.muted)
+            // 齿轮：原厂在卡片右上角。点开是这台设备的操作菜单（改名 / 删除 / 进设置），
+            // 对应原厂长按卡片弹出的那个菜单 —— 长按现在是拖拽组网，菜单挪到齿轮上
+            CircleIcon(onClick = onRename, size = 36.dp) {
+                Text("⚙", style = MaterialTheme.typography.titleMedium, color = OnDarkPalette.text)
             }
         }
 
@@ -981,6 +1073,11 @@ private fun DeviceCardRow(
                 modifier = Modifier.width(30.dp),
                 textAlign = TextAlign.End,
             )
+            if (inGroup) {
+                TextButton(onClick = onUngroup, contentPadding = PaddingValues(horizontal = 6.dp)) {
+                    Text("解除", style = MaterialTheme.typography.labelSmall, color = OnDarkPalette.muted)
+                }
+            }
             // 声道标签：0 立体声 / 1 仅左 / 2 仅右。
             // **可以点**：组内从机点一下就在 LR → L → R 之间循环，立刻下发
             // `multiroom:SlaveChannel:<从机IP>:<n>`（真机验证过回读生效）。
