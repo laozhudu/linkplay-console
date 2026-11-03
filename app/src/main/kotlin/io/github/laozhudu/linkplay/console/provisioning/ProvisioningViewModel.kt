@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import io.github.laozhudu.linkplay.console.diagnostics.safeLaunch
 
 /** 配网流程的四个步骤，UI 按这个顺序渲染。 */
 enum class ProvisionStep { CONNECT_TO_DEVICE_AP, FIND_DEVICE, PICK_NETWORK, ENTER_PASSWORD, SENDING }
@@ -72,7 +73,7 @@ class ProvisioningViewModel : ViewModel() {
     fun findDevice() {
         if (_state.value.finding) return
         _state.update { it.copy(finding = true, error = null, findLog = emptyList()) }
-        viewModelScope.launch {
+        safeLaunch("ProvisioningViewModel") {
             try {
                 val found = withContext(Dispatchers.IO) { discovery.discover() }
                 log("SSDP 返回 ${found.size} 个响应")
@@ -81,7 +82,7 @@ class ProvisioningViewModel : ViewModel() {
                     log("选中 ${ip.ip}${ip.server?.let { " ($it)" } ?: ""}")
                     withContext(Dispatchers.IO) { verifyReachable(ip.ip) }
                     onDeviceLocated(ip.ip)
-                    return@launch
+                    return@safeLaunch
                 }
 
                 log("SSDP 无响应，尝试常见默认地址…")
@@ -114,7 +115,7 @@ class ProvisioningViewModel : ViewModel() {
         if (_state.value.scanning) return
         val ip = _state.value.deviceIp
         _state.update { it.copy(scanning = true, error = null, aps = emptyList()) }
-        viewModelScope.launch {
+        safeLaunch("ProvisioningViewModel") {
             try {
                 val list = withContext(Dispatchers.IO) { client.scanAccessPoints(ip) }
                 _state.update { it.copy(scanning = false, aps = list.sortedByDescending { it.rssi ?: -999 }) }
@@ -199,7 +200,7 @@ class ProvisioningViewModel : ViewModel() {
             )
         }
 
-        viewModelScope.launch {
+        safeLaunch("ProvisioningViewModel") {
             val channel = s.selectedAp.channel.takeIf { it > 0 } ?: 0
             val sent = runCatching {
                 withContext(Dispatchers.IO) {
@@ -214,7 +215,7 @@ class ProvisioningViewModel : ViewModel() {
                         step = ProvisionStep.ENTER_PASSWORD,
                     )
                 }
-                return@launch
+                return@safeLaunch
             }
 
             // 设备只回 OK，必须自己轮询确认。用真实时钟，但每轮把进度推给 UI。

@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import io.github.laozhudu.linkplay.console.diagnostics.safeLaunch
 
 data class QueueUiState(
     val loading: Boolean = false,
@@ -64,7 +65,7 @@ class QueueViewModel(
     private val deviceHost: String? = location?.let { runCatching { java.net.URI(it).host }.getOrNull() }
 
     init {
-        viewModelScope.launch { initDevice() }
+        safeLaunch("QueueViewModel") { initDevice() }
         // 不在构造时扫描：扫描需要读媒体权限，一进页面就弹权限框很粗暴。
         // 改为用户点「扫描本机音乐」时才请求（见 QueueScreen）。
     }
@@ -99,7 +100,7 @@ class QueueViewModel(
 
     fun loadTracks() {
         _state.update { it.copy(loading = true) }
-        viewModelScope.launch {
+        safeLaunch("QueueViewModel") {
             val result = runCatching {
                 withContext(Dispatchers.IO) { LocalLibrary.query(getApplication()) }
             }
@@ -111,7 +112,7 @@ class QueueViewModel(
                         error = "读取本地音乐失败：${result.exceptionOrNull()?.message}",
                     )
                 }
-                return@launch
+                return@safeLaunch
             }
             val tracks = result.getOrDefault(emptyList())
             _state.update {
@@ -165,7 +166,7 @@ class QueueViewModel(
         val s = _state.value
         if (s.busy) return
         _state.update { it.copy(busy = true, error = null) }
-        viewModelScope.launch {
+        safeLaunch("QueueViewModel") {
             try {
                 val ctx = getApplication<Application>()
                 withContext(Dispatchers.IO) { LocalMediaRegistry.ensureServer(ctx, s.tracks) }
