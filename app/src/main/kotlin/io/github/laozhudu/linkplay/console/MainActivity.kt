@@ -1,16 +1,6 @@
 package io.github.laozhudu.linkplay.console
 
 import io.github.laozhudu.linkplay.protocol.identity.UuidMatch
-import io.github.laozhudu.linkplay.protocol.multiroom.DragGrouping
-import androidx.compose.ui.layout.boundsInRoot
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.runtime.mutableStateMapOf
 import android.os.Bundle
 import android.view.KeyEvent
 import androidx.activity.viewModels
@@ -478,7 +468,7 @@ private fun SourcesScreen(
  * 只做三件事，按使用频率排：
  * 1. **已保存的音箱**（主入口）—— 打开 App 一眼点开，不用每次等扫描；
  * 2. 添加设备（低频，收在折叠区）；
- * 3. 长按卡片可移除记录。
+ * 3. 组网走 ⧉ 勾选（唯一方式，见 Sonos Grouping 菜单的取舍）。
  *
  * 为什么不再把「搜到的所有 UPnP 设备」铺出来：局域网里 NAS、路由、电视都会响应 SSDP，
  * 全列出来分不清哪台是音箱，点错还会往路由器投流。现在只收 LinkPlay 系
@@ -512,34 +502,6 @@ private fun HomeScreen(
     var sleepMenu by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<SavedDevice?>(null) }
     var deleteTarget by remember { mutableStateOf<SavedDevice?>(null) }
-
-    // 拖拽组网的状态：整页共用一份，卡片只负责上报"我被拖了/我松手命中谁"
-    val dragState = remember { DragState() }
-    // 每台卡片在**根坐标**里的中心点，用来判断松手命中了哪台。
-    // 拖拽期间被拖那台的坐标被冻结（见 DraggableDeviceCard 里的 onGloballyPositioned）
-    val centers = remember { mutableStateMapOf<String, Offset>() }
-    val density = LocalDensity.current
-    // 命中半径：卡片中心到指尖。卡片高约 190dp、纵向间距约 200dp，
-    // 130dp 能可靠命中相邻卡片，又不至于把两条之外的也吸过来
-    val hitRadiusPx = with(density) { 130.dp.toPx() }
-
-    // 指尖位置 = 被拖卡片（冻结的）中心 + 累计位移；据此算悬停目标
-    LaunchedEffect(dragState.draggingUuid, dragState.offset) {
-        val dragged = dragState.draggingUuid
-        if (dragged == null) {
-            dragState.hoverUuid = null
-            return@LaunchedEffect
-        }
-        val origin = centers[dragged] ?: return@LaunchedEffect
-        val points = centers.map { (uuid, c) -> Triple(uuid, c.x, c.y) }.toList()
-        dragState.hoverUuid = DragGrouping.hitTest(
-            points = points,
-            x = origin.x + dragState.offset.x,
-            y = origin.y + dragState.offset.y,
-            draggedUuid = dragged,
-            maxDistancePx = hitRadiusPx,
-        )
-    }
 
     Column(Modifier.fillMaxSize().padding(horizontal = Spacing.lg)) {
         VSpace(Spacing.md)
@@ -661,7 +623,7 @@ private fun HomeScreen(
                     )
                 }
                 Spacer(Modifier.width(Spacing.xs))
-                // 组网入口：勾选式（Sonos Grouping 菜单），拖拽保留但不再是唯一路径
+                // 组网入口：勾选式（Sonos Grouping 菜单）—— 唯一的组网方式
                 CircleIcon(onClick = { vm.openGrouping() }, size = 44.dp) {
                     Text("⧉", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -669,7 +631,7 @@ private fun HomeScreen(
         }
         if (state.saved.size >= 2) {
             Text(
-                "点 ⧉ 勾选要同步的音箱；也可以长按卡片拖到另一台上",
+                "点 ⧉ 勾选要同步的音箱",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = Spacing.xs),
@@ -704,19 +666,18 @@ private fun HomeScreen(
             }
 
             items(state.saved, key = { it.uuid }) { device ->
-                DraggableDeviceCard(
+                DeviceCardRow(
                     device = device,
                     online = state.online[device.uuid],
                     groupedUnder = state.groupedUnder[UuidMatch.key(device.uuid)],
                     card = state.cards[device.uuid],
-                    // 拖拽组网：松手时命中了另一台就把"被拖的"挂到"被命中的"上
-                    drag = dragState,
-                    siblingCount = state.saved.size,
-                    isGroupMaster = state.groupMasterIp != null && device.ip == state.groupMasterIp,
+                    // 主机自己也算"在组里"（它的 slave_list 非空）
+                    inGroup = state.groupedUnder[UuidMatch.key(device.uuid)] != null ||
+                        (state.groupMasterIp != null && device.ip == state.groupMasterIp),
+                    isMaster = state.groupMasterIp != null && device.ip == state.groupMasterIp,
                     masked = UuidMatch.find(device.uuid, state.groupMembers) { it.uuid }?.masked == true,
                     profile = state.cards[device.uuid]?.profile
                         ?: io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile.UNKNOWN,
-                    onCenter = { c -> centers[device.uuid] = c },
                     onOpen = { onOpenDevice(device) },
                     onSettings = { onOpenSettings(device) },
                     onVolume = { vm.setCardVolume(device, it) },
@@ -725,20 +686,7 @@ private fun HomeScreen(
                     onMask = { vm.toggleMask(device) },
                     onTogglePlay = { vm.toggleDevicePlay(device) },
                     onRename = { menuTarget = device },
-                    onDropOn = { targetUuid ->
-                        state.saved.firstOrNull { it.uuid == targetUuid }?.let { vm.groupByDrag(device, it) }
-                    },
                 )
-            }
-
-            if (state.saved.isNotEmpty()) {
-                item {
-                    Text(
-                        "长按设备卡片可以移除记录",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
             }
 
             item {
@@ -856,7 +804,7 @@ private fun HomeScreen(
                 }
             }
 
-            // 多房间卡片已删除：拖拽组网能直接成组，再放一张"组起来"的卡片就是两套入口。
+            // 多房间卡片已删除：勾选式组网（⧉）能直接成组，再放一张"组起来"的卡片就是两套入口。
             // 组内状态（谁是从机、属哪台）已经画在各自的设备卡片上。
         }
     }
@@ -1050,143 +998,6 @@ private fun HomeScreen(
 }
 
 /**
- * 首页拖拽组网的共享状态。
- *
- * 为什么放在页面级而不是每张卡片自己维护：松手要判断"命中了哪台**别的**卡片"，
- * 这需要知道所有卡片的位置。卡片只上报自己的中心点与拖拽意图，判定统一在 [ComposeHit] 里做。
- */
-private class DragState {
-    var draggingUuid by mutableStateOf<String?>(null)
-    var offset by mutableStateOf(Offset.Zero)
-    var hoverUuid by mutableStateOf<String?>(null)
-    /** 拖拽起点时被拖卡片的中心（根坐标）。之后靠 [offset] 累加算出指尖位置。 */
-    var origin by mutableStateOf(Offset.Zero)
-}
-
-/**
- * 可拖拽的设备卡片外壳。
- *
- * 手势：**长按 300ms 后拖动**（`detectDragGesturesAfterLongPress`）。
- * 为什么不是"直接拖"：设备卡片本身要能点开（点一下进播放页）、音量条要能拖，
- * 直接拖会把这些手势全抢走。
- *
- * 拖起来之后：
- * - 卡片跟着手指移动并轻微放大，明确"它现在被拿起来了"；
- * - 悬停到另一台上时，那台描一圈高亮，告诉用户"松手就挂到它上面"；
- * - 松手时用指尖位置做命中判定（[DragGrouping.hitTest]，见 core-protocol 的单测）。
- *
- * 长按原来绑定的是"移除记录"，现在改到设备设置页 —— 一个手势不能同时是两件事。
- */
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun DraggableDeviceCard(
-    device: SavedDevice,
-    online: Boolean?,
-    groupedUnder: String?,
-    card: DeviceCard?,
-    drag: DragState,
-    siblingCount: Int,
-    /** 这台是不是当前组的主机。 */
-    isGroupMaster: Boolean,
-    /** 这台是否已被屏蔽（`mask=1`）。 */
-    masked: Boolean,
-    /** 设备能力档：通用 DLNA 渲染器不显示组网/声道/屏蔽这些私有入口。 */
-    profile: io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile,
-    onCenter: (Offset) -> Unit,
-    onOpen: () -> Unit,
-    onSettings: () -> Unit,
-    onVolume: (Int) -> Unit,
-    onSetChannel: (Int) -> Unit,
-    onUngroup: () -> Unit,
-    onMask: () -> Unit,
-    onTogglePlay: () -> Unit,
-    onRename: () -> Unit,
-    onDropOn: (String) -> Unit,
-) {
-    val dragging = drag.draggingUuid == device.uuid
-    val hovered = drag.hoverUuid == device.uuid && !dragging
-
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .graphicsLayer {
-                if (dragging) {
-                    translationX = drag.offset.x
-                    translationY = drag.offset.y
-                    scaleX = 1.03f
-                    scaleY = 1.03f
-                    shadowElevation = 18f
-                }
-            }
-            .onGloballyPositioned { coords ->
-                // 拖拽期间**不更新**自己的中心：卡片被 graphicsLayer 平移后会跟着手指走，
-                // 若继续上报，指尖位置 = 中心 + 位移 就会重复累加，命中判定立刻错位
-                if (!dragging) {
-                    val b = coords.boundsInRoot()
-                    onCenter(Offset(b.center.x, b.center.y))
-                }
-            }
-            .then(
-                if (siblingCount < 2) Modifier else Modifier.pointerInput(device.uuid, siblingCount) {
-                    detectDragGesturesAfterLongPress(
-                        onDragStart = {
-                            drag.draggingUuid = device.uuid
-                            drag.offset = Offset.Zero
-                            drag.hoverUuid = null
-                            // origin 用"卡片中心 - 指尖起点"对齐：拖拽期间卡片跟手，指尖
-                            // 相对卡片的位置始终不变，所以 origin 直接用当前中心即可
-                            drag.origin = Offset.Zero
-                        },
-                        onDrag = { change, amount ->
-                            change.consume()
-                            drag.offset += amount
-                        },
-                        onDragEnd = {
-                            val target = drag.hoverUuid
-                            drag.draggingUuid = null
-                            drag.hoverUuid = null
-                            drag.offset = Offset.Zero
-                            if (target != null) onDropOn(target)
-                        },
-                        onDragCancel = {
-                            drag.draggingUuid = null
-                            drag.hoverUuid = null
-                            drag.offset = Offset.Zero
-                        },
-                    )
-                }
-            )
-            // 悬停目标高亮：一层描边，不改变布局尺寸（否则会把下面的卡片推走）
-            .then(
-                if (hovered) Modifier.border(2.dp, StatusColors.ok, AppShapesExpressive.squircle)
-                else Modifier,
-            ),
-    ) {
-        DeviceCardRow(
-            device = device,
-            online = online,
-            groupedUnder = groupedUnder,
-            card = card,
-            dimmed = dragging,
-            // 主机自己也算"在组里"（它的 slave_list 非空）
-            inGroup = groupedUnder != null || isGroupMaster,
-            isMaster = isGroupMaster,
-            masked = masked,
-            profile = profile,
-            onOpen = onOpen,
-            onSettings = onSettings,
-            onVolume = onVolume,
-            onSetChannel = onSetChannel,
-            onUngroup = onUngroup,
-            onMask = onMask,
-            onTogglePlay = onTogglePlay,
-            onRename = onRename,
-        )
-    }
-
-}
-
-/**
  * 设备卡片（按原厂样式重做，同时保留我们自己的信息）。
  *
  * 原厂那张卡的构成，从上到下：
@@ -1201,7 +1012,7 @@ private fun DraggableDeviceCard(
  * - 设备 IP / 在线状态 / 「同步播放中 · 属 dossX」—— 组内从机连不上时不会误报离线；
  * - 音量条拖动**立刻**改设备音量（原厂也是这个交互，但原厂没有我们的合并通道，
  *   拖动时会打出一串 HTTP 请求）；
- * - 长按移除记录。
+ * - 组网/声道/屏蔽都在卡片上直接可点，不用进二级页。
  *
  * 封面：设备不回填元数据（`getPlayerStatus` 的 Title 是 HEX，且没有封面地址），
  * 所以这里不假装有封面 —— 用曲名首字 + 派生色块，和无封面时的通用做法一致。
@@ -1212,8 +1023,6 @@ private fun DeviceCardRow(
     online: Boolean?,
     groupedUnder: String?,
     card: DeviceCard?,
-    /** 正被拖起来时压暗，让"另一台上的高亮"更显眼。 */
-    dimmed: Boolean = false,
     /** 在组里（主机或从机）—— 声道标签才可点。 */
     inGroup: Boolean = false,
     /** 主机（不能屏蔽、不能改声道）。 */
@@ -1250,7 +1059,6 @@ private fun DeviceCardRow(
             .background(
                 Brush.linearGradient(listOf(palette.top, palette.accent.copy(alpha = 0.28f))),
             )
-            .graphicsLayer { alpha = if (dimmed) 0.85f else 1f }
             .clickable(onClick = onOpen)
             .padding(Spacing.md),
     ) {

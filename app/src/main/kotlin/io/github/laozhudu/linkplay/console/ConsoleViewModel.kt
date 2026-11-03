@@ -17,7 +17,6 @@ import io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile
 import io.github.laozhudu.linkplay.protocol.dlna.detect
 import io.github.laozhudu.linkplay.protocol.identity.LinkPlayIdentity
 import io.github.laozhudu.linkplay.protocol.identity.UuidMatch
-import io.github.laozhudu.linkplay.protocol.multiroom.DragGrouping
 import io.github.laozhudu.linkplay.protocol.multiroom.GroupPlan
 import io.github.laozhudu.linkplay.protocol.multiroom.MultiroomClient
 import io.github.laozhudu.linkplay.protocol.snapshot.DeviceSnapshot
@@ -50,6 +49,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import io.github.laozhudu.linkplay.console.crash.CrashGuard
+import io.github.laozhudu.linkplay.console.diagnostics.DiagnosticsHub
 import io.github.laozhudu.linkplay.console.diagnostics.DiagnosticsReport
 import io.github.laozhudu.linkplay.console.diagnostics.IssueLog
 import io.github.laozhudu.linkplay.console.diagnostics.safeLaunch
@@ -280,6 +280,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     val state: StateFlow<ConsoleUiState> = _state.asStateFlow()
 
     init {
+        registerDiagnostics()
         // 上一次运行是否崩过：有就在首页顶部给一条可点开的横幅。
         // 这是"用户能截图给我"的入口 —— 系统弹窗只给模板文案，我们给堆栈。
         runCatching {
@@ -1754,97 +1755,6 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setJoinPassword(pwd: String) = _state.update { it.copy(joinPassword = pwd) }
 
-    /**
-     * 拖拽组网（原厂交互）：把「从机」拖到「主机」上松手。
-     *
-     * 与 [joinSlave] 的区别只有一个，但很关键：**主机由松手位置决定**，
-     * 而不是当前选中的设备。主机要维持热点（`ra0=10.10.10.254`），从机接入后掉到
-     * `10.10.10.x` 从路由器侧消失 —— 方向错了整组都不通。
-     *
-     * 判据在 [DragGrouping.resolve]（纯函数，单测里逐条锁死），这里只负责：
-     * 1. 按判据给出"能做/不能做"的一句话；
-     * 2. 现读主机状态拿到热点名（`ssid`）与信道，再下发成组命令；
-     * 3. 轮询主机 `slave_list` 等它真的出现（命令回 OK ≠ 生效，这条吃过亏）。
-     */
-    fun groupByDrag(dragged: SavedDevice, target: SavedDevice) {
-        if (_state.value.multiroomBusy) return
-        val nodes = _state.value.saved.associate { d ->
-            d.uuid to DragGrouping.Node(
-                uuid = d.uuid,
-                name = d.title,
-                online = _state.value.online[d.uuid] != false,
-                groupedUnder = _state.value.groupedUnder[UuidMatch.key(d.uuid)],
-            )
-        }
-        when (val decision = DragGrouping.resolve(nodes[dragged.uuid], nodes[target.uuid])) {
-            is DragGrouping.Decision.Reject -> {
-                _state.update { it.copy(multiroomNote = decision.reason, error = null) }
-                log("拖拽组网：${decision.reason}")
-                return
-            }
-            is DragGrouping.Decision.Group -> Unit
-        }
-
-        _state.update {
-            it.copy(
-                multiroomBusy = true,
-                multiroomTick = 0,
-                multiroomTarget = dragged.title,
-                multiroomNote = null,
-                error = null,
-            )
-        }
-        safeLaunch("ConsoleViewModel") {
-            log("拖拽组网：${dragged.title} → 主机 ${target.title}（${target.ip}）")
-            // 主机热点名要现读：SavedDevice 里没有 ssid，且设备改名后旧值会失效
-            val status = withContext(Dispatchers.IO) { runCatching { client.status(target.ip) }.getOrNull() }
-            val ssid = status?.ssid
-            if (ssid.isNullOrBlank()) {
-                _state.update {
-                    it.copy(multiroomBusy = false, multiroomNote = "读不到「${target.title}」的热点名，先刷新设备再试")
-                }
-                return@safeLaunch
-            }
-            val ok = withContext(Dispatchers.IO) {
-                runCatching {
-                    MultiroomClient(client).joinWithPolling(
-                        masterIp = target.ip,
-                        masterSsid = ssid,
-                        slaveIp = dragged.ip,
-                        channel = _state.value.joinChannel,
-                        password = _state.value.joinPassword,
-                        onTick = { sec ->
-                            log("等待从机出现… ${sec}s / 40s")
-                            safeLaunch("ConsoleViewModel") { _state.update { it.copy(multiroomTick = sec) } }
-                        },
-                        shouldStop = { !_state.value.multiroomBusy },
-                    )
-                }.getOrElse { t ->
-                    log("成组异常：${t.message}")
-                    false
-                }
-            }
-            val after = withContext(Dispatchers.IO) {
-                runCatching { client.slaveList(target.ip) }.getOrDefault(emptyList())
-            }
-            _state.update {
-                it.copy(
-                    multiroomBusy = false,
-                    slaves = after,
-                    groupMasterIp = target.ip,
-                    groupMasterName = target.title,
-                    multiroomNote = if (ok || after.isNotEmpty()) {
-                        "「${dragged.title}」已加入「${target.title}」，现在共 ${after.size} 台同步播放"
-                    } else {
-                        "命令已发给音箱，但 40 秒内它没出现在组里 —— 这一步没成功。可等 1~2 分钟再刷新。"
-                    },
-                )
-            }
-            log(if (ok) "拖拽成组成功" else "拖拽成组未确认")
-            refreshSlaves()
-        }
-    }
-
     fun joinSlave(device: SavedDevice) {
         val masterIp = _state.value.selectedIp ?: return
         val masterSsid = _state.value.status?.ssid
@@ -1979,6 +1889,76 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     // ---- 诊断 ----
 
     /**
+     * 把「设备 / 队列 / 后台服务」三段注册进诊断页。
+     *
+     * 为什么设备段也走注册表：第一版是 `diagnosticsReport()` 里硬编码拼的，
+     * 结果新增模块时总要回来改这个函数。现在谁有状态谁注册，报告只负责汇总。
+     */
+    private fun registerDiagnostics() {
+        DiagnosticsHub.register("devices", "设备") {
+            val st = _state.value
+            if (st.saved.isEmpty()) "  没有已保存的设备"
+            else buildString {
+                st.saved.forEach { d ->
+                    val c = st.cards[d.uuid]
+                    appendLine("  ${d.title}  ${d.ip}")
+                    appendLine(
+                        "    状态=" + when (st.online[d.uuid]) {
+                            true -> "在线"; false -> "离线"; null -> "未探测"
+                        } +
+                            (st.groupedUnder[UuidMatch.key(d.uuid)]?.let { "  属=$it" } ?: "") +
+                            "  能力=${(c?.profile ?: DeviceProfile.UNKNOWN).name}",
+                    )
+                    appendLine(
+                        "    音量=${c?.volume ?: 0}  声道=${DiagnosticsReport.channelText(c?.channel)}" +
+                            "  电量=${c?.battery?.let { "$it%" } ?: "无"}" +
+                            (if (c?.battery != null && c.charging) "（充电）" else "") +
+                            "  播放=${if (c?.playing == true) "是" else "否"}",
+                    )
+                    appendLine(
+                        "    取数通道=" +
+                            (c?.answered?.takeIf { it.isNotEmpty() }?.map { it.name }?.sorted()?.joinToString("+")
+                                ?: "全部未应答"),
+                    )
+                }
+            }
+        }
+        DiagnosticsHub.register("queue", "队列") {
+            val q = QueueBus.state.value
+            buildString {
+                appendLine("  归属=${q.ownerIp ?: "未知"}  运行中=${q.running}  设备持有=${q.deviceOwned}")
+                appendLine("  共 ${q.total} 首 · 当前第 ${q.index + 1} 首 · ${q.nowPlaying ?: "无"}")
+
+                appendLine("  来源=${q.sourceNote ?: "-"}  偏移=${q.deviceOffset}  控制丢失=${q.controlLost}")
+                q.error?.let { appendLine("  错误=$it") }
+            }
+        }
+        DiagnosticsHub.register("services", "后台服务") {
+            val app = getApplication<Application>()
+            val names = listOf(
+                "playback.QueuePlaybackService" to "队列播放",
+                "library.MediaServerService" to "本地媒体服务",
+                "floating.FloatingControlService" to "悬浮控制",
+            )
+            buildString {
+                names.forEach { (cls, label) ->
+                    // 直接问 ActivityManager：比"我们以为启动了"可靠
+                    val running = runCatching {
+                        val info = app.packageManager.getPackageInfo(app.packageName, android.content.pm.PackageManager.GET_SERVICES)
+                        @Suppress("UNCHECKED_CAST")
+                        val am = app.getSystemService(android.content.Context.ACTIVITY_SERVICE)
+                            as android.app.ActivityManager
+                        // Android 没有公开 API 查"某服务是否在跑"，用 getRunningServices 在本 App 内可用
+                        @Suppress("DEPRECATION")
+                        am.getRunningServices(Int.MAX_VALUE).any { it.service.className == "${app.packageName}.$cls" }
+                    }.getOrDefault(false)
+                    appendLine("  $label=${if (running) "运行中" else "未运行"}")
+                }
+            }
+        }
+    }
+
+    /**
      * 生成一份可截图/可复制的诊断报告。
      *
      * 为什么放在 ViewModel 而不是界面里拼：报告要读设备卡片、在线状态、组归属、
@@ -2016,6 +1996,8 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
             crash = crash,
             devices = lines,
             issues = IssueLog.recent(),
+            // 各模块自报（设备/播放/队列/后台服务），新增模块不用改这里
+            sections = DiagnosticsHub.render(),
         )
     }
 
