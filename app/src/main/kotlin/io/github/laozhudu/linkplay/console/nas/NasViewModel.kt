@@ -17,6 +17,7 @@ import io.github.laozhudu.linkplay.protocol.session.NasPathStep
 import io.github.laozhudu.linkplay.protocol.session.NasServerRef
 import io.github.laozhudu.linkplay.protocol.session.NasSession
 import io.github.laozhudu.linkplay.protocol.session.PlaybackSession
+import io.github.laozhudu.linkplay.console.playback.DeviceQueuePush
 import io.github.laozhudu.linkplay.console.playback.QueueBus
 import io.github.laozhudu.linkplay.console.playback.QueuePlaybackService
 import io.github.laozhudu.linkplay.console.session.SessionStore
@@ -399,18 +400,31 @@ class NasViewModel(
         if (QueueBus.state.value.running) return
 
         _state.update { it.copy(playing = true, error = null, playedCount = 0, controlLost = false) }
-        log("开始推送 ${items.size} 首（从第 ${startIndex + 1} 首起）到 $rendererIp")
-
         val start = startIndex.coerceIn(0, items.lastIndex)
-        val session = PlaybackSession(
-            deviceUuid = deviceUuid ?: rendererIp,
-            deviceIp = rendererIp,
-            items = items,
-            index = start,
-            loopMode = _state.value.loopMode,
-        )
-        savePlayback(items, start, _state.value.loopMode)
-        QueuePlaybackService.start(getApplication(), rendererLocation, session)
+        log("开始推送 ${items.size} 首（从第 ${start + 1} 首起）到 $rendererIp")
+
+        // 先试「整列表交给设备」：这样 App 退出后设备仍能自己往下播，设备的上一首/下一首也生效
+        viewModelScope.launch {
+            val session = PlaybackSession(
+                deviceUuid = deviceUuid ?: rendererIp,
+                deviceIp = rendererIp,
+                items = items,
+                index = start,
+                loopMode = _state.value.loopMode,
+            )
+            savePlayback(items, start, _state.value.loopMode)
+
+            val pushed = DeviceQueuePush.push(DeviceHttpClient(), rendererIp, items, start)
+            if (pushed.ok) {
+                log(pushed.detail + "（设备侧队列）")
+                QueueBus.restore(items, start, items.getOrNull(start)?.title)
+                QueueBus.markDeviceOwned(pushed.offset)
+                _state.update { it.copy(playing = true, nowPlaying = items.getOrNull(start)?.title) }
+            } else {
+                log("设备未接收整列表：${pushed.detail} —— 退回客户端逐首投流")
+                QueuePlaybackService.start(getApplication(), rendererLocation, session)
+            }
+        }
     }
 
     /** 订阅服务侧状态：播放进度、控制面掉线都由服务上报。 */

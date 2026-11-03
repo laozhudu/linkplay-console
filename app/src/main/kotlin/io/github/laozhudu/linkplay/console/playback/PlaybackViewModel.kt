@@ -13,7 +13,9 @@ import io.github.laozhudu.linkplay.protocol.metadata.TagFetcher
 import io.github.laozhudu.linkplay.protocol.session.PlaybackKey
 import io.github.laozhudu.linkplay.protocol.LinkPlayCommands
 import io.github.laozhudu.linkplay.protocol.player.PlaybackEngine
+import io.github.laozhudu.linkplay.protocol.player.DeviceQueueState
 import io.github.laozhudu.linkplay.protocol.player.PlayerSource
+import io.github.laozhudu.linkplay.protocol.player.PlayerStatus
 import io.github.laozhudu.linkplay.protocol.player.PlaybackSnapshot
 import io.github.laozhudu.linkplay.protocol.player.UpnpPlaybackEngine
 import io.github.laozhudu.linkplay.protocol.upnp.PositionInfo
@@ -43,6 +45,13 @@ data class PlaybackUiState(
     val sourceId: String? = null,
     /** 设备回报的原始 mode 数字。 */
     val mode: Int? = null,
+    /**
+     * 设备侧列表长度（`plicount`）。>0 说明设备自己握着队列 —— 这时 App 退出也不影响播放，
+     * 界面的"第几首"应该以设备为准（用户要求「列表从设备同步」）。
+     */
+    val deviceQueueCount: Int = 0,
+    /** 设备侧当前第几首（0 基，-1 表示设备没报）。 */
+    val deviceQueueIndex: Int = -1,
     val state: TransportState = TransportState.UNKNOWN,
     val title: String? = null,
     val artist: String? = null,
@@ -189,6 +198,15 @@ class PlaybackViewModel(
         }
     }
 
+    /** 读设备侧队列现状（`plicount`/`plicurr`）。读不到返回 null，不影响主状态。 */
+    private suspend fun readDeviceQueue(): DeviceQueueState? = withContext(Dispatchers.IO) {
+        runCatching {
+            DeviceQueueState.from(
+                PlayerStatus.parse(device.send(deviceIp, LinkPlayCommands.getPlayerStatus())),
+            )
+        }.getOrNull()
+    }
+
     fun refresh() {
         viewModelScope.launch { refreshOnce() }
     }
@@ -200,6 +218,11 @@ class PlaybackViewModel(
             val snapshot: PlaybackSnapshot = withContext(Dispatchers.IO) { e.snapshot() }
             // 设备侧的真实音量同步给全站（首页多房间卡片也订阅它）
             VolumeBus.publish(deviceIp, snapshot.volume, snapshot.mute)
+            // 设备侧队列位置（1 基转 0 基在 DeviceQueueState 里做）同步给列表高亮
+            readDeviceQueue()?.let { q ->
+                if (q.hasQueue) QueueBus.syncDeviceIndex(q.index)
+                _state.update { it.copy(deviceQueueCount = q.count, deviceQueueIndex = q.index) }
+            }
             _state.update {
                 it.copy(
                     busy = false,
@@ -469,6 +492,11 @@ class PlaybackViewModel(
                 )
             }
             VolumeBus.publish(deviceIp, snapshot.volume, snapshot.mute)
+            // 设备侧队列位置（1 基转 0 基在 DeviceQueueState 里做）同步给列表高亮
+            readDeviceQueue()?.let { q ->
+                if (q.hasQueue) QueueBus.syncDeviceIndex(q.index)
+                _state.update { it.copy(deviceQueueCount = q.count, deviceQueueIndex = q.index) }
+            }
             log("恢复设备状态：${snapshot.state} vol=${snapshot.volume} src=${snapshot.sourceLabel ?: "-"}")
         }
 

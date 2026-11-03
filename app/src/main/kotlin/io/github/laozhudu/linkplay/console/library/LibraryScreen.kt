@@ -49,6 +49,7 @@ import io.github.laozhudu.linkplay.console.ui.components.AppCard
 import io.github.laozhudu.linkplay.console.ui.components.AppShapesExpressive
 import io.github.laozhudu.linkplay.console.ui.components.EmptyState
 import io.github.laozhudu.linkplay.console.ui.components.PageHeader
+import io.github.laozhudu.linkplay.console.ui.components.PillButton
 import io.github.laozhudu.linkplay.console.ui.components.PillTag
 import io.github.laozhudu.linkplay.console.ui.components.SectionTitle
 import io.github.laozhudu.linkplay.console.ui.components.VSpace
@@ -121,7 +122,7 @@ fun LibraryScreen(
                     Text(
                         it,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
+                        color = StatusColors.error,
                         modifier = Modifier.weight(1f),
                     )
                     TextButton(onClick = vm::clearError) { Text("知道了") }
@@ -444,26 +445,5 @@ private fun PresetCard(vm: LibraryViewModel) {
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun PillButton(text: String, filled: Boolean, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .clip(AppShapesExpressive.pill)
-            .background(
-                if (filled) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.surfaceVariant,
-            )
-            .clickable(onClick = onClick)
-            .padding(horizontal = Spacing.lg, vertical = 10.dp),
-    ) {
-        Text(
-            text,
-            style = MaterialTheme.typography.labelLarge,
-            color = if (filled) MaterialTheme.colorScheme.onPrimary
-            else MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }

@@ -42,6 +42,7 @@ import io.github.laozhudu.linkplay.console.ui.components.AppCard
 import io.github.laozhudu.linkplay.console.ui.components.AppShapesExpressive
 import io.github.laozhudu.linkplay.console.ui.components.EmptyState
 import io.github.laozhudu.linkplay.console.ui.components.PageHeader
+import io.github.laozhudu.linkplay.console.ui.components.PillButton
 import io.github.laozhudu.linkplay.console.ui.components.PillTag
 import io.github.laozhudu.linkplay.console.ui.components.SectionTitle
 import io.github.laozhudu.linkplay.console.ui.components.VSpace
@@ -120,7 +121,7 @@ fun RadioScreen(
                     Text(
                         err,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
+                        color = StatusColors.error,
                         modifier = Modifier.weight(1f),
                     )
                     TextButton(onClick = vm::clearError) { Text("知道了") }
@@ -187,7 +188,7 @@ fun RadioScreen(
                             Text(
                                 if (station.invalid) "上次没播起来：${station.url}" else station.url,
                                 style = MaterialTheme.typography.labelSmall,
-                                color = if (station.invalid) MaterialTheme.colorScheme.error
+                                color = if (station.invalid) StatusColors.error
                                 else MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
@@ -298,7 +299,7 @@ fun RadioScreen(
                 TextButton(onClick = {
                     vm.remove(station.id)
                     pendingDelete = null
-                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+                }) { Text("删除", color = StatusColors.error) }
             },
             dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } },
         )
@@ -400,25 +401,4 @@ private fun AddRadioDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Uni
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )
-}
-
-@Composable
-private fun PillButton(text: String, filled: Boolean, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .clip(AppShapesExpressive.pill)
-            .background(
-                if (filled) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.surfaceVariant,
-            )
-            .clickable(onClick = onClick)
-            .padding(horizontal = Spacing.md, vertical = 9.dp),
-    ) {
-        Text(
-            text,
-            style = MaterialTheme.typography.labelLarge,
-            color = if (filled) MaterialTheme.colorScheme.onPrimary
-            else MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
 }

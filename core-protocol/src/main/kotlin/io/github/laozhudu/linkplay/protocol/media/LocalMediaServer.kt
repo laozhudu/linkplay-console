@@ -39,6 +39,17 @@ class LocalMediaServer(
     private val preferredPort: Int = 0,
     private val advertiseHost: String? = null,
 ) {
+    /**
+     * 直接由内存提供的文本资源（目前只有播放列表 m3u）。
+     *
+     * 为什么要这个：把整个列表交给设备时，设备需要一个**可访问的 m3u 地址**
+     * （实测 `setPlayerCmd:playlist:<url>:<idx>` 会真的来 GET 它，plircount 随之变成列表长度）。
+     * 而列表内容是动态生成的，不该落到临时文件里再靠 resolver 解析。
+     */
+    private val virtuals = java.util.concurrent.ConcurrentHashMap<String, VirtualFile>()
+
+    private data class VirtualFile(val body: ByteArray, val contentType: String)
+
     private var serverSocket: ServerSocket? = null
     private val running = AtomicBoolean(false)
     private val pool = Executors.newFixedThreadPool(4)
@@ -49,6 +60,17 @@ class LocalMediaServer(
     fun baseUrl(host: String? = null): String {
         val h = host ?: advertiseHost ?: "127.0.0.1"
         return "http://$h:$port"
+    }
+
+    /** 登记一段内存文本并返回**相对路径**（调用方自己拼 baseUrl）。 */
+    fun publishText(path: String, body: String, contentType: String = "text/plain; charset=utf-8"): String {
+        val normalized = if (path.startsWith("/")) path else "/$path"
+        virtuals[normalized] = VirtualFile(body.toByteArray(Charsets.UTF_8), contentType)
+        return normalized
+    }
+
+    fun unpublish(path: String) {
+        virtuals.remove(if (path.startsWith("/")) path else "/$path")
     }
 
     fun start(): Int {
@@ -106,6 +128,20 @@ class LocalMediaServer(
 
             val path = target.substringBefore('?')
             if (path.contains("..")) return respond(output, 403, "Forbidden", null)
+
+            virtuals[path]?.let { v ->
+                val headers = buildString {
+                    append("HTTP/1.1 200 OK\r\n")
+                    append("Content-Type: ").append(v.contentType).append("\r\n")
+                    append("Content-Length: ").append(v.body.size).append("\r\n")
+                    append("Accept-Ranges: none\r\n")
+                    append("Connection: close\r\n\r\n")
+                }
+                output.write(headers.toByteArray(Charsets.ISO_8859_1))
+                if (method == "GET") output.write(v.body)
+                output.flush()
+                return
+            }
 
             val file = resolver.resolve(path)
             if (file == null || !file.isFile) {
@@ -229,6 +265,8 @@ class LocalMediaServer(
             "ape" -> "audio/x-ape"
             "jpg", "jpeg" -> "image/jpeg"
             "png" -> "image/png"
+            // 播放列表：设备取 m3u 时按这个类型认（实测 Content-Type 不影响，但按规范给对）
+            "m3u", "m3u8" -> "audio/x-mpegurl"
             else -> "application/octet-stream"
         }
     }

@@ -27,6 +27,20 @@ data class QueueRunState(
     val total: Int = 0,
     /** 编排提前结束（不是用户停止）。通常是控制面掉线。 */
     val controlLost: Boolean = false,
+    /**
+     * 队列由**设备**持有（把整个 m3u 推给设备之后的状态）。
+     *
+     * 与 [running] 的区别：`running` 表示"我们自己的前台服务正在逐首投流"。
+     * 设备持有列表时我们不需要任何后台循环，App 可以退出，界面依然能显示列表与当前第几首。
+     */
+    val deviceOwned: Boolean = false,
+    /**
+     * 设备侧第 1 首对应本地列表的第几首。
+     *
+     * 因为设备只认 `playlist` 命令的 index=0，我们把列表旋转过再下发，
+     * 所以设备报的 `plicurr` 要加上这个偏移才对得上本地列表。
+     */
+    val deviceOffset: Int = 0,
     val error: String? = null,
     val log: List<String> = emptyList(),
 ) {
@@ -92,6 +106,18 @@ object QueueBus {
             total = items.size,
             playedCount = index + 1,
         )
+    }
+
+    /** 标记当前队列由设备持有（不启动本地循环）。 */
+    fun markDeviceOwned(offset: Int = 0) =
+        _state.update { it.copy(deviceOwned = true, running = false, deviceOffset = offset) }
+
+    /** 设备侧位置回读后同步高亮（标题从本地列表取，设备不回填元数据）。 */
+    fun syncDeviceIndex(deviceIndex: Int) = _state.update { st ->
+        if (st.items.isEmpty() || deviceIndex < 0) return@update st
+        // 设备侧位置 + 旋转偏移 = 本地列表里的位置
+        val mapped = (st.deviceOffset + deviceIndex) % st.items.size
+        st.copy(index = mapped, nowPlaying = st.items[mapped].title, deviceOwned = true)
     }
 
     /** 停止后保留 items/nowPlaying，方便 UI 显示「上次播到哪」。 */

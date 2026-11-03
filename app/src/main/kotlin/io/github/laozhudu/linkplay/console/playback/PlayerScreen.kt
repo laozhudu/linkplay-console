@@ -68,6 +68,7 @@ import coil.compose.AsyncImage
 import io.github.laozhudu.linkplay.console.session.SessionStore
 import io.github.laozhudu.linkplay.console.ui.components.AppShapesExpressive
 import io.github.laozhudu.linkplay.console.ui.components.BackGlyph
+import io.github.laozhudu.linkplay.console.ui.components.CircleIcon
 import io.github.laozhudu.linkplay.console.ui.components.GlyphSize
 import io.github.laozhudu.linkplay.console.ui.components.LoopGlyph
 import io.github.laozhudu.linkplay.console.ui.components.PauseGlyph
@@ -442,7 +443,16 @@ fun PlayerScreen(
                 )
                 SegmentChip(text = "投流与日志", selected = showAdvanced, onClick = { showAdvanced = true })
                 Spacer(Modifier.weight(1f))
-                if (queue.items.isEmpty() && !showAdvanced) {
+                // 与设备同步的直观证据：设备自己握着 N 首、现在第几首。
+                // 用户反馈「列表没从设备同步」，所以这里把设备的真值直接写出来。
+                if (state.deviceQueueCount > 0) {
+                    Text(
+                        if (state.deviceQueueIndex >= 0) "设备列表 ${state.deviceQueueCount} 首 · 第 ${state.deviceQueueIndex + 1} 首"
+                        else "设备列表 ${state.deviceQueueCount} 首",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = StatusColors.ok,
+                    )
+                } else if (queue.items.isEmpty() && !showAdvanced) {
                     Text(
                         "从媒体库点歌",
                         style = MaterialTheme.typography.labelSmall,
@@ -604,16 +614,6 @@ private fun EqualizerBars(color: Color) {
     }
 }
 
-@Composable
-private fun CircleIcon(size: Dp = 40.dp, onClick: () -> Unit, content: @Composable () -> Unit) {
-    Box(
-        modifier = Modifier
-            .size(size)
-            .clip(CircleShape)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) { content() }
-}
 
 /** 投流与日志。占用底部内容区，不弹出新层。 */
 @Composable

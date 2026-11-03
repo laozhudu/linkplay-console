@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import io.github.laozhudu.linkplay.console.ConsoleUiState
 import io.github.laozhudu.linkplay.console.ConsoleViewModel
 import io.github.laozhudu.linkplay.console.ui.components.AppCard
+import io.github.laozhudu.linkplay.console.ui.components.InfoLine
 import io.github.laozhudu.linkplay.console.ui.components.PageHeader
 import io.github.laozhudu.linkplay.console.ui.components.PillTag
 import io.github.laozhudu.linkplay.console.ui.components.SectionTitle
@@ -92,7 +93,7 @@ fun DeviceSettingsScreen(
 
         state.error?.let {
             AppCard {
-                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                Text(it, style = MaterialTheme.typography.bodySmall, color = StatusColors.error)
             }
             VSpace(Spacing.sm)
         }
@@ -204,7 +205,7 @@ fun DeviceSettingsScreen(
                 OutlinedButton(onClick = { confirmForget = true }) { Text("从首页移除这台设备") }
                 VSpace(Spacing.xs)
                 OutlinedButton(onClick = { confirmReset = true }) {
-                    Text("恢复出厂设置", color = MaterialTheme.colorScheme.error)
+                    Text("恢复出厂设置", color = StatusColors.error)
                 }
             }
         }
@@ -250,23 +251,5 @@ fun DeviceSettingsScreen(
             },
             dismissButton = { TextButton(onClick = { confirmForget = false }) { Text("取消") } },
         )
-    }
-}
-
-@Composable
-private fun InfoLine(label: String, value: String?) {
-    if (value.isNullOrBlank()) return
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 2.dp),
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.width(88.dp),
-        )
-        Text(value, style = MaterialTheme.typography.bodySmall)
     }
 }
