@@ -49,6 +49,10 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import io.github.laozhudu.linkplay.console.crash.CrashGuard
+import io.github.laozhudu.linkplay.console.diagnostics.DiagnosticsReport
+import io.github.laozhudu.linkplay.console.diagnostics.IssueLog
+import io.github.laozhudu.linkplay.console.diagnostics.safeLaunch
 
 /**
  * 多房间组里的一台音箱（主机或从机）。
@@ -105,6 +109,14 @@ data class DeviceCard(
      * 这是项目铁律明确禁止的。判档要拉描述，所以由探活时算一次、之后随轮询带下去。
      */
     val profile: DeviceProfile = DeviceProfile.UNKNOWN,
+    /**
+     * 这台设备**答过**的取数通道（累积）。
+     *
+     * 为什么记在卡片上：诊断报告要回答"某台设备为什么功能没反应" ——
+     * 如果 `CONTROL_INFO` 从没出现过，说明它的 UPnP 控制地址读不到，
+     * 声道/电量这类只能走 UPnP 的功能必然无效。这比让用户描述现象准得多。
+     */
+    val answered: Set<DeviceSnapshot.Channel> = emptySet(),
 )
 
 data class ConsoleUiState(
@@ -203,6 +215,13 @@ data class ConsoleUiState(
      * 进页面就问一次会把「我的音乐」拖成网络页；配置本身是本地会话里的一个 JSON。
      */
     val onlineConfigured: Boolean = false,
+    /**
+     * 上次运行留下的崩溃记录摘要（没有则 null）。
+     *
+     * 为什么放状态里而不是界面自己去读文件：首页横幅、顶栏 ⚠ 图标、诊断页三处都要用，
+     * 各自读一次文件就会各自不同步。启动时读一次，之后只在"清空记录"时变。
+     */
+    val lastCrashAtStart: String? = null,
 ) {
 
     /**
@@ -261,6 +280,12 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     val state: StateFlow<ConsoleUiState> = _state.asStateFlow()
 
     init {
+        // 上一次运行是否崩过：有就在首页顶部给一条可点开的横幅。
+        // 这是"用户能截图给我"的入口 —— 系统弹窗只给模板文案，我们给堆栈。
+        runCatching {
+            val crash = CrashGuard.lastReport(app)
+            if (crash != null) _state.update { it.copy(lastCrashAtStart = crash) }
+        }
         // 首页一进来就有内容：读已保存设备，并后台探活（不清空界面、不阻塞）
         reloadSaved()
         probeSaved()
@@ -269,7 +294,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         // 否则"重开 App 列表是空的"会被当成恢复失效
         restoreLastQueue()
         // 首页多房间卡片的低频心跳：不在播放页时也能跟上设备侧/遥控器的音量变化
-        viewModelScope.launch {
+        safeLaunch("ConsoleViewModel") {
             while (true) {
                 delay(2500)
                 val masterIp = _state.value.groupMasterIp ?: continue
@@ -283,7 +308,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         }
         // 首页卡片心跳：每 3 秒逐台读 getPlayerStatus（原厂设备列表就显示每台的曲名/音量）。
         // 为什么不用 1 秒：卡片信息变化慢，3 秒够了；设备只有 2 台，但别把老固件打爆。
-        viewModelScope.launch {
+        safeLaunch("ConsoleViewModel") {
             while (true) {
                 delay(3_000)
                 val saved = _state.value.saved
@@ -306,7 +331,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         // 定时关闭的时钟：每秒推进一次，到点下发停止。
-        viewModelScope.launch {
+        safeLaunch("ConsoleViewModel") {
             while (true) {
                 delay(1_000)
                 val now = System.currentTimeMillis()
@@ -327,7 +352,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
-        viewModelScope.launch {
+        safeLaunch("ConsoleViewModel") {
             for ((ip, v) in deviceVolumeChannel) {
                 withContext(Dispatchers.IO) {
                     // 原厂做法：UPnP RenderingControl 优先，httpapi 兜底（见 DeviceVolumeControl）
@@ -337,7 +362,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                 delay(60)
             }
         }
-        viewModelScope.launch {
+        safeLaunch("ConsoleViewModel") {
             for ((member, v) in groupVolumeChannel) {
                 withContext(Dispatchers.IO) {
                     val master = _state.value.groupMasterIp ?: return@withContext
@@ -385,15 +410,22 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
      * 而两者都在同一个 init 里，这里按"当前已选设备"读，拿不到就退回上次的记录。
      */
     private fun restoreLastQueue() {
-        viewModelScope.launch {
+        safeLaunch("ConsoleViewModel") {
             delay(150)
             val uuid = _state.value.selectedUuid
-            val ip = _state.value.selectedIp ?: return@launch
+            val ip = _state.value.selectedIp ?: return@safeLaunch
 
             // ① 原厂做法：BrowseQueue 把设备上的整份列表（含曲名）读回来 —— 这才是"同步设备列表"
             val deviceList = DevicePlaylistGateway.read(ip, _state.value.selectedLocation)
             if (deviceList != null && !deviceList.isEmpty) {
                 val items = DevicePlaylistGateway.toQueueItems(deviceList)
+                // 设备说"有列表"但一条曲目都没解析出来时直接跳过。
+                // 不跳的话 `coerceIn(0, -1)` 会抛 IllegalArgumentException ——
+                // 这是一类真会闪退的写法（范围反了），不是理论风险。
+                if (items.isEmpty()) {
+                    log("设备报了列表但读不到曲目，跳过恢复")
+                    return@safeLaunch
+                }
                 val idx = deviceList.currentIndex.coerceIn(0, items.lastIndex)
                 QueueBus.restore(
                     items = items,
@@ -403,7 +435,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                     note = "设备列表 ${items.size} 首 · 第 ${idx + 1} 首",
                 )
                 log("从设备读回播放列表：${items.size} 首（队列名 ${deviceList.name}）")
-                return@launch
+                return@safeLaunch
             }
 
             // ② 设备没有队列 → 用本地快照兜底（并说明设备当前是空的）
@@ -417,7 +449,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                     runCatching { store.loadPlayback(key) }.getOrNull()
                 }
             }
-            val plan = QueueRestore.plan(snapshot, device) ?: return@launch
+            val plan = QueueRestore.plan(snapshot, device) ?: return@safeLaunch
             QueueBus.restore(
                 items = plan.items,
                 index = plan.index,
@@ -447,7 +479,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     private fun probeSaved() {
         val targets = _state.value.saved
         if (targets.isEmpty()) return
-        viewModelScope.launch {
+        safeLaunch("ConsoleViewModel") {
             val result = mutableMapOf<String, Boolean>()
             for (d in targets) {
                 // 走唯一的取数入口（最短路径：GetControlDeviceInfo + getPlayerStatus）
@@ -756,7 +788,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     fun scan() {
         if (_state.value.scanning) return
         _state.update { it.copy(scanning = true, error = null, filteredOutCount = 0) }
-        viewModelScope.launch {
+        safeLaunch("ConsoleViewModel") {
             val lock = acquireMulticastLock()
             try {
                 val all = withContext(Dispatchers.IO) { runCatching { discovery.discover() }.getOrDefault(emptyList()) }
@@ -810,7 +842,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         if (raw.isEmpty()) return
         val ip = raw.substringBefore(':')
         val port = raw.substringAfter(':', "80").toIntOrNull() ?: 80
-        viewModelScope.launch {
+        safeLaunch("ConsoleViewModel") {
             _state.update { it.copy(busy = true, error = null) }
             val outcome = withContext(Dispatchers.IO) { runCatching { identify(ip, port) } }
             _state.update { it.copy(busy = false) }
@@ -1139,7 +1171,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { st ->
             st.copy(cards = st.cards + (device.uuid to (st.cards[device.uuid] ?: DeviceCard()).copy(channel = ch)))
         }
-        viewModelScope.launch {
+        safeLaunch("ConsoleViewModel") {
             val ok = withContext(Dispatchers.IO) {
                 runCatching { rendererFor(device).setChannel(ch) }.isSuccess
             }
@@ -1147,7 +1179,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                 // 拿不到 UPnP 控制地址（描述读不到）才走到这里；如实说，不假装成功
                 _state.update { it.copy(multiroomNote = "「${device.title}」读不到控制地址，声道改不了") }
                 log("设声道失败：${device.title}")
-                return@launch
+                return@safeLaunch
             }
             delay(500)
             val readBack = withContext(Dispatchers.IO) {
@@ -1170,7 +1202,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { st ->
             st.copy(groupMembers = st.groupMembers.map { if (it.ip == member.ip) it.copy(channel = ch) else it })
         }
-        viewModelScope.launch {
+        safeLaunch("ConsoleViewModel") {
             val reply = withContext(Dispatchers.IO) {
                 runCatching { client.send(master, "multiroom:SlaveChannel:${member.ip}:$ch") }.getOrNull()
             }
@@ -1211,7 +1243,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         VolumeBus.publishVolume(ip, next)
         // 音量键这条路**不走去抖通道**：用户按一下就要立刻听到变化，
         // 合并通道是为拖动设计的，按键本来就是离散事件，多一次 60ms 等待只会显得钝。
-        viewModelScope.launch {
+        safeLaunch("ConsoleViewModel") {
             withContext(Dispatchers.IO) {
                 runCatching { client.send(ip, LinkPlayCommands.playerVolume(next)) }
                     .onFailure { log("音量键下发失败：${it.message}") }
@@ -1306,12 +1338,12 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         _state.update { it.copy(groupingProgress = plan.describe()) }
-        viewModelScope.launch {
+        safeLaunch("ConsoleViewModel") {
             val status = withContext(Dispatchers.IO) { runCatching { client.status(masterIp) }.getOrNull() }
             val ssid = status?.ssid
             if (ssid.isNullOrBlank()) {
                 _state.update { it.copy(groupingProgress = "读不到主机热点名，先刷新设备") }
-                return@launch
+                return@safeLaunch
             }
             val mroom = MultiroomClient(client)
             val ap = withContext(Dispatchers.IO) { runCatching { mroom.readApInfo(masterIp) }.getOrNull() }
@@ -1576,7 +1608,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 刷新「我的音乐」六个入口的数量。 */
     fun refreshMusicCounts() {
-        viewModelScope.launch {
+        safeLaunch("ConsoleViewModel") {
             val app = getApplication<Application>()
             val local = withContext(Dispatchers.IO) {
                 runCatching { LocalLibrary.query(app).size }.getOrDefault(0)
@@ -1634,7 +1666,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
      * 与 [refreshMusicCounts] 并存，不改动已有调用方。
      */
     fun refreshPlaylistCount() {
-        viewModelScope.launch {
+        safeLaunch("ConsoleViewModel") {
             val lists = withContext(Dispatchers.IO) {
                 runCatching { PlaylistStore.get(getApplication()).count() }.getOrDefault(0)
             }
@@ -1670,7 +1702,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         _state.update {
             it.copy(multiroomBusy = true, multiroomTick = 0, multiroomTarget = slave.title, multiroomNote = null)
         }
-        viewModelScope.launch {
+        safeLaunch("ConsoleViewModel") {
             val (ok, reason) = withContext(Dispatchers.IO) {
                 val ap = runCatching { MultiroomClient(client).readApInfo(master) }.getOrNull()
                     ?: return@withContext false to "读不到主机热点信息"
@@ -1679,7 +1711,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                         masterIp = master,
                         masterSsid = ap.ssid,
                         slaveIp = slave.ip,
-                        onTick = { sec -> viewModelScope.launch { _state.update { it.copy(multiroomTick = sec) } } },
+                        onTick = { sec -> safeLaunch("ConsoleViewModel") { _state.update { it.copy(multiroomTick = sec) } } },
                         shouldStop = { !_state.value.multiroomBusy },
                     )
                 }.getOrElse { false }
@@ -1762,7 +1794,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                 error = null,
             )
         }
-        viewModelScope.launch {
+        safeLaunch("ConsoleViewModel") {
             log("拖拽组网：${dragged.title} → 主机 ${target.title}（${target.ip}）")
             // 主机热点名要现读：SavedDevice 里没有 ssid，且设备改名后旧值会失效
             val status = withContext(Dispatchers.IO) { runCatching { client.status(target.ip) }.getOrNull() }
@@ -1771,7 +1803,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                 _state.update {
                     it.copy(multiroomBusy = false, multiroomNote = "读不到「${target.title}」的热点名，先刷新设备再试")
                 }
-                return@launch
+                return@safeLaunch
             }
             val ok = withContext(Dispatchers.IO) {
                 runCatching {
@@ -1783,7 +1815,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                         password = _state.value.joinPassword,
                         onTick = { sec ->
                             log("等待从机出现… ${sec}s / 40s")
-                            viewModelScope.launch { _state.update { it.copy(multiroomTick = sec) } }
+                            safeLaunch("ConsoleViewModel") { _state.update { it.copy(multiroomTick = sec) } }
                         },
                         shouldStop = { !_state.value.multiroomBusy },
                     )
@@ -1830,7 +1862,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                 error = null,
             )
         }
-        viewModelScope.launch {
+        safeLaunch("ConsoleViewModel") {
             log("开始成组：${device.title}（${device.ip}）→ 主机 $masterIp（$masterSsid）")
             val ok = withContext(Dispatchers.IO) {
                 runCatching {
@@ -1842,7 +1874,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                         password = _state.value.joinPassword,
                         onTick = { sec ->
                             log("等待从机出现… ${sec}s / 40s")
-                            viewModelScope.launch { _state.update { it.copy(multiroomTick = sec) } }
+                            safeLaunch("ConsoleViewModel") { _state.update { it.copy(multiroomTick = sec) } }
                         },
                         shouldStop = { !_state.value.multiroomBusy },
                     )
@@ -1929,7 +1961,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     private fun run(label: String, block: suspend () -> Unit) {
         if (_state.value.busy) return
         _state.update { it.copy(busy = true, error = null) }
-        viewModelScope.launch {
+        safeLaunch("ConsoleViewModel") {
             try {
                 withContext(Dispatchers.IO) { block() }
                 log("$label 完成")
@@ -1943,6 +1975,64 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun log(message: String) = _state.update { it.copy(log = (it.log + message).takeLast(200)) }
+
+    // ---- 诊断 ----
+
+    /**
+     * 生成一份可截图/可复制的诊断报告。
+     *
+     * 为什么放在 ViewModel 而不是界面里拼：报告要读设备卡片、在线状态、组归属、
+     * 协程问题记录、上次崩溃 —— 这些都是状态层的数据。界面只负责显示和复制。
+     */
+    fun diagnosticsReport(): String {
+        val st = _state.value
+        val app = getApplication<Application>()
+        val crash = runCatching { CrashGuard.lastReport(app) }.getOrNull()
+        val lines = st.saved.map { d ->
+            val card = st.cards[d.uuid]
+            DiagnosticsReport.DeviceLine(
+                name = d.title,
+                ip = d.ip,
+                online = st.online[d.uuid],
+                groupedUnder = st.groupedUnder[UuidMatch.key(d.uuid)],
+                battery = card?.battery,
+                charging = card?.charging == true,
+                channel = card?.channel,
+                volume = card?.volume ?: 0,
+                playing = card?.playing == true,
+                answered = card?.answered?.map { it.name }?.toSet() ?: emptySet(),
+                profile = (card?.profile ?: DeviceProfile.UNKNOWN).name,
+            )
+        }
+        val version = runCatching {
+            val info = app.packageManager.getPackageInfo(app.packageName, 0)
+            "${info.versionName}（${info.longVersionCode}）"
+        }.getOrDefault("未知")
+        val now = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+            .format(java.util.Date())
+        return DiagnosticsReport.build(
+            version = version,
+            now = now,
+            crash = crash,
+            devices = lines,
+            issues = IssueLog.recent(),
+        )
+    }
+
+    /** 清掉崩溃记录与问题记录（用户确认"看过了/已解决"时用）。 */
+    fun clearDiagnostics() {
+        val app = getApplication<Application>()
+        runCatching { CrashGuard.clear(app) }
+        IssueLog.clear(app)
+        _state.update { it.copy(lastCrashAtStart = null) }
+        log("已清空诊断记录")
+    }
+
+    /** 上次崩溃的原始记录（首页横幅点开时展示）。 */
+    fun lastCrash(): String? = runCatching { CrashGuard.lastReport(getApplication()) }.getOrNull()
+
+    /** 把运行期问题落盘，供下次启动查看。 */
+    fun flushIssues() = runCatching { IssueLog.flush(getApplication()) }
 
     private fun acquireMulticastLock(): WifiManager.MulticastLock? = runCatching {
         val wifi = getApplication<Application>().applicationContext

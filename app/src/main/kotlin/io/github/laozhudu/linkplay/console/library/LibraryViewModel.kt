@@ -27,6 +27,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import io.github.laozhudu.linkplay.console.diagnostics.safeLaunch
 
 enum class LibraryTab { SEARCH, FAVORITES, RECENT, PLAYLISTS }
 
@@ -85,7 +86,7 @@ class LibraryViewModel(
 
     init {
         refreshAll()
-        viewModelScope.launch { detectCapabilities() }
+        safeLaunch("LibraryViewModel") { detectCapabilities() }
     }
 
     private suspend fun detectCapabilities() {
@@ -98,7 +99,7 @@ class LibraryViewModel(
 
     fun refreshAll() {
         _state.update { it.copy(loading = true) }
-        viewModelScope.launch {
+        safeLaunch("LibraryViewModel") {
             val result = runCatching {
                 withContext(Dispatchers.IO) {
                     localTracks = LocalLibrary.query(getApplication())
@@ -172,7 +173,7 @@ class LibraryViewModel(
             .ifEmpty { listOf(track) }
         val start = PlayFromList.startIndex(list, track.dedupeKey) { it.dedupeKey }
         _state.update { it.copy(busy = true, error = null) }
-        viewModelScope.launch {
+        safeLaunch("LibraryViewModel") {
             try {
                 // 先把整条列表的地址都解析出来：本机文件要登记到 LocalMediaServer 才有可投的 URL
                 val items = withContext(Dispatchers.IO) {
@@ -219,11 +220,11 @@ class LibraryViewModel(
             _state.update { it.copy(error = "歌单名不能为空") }
             return
         }
-        viewModelScope.launch {
+        safeLaunch("LibraryViewModel") {
             val id = withContext(Dispatchers.IO) { playlists.createOrGet(name) }
             if (id <= 0) {
                 _state.update { it.copy(error = "歌单数量已到上限（${PlaylistOps.MAX_LISTS} 个）") }
-                return@launch
+                return@safeLaunch
             }
             val lists = withContext(Dispatchers.IO) { playlists.lists() }
             _state.update { it.copy(playlists = lists, openPlaylistId = id, error = null) }
@@ -241,7 +242,7 @@ class LibraryViewModel(
         if (tracks.isEmpty()) return
         val name = PlaylistOps.normalizeName(rawName) ?: return
         _state.update { it.copy(busy = true, error = null) }
-        viewModelScope.launch {
+        safeLaunch("LibraryViewModel") {
             try {
                 val items = withContext(Dispatchers.IO) {
                     tracks.mapNotNull { t ->
@@ -285,7 +286,7 @@ class LibraryViewModel(
         }
         if (_state.value.busy) return
         _state.update { it.copy(busy = true, error = null) }
-        viewModelScope.launch {
+        safeLaunch("LibraryViewModel") {
             try {
                 startQueue(list.tracks, startIndex.coerceIn(0, list.tracks.lastIndex), "歌单「${list.name}」")
                 val first = list.tracks.getOrNull(startIndex) ?: list.tracks.first()
@@ -297,7 +298,7 @@ class LibraryViewModel(
     }
 
     fun removeFromPlaylist(listId: Long, index: Int) {
-        viewModelScope.launch {
+        safeLaunch("LibraryViewModel") {
             val lists = withContext(Dispatchers.IO) {
                 playlists.removeTrackAt(listId, index)
                 playlists.lists()
@@ -307,7 +308,7 @@ class LibraryViewModel(
     }
 
     fun moveInPlaylist(listId: Long, from: Int, to: Int) {
-        viewModelScope.launch {
+        safeLaunch("LibraryViewModel") {
             val lists = withContext(Dispatchers.IO) {
                 playlists.moveTrack(listId, from, to)
                 playlists.lists()
@@ -317,7 +318,7 @@ class LibraryViewModel(
     }
 
     fun renamePlaylist(listId: Long, rawName: String) {
-        viewModelScope.launch {
+        safeLaunch("LibraryViewModel") {
             val ok = withContext(Dispatchers.IO) { playlists.rename(listId, rawName) }
             val lists = withContext(Dispatchers.IO) { playlists.lists() }
             _state.update {
@@ -330,7 +331,7 @@ class LibraryViewModel(
     }
 
     fun deletePlaylist(listId: Long) {
-        viewModelScope.launch {
+        safeLaunch("LibraryViewModel") {
             withContext(Dispatchers.IO) { playlists.delete(listId) }
             val lists = withContext(Dispatchers.IO) { playlists.lists() }
             _state.update {
@@ -387,7 +388,7 @@ class LibraryViewModel(
     }
 
     fun toggleFavorite(track: TrackRecord) {
-        viewModelScope.launch {
+        safeLaunch("LibraryViewModel") {
             val isFav = withContext(Dispatchers.IO) { store.favorites.contains(track.dedupeKey) }
             withContext(Dispatchers.IO) {
                 if (isFav) store.favorites.remove(track.dedupeKey) else store.favorites.add(track)
@@ -404,7 +405,7 @@ class LibraryViewModel(
     // ---- 预设键 ----
 
     fun pressPreset(index: Int) {
-        viewModelScope.launch {
+        safeLaunch("LibraryViewModel") {
             val failure = runCatching {
                 withContext(Dispatchers.IO) {
                     LinkPlayDevice.open(deviceIp, location).pressPreset(index)

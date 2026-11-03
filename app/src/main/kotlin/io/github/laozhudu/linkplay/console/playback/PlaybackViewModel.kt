@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import io.github.laozhudu.linkplay.console.diagnostics.safeLaunch
 
 data class PlaybackUiState(
     val preparing: Boolean = true,
@@ -163,7 +164,7 @@ class PlaybackViewModel(
     private var relay: RelayMediaServer? = null
 
     init {
-        viewModelScope.launch { prepare() }
+        safeLaunch("PlaybackViewModel") { prepare() }
     }
 
     /**
@@ -208,7 +209,7 @@ class PlaybackViewModel(
         }
         VolumeBus.forget(ip)
 
-        viewModelScope.launch {
+        safeLaunch("PlaybackViewModel") {
             prepare()
             restoreLastSession()
         }
@@ -276,10 +277,10 @@ class PlaybackViewModel(
     private fun startPolling() {
         pollJob?.cancel()
         val gen = generation.current()
-        pollJob = viewModelScope.launch {
+        pollJob = safeLaunch("PlaybackViewModel") {
             while (isActive) {
                 delay(POLL_INTERVAL_MS)
-                if (generation.isStale(gen)) return@launch
+                if (generation.isStale(gen)) return@safeLaunch
                 refreshOnce(silent = true)
             }
         }
@@ -295,7 +296,7 @@ class PlaybackViewModel(
     }
 
     fun refresh() {
-        viewModelScope.launch { refreshOnce() }
+        safeLaunch("PlaybackViewModel") { refreshOnce() }
     }
 
     private suspend fun refreshOnce(silent: Boolean = false) {
@@ -432,7 +433,7 @@ class PlaybackViewModel(
         if (_state.value.busy) return
         val e = engine ?: run { httpAct("播放", "setPlayerCmd:play"); return }
         _state.update { it.copy(busy = true, error = null) }
-        viewModelScope.launch {
+        safeLaunch("PlaybackViewModel") {
             val gen = generation.current()
             val hasDeviceQueue = _state.value.deviceQueueCount > 0
             val localItems = QueueBus.state.value.items
@@ -443,7 +444,7 @@ class PlaybackViewModel(
                     it.copy(busy = false, error = null, notice = UpnpFault.message(UpnpFault.NO_MEDIA))
                 }
                 log("播放：设备没有队列，本地队列也空")
-                return@launch
+                return@safeLaunch
             }
 
             // ② 本地有队列但设备没有：把队列交给设备（原厂点"全部播放"就是这个动作）
@@ -452,23 +453,23 @@ class PlaybackViewModel(
                     runCatching { DevicePlaylistGateway.push(deviceIp, location, localItems, 0) }.getOrNull()
                 }
                 if (ok?.ok == true) {
-                    if (generation.isStale(gen)) return@launch
+                    if (generation.isStale(gen)) return@safeLaunch
                     _state.update { it.copy(busy = false, error = null) }
                     log("播放：已把 ${localItems.size} 首交给设备（${ok.detail}）")
                     QueueBus.markDeviceOwned(0)
                     refreshOnce(silent = true)
-                    return@launch
+                    return@safeLaunch
                 }
             }
 
             // ① 设备有队列：直接播；Play 被拒就换 httpapi 再试一次
             val failure = withContext(Dispatchers.IO) { runCatching { e.resume() }.exceptionOrNull() }
-            if (generation.isStale(gen)) return@launch
+            if (generation.isStale(gen)) return@safeLaunch
             if (failure == null) {
                 _state.update { it.copy(busy = false, error = null, notice = null) }
                 log("播放 ok")
                 refreshOnce(silent = true)
-                return@launch
+                return@safeLaunch
             }
 
             val upnpCode = (failure as? SoapFaultException)?.upnpCode
@@ -480,7 +481,7 @@ class PlaybackViewModel(
                 if (retry != null) {
                     _state.update { it.copy(busy = false, error = null) }
                     refreshOnce(silent = true)
-                    return@launch
+                    return@safeLaunch
                 }
             }
             // 翻译成人话再显示；原始报文只进日志
@@ -522,7 +523,7 @@ class PlaybackViewModel(
     private fun httpAct(label: String, command: String) {
         if (engine == null) return
         _state.update { it.copy(busy = true, error = null) }
-        viewModelScope.launch {
+        safeLaunch("PlaybackViewModel") {
             val failure = runCatching {
                 withContext(Dispatchers.IO) { http.send(deviceIp, command) }
             }.exceptionOrNull()
@@ -575,7 +576,7 @@ class PlaybackViewModel(
         if (QueueRestore.isPlaceholder(item)) {
             val delta = index - q.index
             if (delta == 0) return
-            viewModelScope.launch {
+            safeLaunch("PlaybackViewModel") {
                 repeat(kotlin.math.abs(delta)) {
                     val cmd = if (delta > 0) "setPlayerCmd:next" else "setPlayerCmd:prev"
                     withContext(Dispatchers.IO) { runCatching { device.send(deviceIp, cmd) } }
@@ -588,7 +589,7 @@ class PlaybackViewModel(
         }
         // 设备握着列表时用设备的跳位（原厂 PlayQueueWithIndex），这样设备侧进度才是真的
         if (q.deviceOwned) {
-            viewModelScope.launch {
+            safeLaunch("PlaybackViewModel") {
                 val ok = DevicePlaylistGateway.playIndex(deviceIp, location, index)
                 if (ok) {
                     QueueBus.syncDeviceIndex(index)
@@ -618,11 +619,11 @@ class PlaybackViewModel(
         val st = _state.value
         if (st.tagsLoadedFor == url) return
         _state.update { it.copy(tagsLoadedFor = url) }
-        viewModelScope.launch {
+        safeLaunch("PlaybackViewModel") {
             val tags = withContext(Dispatchers.IO) {
                 runCatching { TagFetcher.fetch(url) }.getOrNull()
             }
-            if (tags == null) return@launch
+            if (tags == null) return@safeLaunch
             _state.update {
                 it.copy(
                     embeddedCover = tags.cover ?: it.embeddedCover,
@@ -648,7 +649,7 @@ class PlaybackViewModel(
     private fun act(label: String, block: () -> Unit) {
         if (_state.value.busy || engine == null) return
         _state.update { it.copy(busy = true, error = null) }
-        viewModelScope.launch {
+        safeLaunch("PlaybackViewModel") {
             val failure = runCatching { withContext(Dispatchers.IO) { block() } }.exceptionOrNull()
             if (failure != null) {
                 // 界面只显示翻译过的一句话；原始 SOAP 报文只进日志（用户看不懂也不该看懂）
@@ -760,13 +761,13 @@ class PlaybackViewModel(
      */
     fun switchSource(sourceId: String) {
         val src = PlayerSource.byId(sourceId) ?: return
-        viewModelScope.launch {
+        safeLaunch("PlaybackViewModel") {
             _state.update { it.copy(busy = true, error = null) }
             val root = runCatching {
                 withContext(Dispatchers.IO) { device.send(deviceIp, LinkPlayCommands.switchMode(src.id)) }
             }.getOrElse { t ->
                 _state.update { it.copy(busy = false, error = "切换失败：${t.message}") }
-                return@launch
+                return@safeLaunch
             }
             // 给设备 1.5 秒完成切换，再回读真实 mode
             delay(1500)
@@ -790,11 +791,11 @@ class PlaybackViewModel(
     init {
         // 重开 App 时恢复：设备侧还在放的那首歌 + 本地快照里的队列。
         // 这一条是用户明确要求的「原厂退出后重开能读到原来的状态包括列表」。
-        viewModelScope.launch {
+        safeLaunch("PlaybackViewModel") {
             restoreLastSession()
         }
         // 音量合并通道：只保留最新值，每 80ms 最多下发一次
-        viewModelScope.launch {
+        safeLaunch("PlaybackViewModel") {
             for (v in volumeChannel) {
                 runCatching { withContext(Dispatchers.IO) { engine?.setVolume(v) } }
                 delay(80)

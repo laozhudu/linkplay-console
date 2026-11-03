@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import io.github.laozhudu.linkplay.console.diagnostics.safeLaunch
 
 data class OnlineUiState(
     val config: SubsonicConfig = SubsonicConfig(),
@@ -99,7 +100,7 @@ class OnlineViewModel(
                 .let { if (it.isBlank() || it.startsWith("http")) it else "http://$it" },
         )
         _state.update { it.copy(config = cfg, busy = true, note = null) }
-        viewModelScope.launch {
+        safeLaunch("OnlineViewModel") {
             val result = withContext(Dispatchers.IO) {
                 runCatching { client(cfg).ping() }
             }
@@ -128,7 +129,7 @@ class OnlineViewModel(
         if (q.isEmpty()) return
         if (_state.value.searching) return
         _state.update { it.copy(searching = true, note = null) }
-        viewModelScope.launch {
+        safeLaunch("OnlineViewModel") {
             val result = withContext(Dispatchers.IO) {
                 runCatching { client().search(q, limit = 50) }
             }
@@ -161,7 +162,7 @@ class OnlineViewModel(
         val start = list.indexOfFirst { it.id == track.id && it.providerId == track.providerId }
             .takeIf { it >= 0 } ?: 0
         _state.update { it.copy(busy = true, note = null) }
-        viewModelScope.launch {
+        safeLaunch("OnlineViewModel") {
             try {
                 val c = client()
                 // 直链带凭据，音箱裸 GET 就能拉（不需要转发的源）

@@ -106,6 +106,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 崩溃记录必须最早装：晚于 ViewModel 初始化就可能漏掉启动期的崩溃。
+        // 它只记录不吞异常（闪退行为不变），但下次启动首页会显示堆栈摘要。
+        io.github.laozhudu.linkplay.console.crash.CrashGuard.install(this) {
+            val st = consoleVm.state.value
+            "已保存设备=${st.saved.size} 在线=${st.online.count { it.value }} " +
+                "选中=${st.selectedIp ?: "无"} 组主机=${st.groupMasterIp ?: "无"} " +
+                "卡片=${st.cards.size}"
+        }
         setContent {
             LinkPlayTheme {
                 ConsoleApp(consoleVm)
@@ -159,7 +167,7 @@ private enum class Tab(val label: String, val glyph: String) {
 }
 
 /** 二级页面：从一级页推进去，返回即回一级。 */
-private enum class SubPage { Nas, LocalQueue, Library, Radio, Settings, Provisioning, DeviceContent, Online, Wps }
+private enum class SubPage { Nas, LocalQueue, Library, Radio, Settings, Provisioning, DeviceContent, Online, Wps, Diagnostics }
 
 @Composable
 fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
@@ -271,6 +279,14 @@ private fun ConsoleBody(vm: ConsoleViewModel) {
                 state = state,
                 vm = vm,
                 onBack = { sub = null },
+                onOpenDiagnostics = { sub = SubPage.Diagnostics },
+            )
+
+            // 诊断页：崩溃堆栈 + 每台设备的取数通道 + 运行期问题，可复制/可截图
+            SubPage.Diagnostics -> io.github.laozhudu.linkplay.console.diagnostics.DiagnosticsScreen(
+                reportProvider = { vm.diagnosticsReport() },
+                onClear = { vm.clearDiagnostics() },
+                onBack = { sub = SubPage.Settings },
             )
 
             SubPage.Provisioning -> ProvisioningScreen(
@@ -335,6 +351,7 @@ private fun ConsoleBody(vm: ConsoleViewModel) {
                     },
                     onOpenContent = { sub = SubPage.DeviceContent },
                     onOpenPlayer = { tab = Tab.Player },
+                    onOpenDiagnostics = { sub = SubPage.Diagnostics },
                 )
 
                 Tab.Player -> if (state.selectedIp == null) {
@@ -483,6 +500,8 @@ private fun HomeScreen(
     onOpenContent: () -> Unit = {},
     /** 聚合播放条点一下进播放页。 */
     onOpenPlayer: () -> Unit = {},
+    /** 诊断页（顶栏 ◔ / 崩溃横幅都进这里）。 */
+    onOpenDiagnostics: () -> Unit = {},
 ) {
     val extras = LocalExtraColors.current
     var showAdd by remember { mutableStateOf(false) }
@@ -545,7 +564,62 @@ private fun HomeScreen(
             CircleIcon(onClick = { vm.refreshDevices() }, size = 40.dp) {
                 Text("↻", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            // 诊断入口：**常驻**在首页顶栏。
+            // 为什么不只放设置页：闪退之后用户第一件事是回到首页，多一层点击就多一次劝退；
+            // 而且有了它，任何"不对劲"都能立刻截图给我，不用描述现象。
+            Spacer(Modifier.width(Spacing.xs))
+            CircleIcon(onClick = onOpenDiagnostics, size = 40.dp) {
+                Text(
+                    if (state.lastCrashAtStart != null) "⚠" else "◔",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = if (state.lastCrashAtStart != null) StatusColors.warn
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
+        // ---------- 崩溃横幅 ----------
+        // 上次运行崩过就顶一条红卡：点开进诊断页，能看到完整堆栈。
+        // 系统那个"因自身空指针问题"的弹窗没有任何定位信息，这条才是能用来改代码的东西。
+        state.lastCrashAtStart?.let { crash ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = Spacing.sm)
+                    .clip(AppShapesExpressive.squircle)
+                    .background(StatusColors.error.copy(alpha = 0.14f))
+                    .clickable(onClick = onOpenDiagnostics)
+                    .padding(horizontal = Spacing.md, vertical = Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("⚠", style = MaterialTheme.typography.titleLarge, color = StatusColors.error)
+                Spacer(Modifier.width(Spacing.sm))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "上次运行闪退了",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = StatusColors.error,
+                    )
+                    // 直接把异常类+消息贴出来：用户截图这一条就够我判断方向
+                    Text(
+                        crash.lineSequence()
+                            .firstOrNull { it.startsWith("异常：") }
+                            ?.removePrefix("异常：")
+                            ?.let { cls ->
+                                val msg = crash.lineSequence().firstOrNull { it.startsWith("消息：") }
+                                    ?.removePrefix("消息：").orEmpty()
+                                if (msg.isBlank() || msg == "null") cls else "$cls: $msg"
+                            }
+                            ?: "点开查看完整堆栈",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Text("查看 ›", style = MaterialTheme.typography.labelLarge, color = StatusColors.error)
+            }
+        }
+
         // ---------- 聚合播放条（Sonos 的 Now Playing 条 / Music Assistant 的 Player Bar）----------
         // 主页最需要但之前一直缺的一块：**现在在放什么、一键停**。
         // 之前要点进播放页才能看到，首页只有一堆卡片。

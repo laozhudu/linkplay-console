@@ -30,5 +30,7 @@ internal object CardMerge {
         plicount = snap.plicount ?: old.plicount,
         plicurr = snap.plicurr ?: old.plicurr,
         playing = snap.playing ?: old.playing,
+        // 累积通道：诊断时要看"这台设备的哪条取数路径是通的"
+        answered = old.answered + snap.answered,
     )
 }

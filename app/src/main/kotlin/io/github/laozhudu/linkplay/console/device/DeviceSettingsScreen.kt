@@ -66,6 +66,7 @@ fun DeviceSettingsScreen(
     state: ConsoleUiState,
     vm: ConsoleViewModel,
     onBack: () -> Unit,
+    onOpenDiagnostics: () -> Unit = {},
 ) {
     var command by remember { mutableStateOf("getNetwork") }
     var newName by remember { mutableStateOf("") }
@@ -108,6 +109,19 @@ fun DeviceSettingsScreen(
         VSpace(Spacing.sm)
 
         // ---- 设备信息 ----
+        // 诊断入口：与首页顶栏那个 ◔ 是同一个页面。
+        // 放这里是因为"出问题时人会来设置里找"，两个入口覆盖两种习惯。
+        AppCard {
+            SectionTitle("诊断记录", "闪退堆栈 / 设备取数通道 / 运行期问题")
+            TextButton(onClick = onOpenDiagnostics) {
+                Text(
+                    if (state.lastCrashAtStart != null) "上次运行闪退过 · 查看记录 ›" else "查看诊断记录 ›",
+                    color = if (state.lastCrashAtStart != null) StatusColors.error
+                    else MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
+
         AppCard {
             SectionTitle("设备信息")
             VSpace(Spacing.xs)

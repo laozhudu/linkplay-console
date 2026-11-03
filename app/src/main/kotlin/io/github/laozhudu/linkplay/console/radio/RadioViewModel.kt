@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
+import io.github.laozhudu.linkplay.console.diagnostics.safeLaunch
 
 data class RadioUiState(
     val stations: List<RadioStation> = emptyList(),
@@ -89,7 +90,7 @@ class RadioViewModel(
     }
 
     fun reload() {
-        viewModelScope.launch {
+        safeLaunch("RadioViewModel") {
             val list = withContext(Dispatchers.IO) {
                 runCatching { store.forDevice(deviceName) }.getOrDefault(emptyList())
             }
@@ -115,7 +116,7 @@ class RadioViewModel(
             _state.update { it.copy(error = invalid) }
             return
         }
-        viewModelScope.launch {
+        safeLaunch("RadioViewModel") {
             val id = withContext(Dispatchers.IO) {
                 // 同地址不重复入库（用户常连点两次添加）
                 val existing = store.forDevice(deviceName).firstOrNull { it.url == url }
@@ -136,7 +137,7 @@ class RadioViewModel(
 
     /** 一键添加入厂自带、且真机验证过的电台。 */
     fun addAllVerified() {
-        viewModelScope.launch {
+        safeLaunch("RadioViewModel") {
             val added = withContext(Dispatchers.IO) {
                 val have = store.forDevice(deviceName).map { it.url }.toSet()
                 VerifiedRadioCatalog.entries
@@ -153,7 +154,7 @@ class RadioViewModel(
     }
 
     fun remove(id: Long) {
-        viewModelScope.launch {
+        safeLaunch("RadioViewModel") {
             withContext(Dispatchers.IO) { runCatching { store.remove(id) } }
             if (_state.value.playingId == id) _state.update { it.copy(playingId = 0, playingUrl = null) }
             reload()
@@ -178,7 +179,7 @@ class RadioViewModel(
         }
         if (_state.value.busy) return
         _state.update { it.copy(busy = true, note = null, error = null) }
-        viewModelScope.launch {
+        safeLaunch("RadioViewModel") {
             val (started, detail) = withContext(Dispatchers.IO) {
                 try {
                     // 第一步必须先切输入源，否则旧固件只把地址存进 uri 不会真的播
@@ -262,7 +263,7 @@ class RadioViewModel(
     }
 
     fun stop() {
-        viewModelScope.launch {
+        safeLaunch("RadioViewModel") {
             withContext(Dispatchers.IO) { runCatching { client.send(deviceIp, LinkPlayCommands.stopPlayer()) } }
             _state.update { it.copy(playingId = 0, playingUrl = null, note = "已停止") }
         }

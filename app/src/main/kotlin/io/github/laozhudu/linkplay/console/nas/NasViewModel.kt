@@ -40,6 +40,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import io.github.laozhudu.linkplay.console.diagnostics.safeLaunch
 
 /** 浏览路径上的一层（用于「返回上级」）。 */
 data class NavStep(val objectId: String, val title: String)
@@ -128,7 +129,7 @@ class NasViewModel(
     fun scan() {
         if (_state.value.scanning) return
         _state.update { it.copy(scanning = true, error = null) }
-        viewModelScope.launch {
+        safeLaunch("NasViewModel") {
             val found = runCatching { withContext(Dispatchers.IO) { discovery.discoverMediaServers() } }
                 .getOrDefault(emptyList())
             _state.update { it.copy(scanning = false, servers = found) }
@@ -205,7 +206,7 @@ class NasViewModel(
 
     fun connect(location: String) {
         _state.update { it.copy(loadingDir = true, error = null) }
-        viewModelScope.launch {
+        safeLaunch("NasViewModel") {
             try {
                 val desc = withContext(Dispatchers.IO) { UpnpRendererClient.describe(location) }
                 val url = ContentDirectoryClient.controlUrlOf(desc)
@@ -246,7 +247,7 @@ class NasViewModel(
     }
 
     fun openDir(objectId: String, title: String, push: Boolean = true) {
-        viewModelScope.launch { browseInto(objectId, title, push) }
+        safeLaunch("NasViewModel") { browseInto(objectId, title, push) }
     }
 
     /**
@@ -408,7 +409,7 @@ class NasViewModel(
         PlayJournal.recordCurrent(getApplication(), items, start)
 
         // 先试「整列表交给设备」：这样 App 退出后设备仍能自己往下播，设备的上一首/下一首也生效
-        viewModelScope.launch {
+        safeLaunch("NasViewModel") {
             val session = PlaybackSession(
                 deviceUuid = deviceUuid ?: rendererIp,
                 deviceIp = rendererIp,
@@ -425,7 +426,7 @@ class NasViewModel(
                 QueueBus.restore(items, start, items.getOrNull(start)?.title, deviceOwned = true,
                     note = "设备列表 ${items.size} 首 · 第 ${start + 1} 首")
                 _state.update { it.copy(playing = true, nowPlaying = items.getOrNull(start)?.title) }
-                return@launch
+                return@safeLaunch
             }
             log("PlayQueue 未接受：${upstream.detail}")
 
@@ -446,7 +447,7 @@ class NasViewModel(
 
     /** 订阅服务侧状态：播放进度、控制面掉线都由服务上报。 */
     private fun observeQueue() {
-        viewModelScope.launch {
+        safeLaunch("NasViewModel") {
             QueueBus.state.collect { run ->
                 _state.update {
                     it.copy(
@@ -477,7 +478,7 @@ class NasViewModel(
         if (_state.value.healing) return
         _state.update { it.copy(healing = true) }
         log("正在重启音箱（约 40 秒）…")
-        viewModelScope.launch {
+        safeLaunch("NasViewModel") {
             val ok = withContext(Dispatchers.IO) {
                 val http = DeviceHttpClient()
                 val probe = object : RendererProbe {
@@ -512,7 +513,7 @@ class NasViewModel(
     fun stopQueue() {
         QueuePlaybackService.stop(getApplication())
         // 停止后仍要在音箱侧真正停下：服务只负责不再投新曲
-        viewModelScope.launch {
+        safeLaunch("NasViewModel") {
             withContext(Dispatchers.IO) {
                 runCatching {
                     val c = if (!rendererLocation.isNullOrBlank()) {
