@@ -105,21 +105,23 @@ import io.github.laozhudu.linkplay.protocol.upnp.TransportState
  *    所以永远不会有"两个滚动轴打架"或"浮层挡着点不到"；
  * 4. 控制键用 `weight` 分配固定区域，**播放/暂停永远在屏幕内、永远可点**。
  *
- * ## 版式
+ * ## 版式（第二版：列表居中，播放键压底）
  *
  * ```
- * 设备名 · 状态                                ⋯
+ * 设备名                                    ⋯
+ * 输入源 网络播放 · 播放中        ← 当前输入源常显
  *        ┌────────── 封面（自适应）──────────┐
  *        曲名
  *        歌手
+ *   [播放列表 12] [投流与日志]   设备 12 首 · 第 3 首
+ *   ┌── 中部列表：全屏唯一的滚动区 ──┐
+ *   │ 1 ▶  曲名            ✕        │
+ *   │ 2    曲名            ✕        │
+ *   └───────────────────────────────┘
  *   1:23 ───────●──────── 4:56
- *   循环   ⏮   ▶(72dp)   ⏭   ⟳
  *   🔊 ──────────●───── 60
- *   [播放列表 12] [投流与日志]        ← 二选一，不是浮层
- *   ┌── 这一块是唯一的滚动区 ──┐
- *   │ 1 ▶  曲名            ✕ │
- *   │ 2    曲名            ✕ │
- *   └────────────────────────┘
+ *   输入源 [网络播放✓] 线路输入 蓝牙 U 盘 光纤
+ *   循环   ⏮   ▶(68dp)   ⏭   ■      ← 压在最下方
  * ```
  */
 @Composable
@@ -233,7 +235,10 @@ fun PlayerScreen(
                     )
                     Text(
                         buildString {
-                            // 输入源以设备回报为准：模式数字 → 人话（PlayerSource.describe）
+                            // 输入源以设备回报为准：模式数字 → 人话（PlayerSource.describe）。
+                            // 前缀「输入源」是用户明确要求的：一眼能看出当前在哪一路上，
+                            // 而不是只看到一句「网络播放 · 本地播放列表」猜不出这是输入源。
+                            append("输入源 ")
                             append(
                                 if (state.mode != null) PlayerSource.describe(state.mode)
                                 else state.sourceLabel ?: "连接中",
@@ -250,13 +255,14 @@ fun PlayerScreen(
                 }
             }
 
-            // ---------- 封面（吃掉剩余空间，保持正方形）----------
-            // 用 BoxWithConstraints 取「宽高较小者」当边长：
-            // 直接 aspectRatio 在窄屏上会把封面撑出父容器（横向溢出、被裁掉一角）
+            // ---------- 封面 ----------
+            // 版式（第二版）：封面在上 → 播放列表在中 → 播放键压在最下。
+            // 两块都用 weight（1.05 : 1）而不是写死高度，矮屏/高屏都能给列表留出位置。
+            // 用 BoxWithConstraints 取「宽高较小者」当边长：直接 aspectRatio 在窄屏上会把封面撑出父容器。
             BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f),
+                    .weight(1.05f),
                 contentAlignment = Alignment.Center,
             ) {
                 val side = if (maxWidth < maxHeight) maxWidth else maxHeight
@@ -321,7 +327,107 @@ fun PlayerScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
 
-            // ---------- 进度 ----------
+            // ---------- 中部：播放列表（全屏唯一的滚动区）----------
+            // 用户要的是「列表在封面下方、整个界面中部」：所以列表拿到一块独立的 weight，
+            // 它上面的封面/曲名和下面的控制区都不滚，只有这块滚。
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .padding(top = Spacing.xs),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = Spacing.xs),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    SegmentChip(
+                        text = if (queue.items.isEmpty()) "播放列表" else "播放列表 ${queue.items.size}",
+                        selected = !showAdvanced,
+                        onClick = { showAdvanced = false },
+                    )
+                    SegmentChip(text = "投流与日志", selected = showAdvanced, onClick = { showAdvanced = true })
+                    Spacer(Modifier.weight(1f))
+                    // 与设备同步的直观证据：设备自己握着 N 首、现在第几首。
+                    // 用户反馈「列表没从设备同步」，所以这里把设备的真值直接写出来。
+                    if (state.deviceQueueCount > 0) {
+                        Text(
+                            if (state.deviceQueueIndex >= 0) "设备 ${state.deviceQueueCount} 首 · 第 ${state.deviceQueueIndex + 1} 首"
+                            else "设备 ${state.deviceQueueCount} 首",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = StatusColors.ok,
+                            maxLines = 1,
+                        )
+                    } else if (!showAdvanced && !queue.sourceNote.isNullOrBlank()) {
+                        Text(
+                            queue.sourceNote.orEmpty(),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (queue.deviceOwned) StatusColors.ok else OnDarkPalette.muted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(OnDarkPalette.chip),
+                ) {
+                    if (showAdvanced) {
+                        CastPanel(
+                            state = state,
+                            vm = vm,
+                            onOpenNas = onOpenNas,
+                            onOpenLocalQueue = onOpenLocalQueue,
+                        )
+                    } else if (queue.items.isEmpty()) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(Spacing.md),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                        ) {
+                            Text(
+                                "队列是空的",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = OnDarkPalette.text,
+                            )
+                            Spacer(Modifier.height(Spacing.sm))
+                            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                                TextButton(onClick = onOpenNas) { Text("NAS 音乐") }
+                                TextButton(onClick = onOpenLocalQueue) { Text("手机音乐") }
+                                TextButton(onClick = onOpenLibrary) { Text("音乐库") }
+                            }
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(vertical = Spacing.xs),
+                        ) {
+                            itemsIndexed(queue.items) { index, item ->
+                                PlaylistRow(
+                                    index = index,
+                                    item = item,
+                                    playing = index == queue.index && queue.running,
+                                    current = index == queue.index,
+                                    onClick = { vm.playQueueItem(index) },
+                                    onRemove = if (QueueRestore.isPlaceholder(item)) null else ({ vm.removeQueueItem(index) }),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ---------- 底部控制区：进度 → 音量 → 输入源 → 播放整行（压在最下）----------
+
+            // 进度
             WaveProgressSlider(
                 value = progress,
                 onValueChange = { scrubDraft = it },
@@ -347,42 +453,7 @@ fun PlayerScreen(
                 )
             }
 
-            // ---------- 主控：永远在屏幕内 ----------
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                CircleIcon(onClick = vm::cycleLoopMode, size = 44.dp) {
-                    LoopGlyph(
-                        color = if (state.loopMode == LoopMode.OFF) OnDarkPalette.muted else palette.accent,
-                        mode = state.loopMode.wire,
-                        modifier = Modifier.size(GlyphSize.medium),
-                    )
-                }
-                CircleIcon(onClick = vm::previous, size = 48.dp) {
-                    SkipGlyph(OnDarkPalette.text, forward = false, modifier = Modifier.size(28.dp))
-                }
-                Box(
-                    modifier = Modifier
-                        .size(68.dp)
-                        .clip(CircleShape)
-                        .background(OnDarkPalette.text)
-                        .clickable { if (playing) vm.pause() else vm.play() },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    if (playing) PauseGlyph(palette.top, Modifier.size(28.dp))
-                    else PlayGlyph(palette.top, Modifier.size(28.dp))
-                }
-                CircleIcon(onClick = vm::next, size = 48.dp) {
-                    SkipGlyph(OnDarkPalette.text, forward = true, modifier = Modifier.size(28.dp))
-                }
-                CircleIcon(onClick = vm::stop, size = 44.dp) {
-                    Text("■", style = MaterialTheme.typography.titleSmall, color = OnDarkPalette.muted)
-                }
-            }
-
-            // ---------- 音量（拖动跟手）----------
+            // 音量（拖动跟手）
             Row(verticalAlignment = Alignment.CenterVertically) {
                 CircleIcon(onClick = vm::toggleMute, size = 32.dp) {
                     VolumeGlyph(
@@ -416,7 +487,7 @@ fun PlayerScreen(
                 )
             }
 
-            // ---------- 输入源：可切换 + 标出当前 ----------
+            // 输入源：可切换，且当前源固定排第一（横向滚动时永远看得见）
             InputSourceRow(state = state, vm = vm)
 
             (state.error ?: state.unavailableReason)?.let { msg ->
@@ -429,97 +500,40 @@ fun PlayerScreen(
                 )
             }
 
-            // ---------- 底部内容区：二选一，不是浮层 ----------
+            // 主控整行：压在屏幕最下方，永远可点
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = Spacing.xs),
-                horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+                    .padding(top = Spacing.xs),
+                horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                SegmentChip(
-                    text = if (queue.items.isEmpty()) "播放列表" else "播放列表 ${queue.items.size}",
-                    selected = !showAdvanced,
-                    onClick = { showAdvanced = false },
-                )
-                SegmentChip(text = "投流与日志", selected = showAdvanced, onClick = { showAdvanced = true })
-                Spacer(Modifier.weight(1f))
-                // 与设备同步的直观证据：设备自己握着 N 首、现在第几首。
-                // 用户反馈「列表没从设备同步」，所以这里把设备的真值直接写出来。
-                if (state.deviceQueueCount > 0) {
-                    Text(
-                        if (state.deviceQueueIndex >= 0) "设备列表 ${state.deviceQueueCount} 首 · 第 ${state.deviceQueueIndex + 1} 首"
-                        else "设备列表 ${state.deviceQueueCount} 首",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = StatusColors.ok,
-                    )
-                } else if (!showAdvanced && queue.sourceNote.isNullOrBlank().not()) {
-                    Text(
-                        queue.sourceNote.orEmpty(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (queue.deviceOwned) StatusColors.ok else OnDarkPalette.muted,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                } else if (queue.items.isEmpty() && !showAdvanced) {
-                    Text(
-                        "从媒体库点歌",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = OnDarkPalette.muted,
+                CircleIcon(onClick = vm::cycleLoopMode, size = 44.dp) {
+                    LoopGlyph(
+                        color = if (state.loopMode == LoopMode.OFF) OnDarkPalette.muted else palette.accent,
+                        mode = state.loopMode.wire,
+                        modifier = Modifier.size(GlyphSize.medium),
                     )
                 }
-            }
-
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(0.85f)
-                    .clip(RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp))
-                    .background(OnDarkPalette.chip),
-            ) {
-                if (showAdvanced) {
-                    CastPanel(
-                        state = state,
-                        vm = vm,
-                        onOpenNas = onOpenNas,
-                        onOpenLocalQueue = onOpenLocalQueue,
-                    )
-                } else if (queue.items.isEmpty()) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(Spacing.md),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center,
-                    ) {
-                        Text(
-                            "队列是空的",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = OnDarkPalette.text,
-                        )
-                        Spacer(Modifier.height(Spacing.sm))
-                        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                            TextButton(onClick = onOpenNas) { Text("NAS 音乐") }
-                            TextButton(onClick = onOpenLocalQueue) { Text("手机音乐") }
-                            TextButton(onClick = onOpenLibrary) { Text("音乐库") }
-                        }
-                    }
-                } else {
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(bottom = Spacing.md),
-                    ) {
-                        itemsIndexed(queue.items) { index, item ->
-                            PlaylistRow(
-                                index = index,
-                                item = item,
-                                playing = index == queue.index && queue.running,
-                                current = index == queue.index,
-                                onClick = { vm.playQueueItem(index) },
-                                onRemove = if (QueueRestore.isPlaceholder(item)) null else ({ vm.removeQueueItem(index) }),
-                            )
-                        }
-                    }
+                CircleIcon(onClick = vm::previous, size = 48.dp) {
+                    SkipGlyph(OnDarkPalette.text, forward = false, modifier = Modifier.size(28.dp))
+                }
+                Box(
+                    modifier = Modifier
+                        .size(68.dp)
+                        .clip(CircleShape)
+                        .background(OnDarkPalette.text)
+                        .clickable { if (playing) vm.pause() else vm.play() },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (playing) PauseGlyph(palette.top, Modifier.size(28.dp))
+                    else PlayGlyph(palette.top, Modifier.size(28.dp))
+                }
+                CircleIcon(onClick = vm::next, size = 48.dp) {
+                    SkipGlyph(OnDarkPalette.text, forward = true, modifier = Modifier.size(28.dp))
+                }
+                CircleIcon(onClick = vm::stop, size = 44.dp) {
+                    Text("■", style = MaterialTheme.typography.titleSmall, color = OnDarkPalette.muted)
                 }
             }
         }
@@ -711,6 +725,13 @@ private fun CastPanel(
 private fun InputSourceRow(state: PlaybackUiState, vm: PlaybackViewModel) {
     var pendingRisky by remember { mutableStateOf<PlayerSource.Source?>(null) }
     val currentId = state.sourceId ?: PlayerSource.currentIdOf(state.mode)
+    // **当前源排第一**，其余按原顺序跟在后面。
+    // 为什么：这一行是横向滚动的，窄屏时「现在在哪一路上」很可能被滚出屏幕外，
+    // 用户就完全看不出当前输入源。把当前源钉在首位，它永远可见。
+    val ordered = remember(currentId) {
+        val cur = PlayerSource.all.firstOrNull { it.id == currentId }
+        listOfNotNull(cur) + PlayerSource.all.filter { it.id != currentId }
+    }
 
     Column(Modifier.fillMaxWidth()) {
         Row(
@@ -725,7 +746,7 @@ private fun InputSourceRow(state: PlaybackUiState, vm: PlaybackViewModel) {
                 style = MaterialTheme.typography.labelSmall,
                 color = OnDarkPalette.muted,
             )
-            PlayerSource.all.forEach { src ->
+            ordered.forEach { src ->
                 val selected = src.id == currentId
                 Box(
                     modifier = Modifier
@@ -743,8 +764,10 @@ private fun InputSourceRow(state: PlaybackUiState, vm: PlaybackViewModel) {
                         .padding(horizontal = Spacing.sm, vertical = 5.dp),
                 ) {
                     Text(
-                        text = src.label,
+                        // 当前源用一个实心圆点前缀明示，不靠颜色深浅去猜
+                        text = if (selected) "● ${src.label}" else src.label,
                         style = MaterialTheme.typography.labelSmall,
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                         color = if (selected) OnDarkPalette.text else OnDarkPalette.muted,
                     )
                 }
