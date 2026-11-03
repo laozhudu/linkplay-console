@@ -132,4 +132,50 @@ class UpnpRendererClientTest {
         assertTrue(didl.contains("http-get:*:audio/flac:*"))
         assertTrue(didl.contains("object.item.audioItem.musicTrack"))
     }
+
+    @Test
+    fun `next and previous use AVTransport actions like the original app`() {
+        // 原厂是 AVTransport.Next/Previous，不是 httpapi 的 setPlayerCmd:next —— 这条要锁住
+        val transport = RecordingTransport()
+        val client = UpnpRendererClient(description, transport)
+
+        client.next()
+        client.previous()
+
+        assertEquals(2, transport.calls.size)
+        assertEquals("\"urn:schemas-upnp-org:service:AVTransport:1#Next\"", transport.calls[0].soapAction)
+        assertEquals("\"urn:schemas-upnp-org:service:AVTransport:1#Previous\"", transport.calls[1].soapAction)
+        assertEquals("http://192.168.1.20:49152/upnp/control/rendertransport1", transport.calls[0].url)
+        assertTrue(transport.calls[0].body.contains("<InstanceID>0</InstanceID>"))
+        // 绝不能退回到 httpapi 的命令名
+        assertTrue(!transport.calls[0].body.contains("setPlayerCmd"))
+    }
+
+    @Test
+    fun `mute reads RenderingControl GetMute with Master channel`() {
+        val transport = RecordingTransport().apply {
+            nextResponse = "<CurrentMute>1</CurrentMute>"
+        }
+        val client = UpnpRendererClient(description, transport)
+
+        assertTrue(client.mute())
+
+        val call = transport.calls.single()
+        assertEquals("\"urn:schemas-upnp-org:service:RenderingControl:1#GetMute\"", call.soapAction)
+        assertTrue(call.body.contains("<Channel>Master</Channel>"))
+    }
+
+    @Test
+    fun `volume set goes to RenderingControl not httpapi`() {
+        // 原厂音量同样走 UPnP；这条防止以后又改回 httpapi
+        val transport = RecordingTransport()
+        val client = UpnpRendererClient(description, transport)
+
+        client.setVolume(42)
+
+        val call = transport.calls.single()
+        assertEquals("\"urn:schemas-upnp-org:service:RenderingControl:1#SetVolume\"", call.soapAction)
+        assertTrue(call.body.contains("<DesiredVolume>42</DesiredVolume>"))
+        assertTrue(call.body.contains("<Channel>Master</Channel>"))
+    }
 }

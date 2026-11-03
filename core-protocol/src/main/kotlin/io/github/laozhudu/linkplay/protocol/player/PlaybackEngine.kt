@@ -50,11 +50,24 @@ interface PlaybackEngine {
     fun seek(seconds: Long)
     fun setVolume(volume: Int)
     fun setMute(mute: Boolean)
+
+    /**
+     * 下一首 / 上一首。
+     *
+     * 两套通道的做法不同，但**语义都是"切歌"**：
+     * - UPnP：`AVTransport.Next/Previous`（原厂用法，配合设备侧 PlayQueue）
+     * - httpapi：`setPlayerCmd:next/prev`（兜底）
+     */
+    fun next()
+    fun previous()
 }
 
 /** UPnP 通道：投流靠 SetAVTransportURI + Play，状态靠 GetTransportInfo/GetPositionInfo。 */
 class UpnpPlaybackEngine(private val client: UpnpRendererClient) : PlaybackEngine {
     override val channelName: String = "UPnP"
+
+    override fun next() { client.next() }
+    override fun previous() { client.previous() }
 
     override fun snapshot(): PlaybackSnapshot {
         val transport = client.transportInfo()
@@ -179,6 +192,14 @@ class HttpApiPlaybackEngine(
 
     override fun setVolume(volume: Int) {
         client.send(deviceIp, LinkPlayCommands.playerVolume(volume))
+    }
+
+    override fun next() {
+        client.send(deviceIp, LinkPlayCommands.nextTrack())
+    }
+
+    override fun previous() {
+        client.send(deviceIp, LinkPlayCommands.previousTrack())
     }
 
     override fun setMute(mute: Boolean) {

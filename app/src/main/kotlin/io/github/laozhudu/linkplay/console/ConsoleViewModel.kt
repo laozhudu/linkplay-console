@@ -18,6 +18,7 @@ import io.github.laozhudu.linkplay.protocol.playback.QueueRestore
 import io.github.laozhudu.linkplay.protocol.player.DeviceQueueState
 import io.github.laozhudu.linkplay.protocol.session.PlaybackKey
 import io.github.laozhudu.linkplay.console.playback.DevicePlaylistGateway
+import io.github.laozhudu.linkplay.console.playback.DeviceVolumeControl
 import io.github.laozhudu.linkplay.console.playback.QueueBus
 import io.github.laozhudu.linkplay.console.playback.VolumeBus
 import io.github.laozhudu.linkplay.protocol.player.PlayerStatus
@@ -161,7 +162,8 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             for ((ip, v) in deviceVolumeChannel) {
                 withContext(Dispatchers.IO) {
-                    runCatching { client.send(ip, LinkPlayCommands.playerVolume(v)) }
+                    // 原厂做法：UPnP RenderingControl 优先，httpapi 兜底（见 DeviceVolumeControl）
+                    runCatching { DeviceVolumeControl.setVolume(ip, v) }
                         .onFailure { log("调音量失败：${it.message}") }
                 }
                 delay(60)
@@ -172,7 +174,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                 withContext(Dispatchers.IO) {
                     val master = _state.value.groupMasterIp ?: return@withContext
                     runCatching {
-                        if (member.isMaster) client.send(master, LinkPlayCommands.playerVolume(v))
+                        if (member.isMaster) DeviceVolumeControl.setVolume(master, v)
                         else client.send(master, LinkPlayCommands.slaveVolume(member.ip, v))
                     }.onFailure { log("调音量失败：${it.message}") }
                 }
