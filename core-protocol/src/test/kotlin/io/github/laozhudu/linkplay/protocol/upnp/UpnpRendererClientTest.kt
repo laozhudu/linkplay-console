@@ -178,4 +178,37 @@ class UpnpRendererClientTest {
         assertTrue(call.body.contains("<DesiredVolume>42</DesiredVolume>"))
         assertTrue(call.body.contains("<Channel>Master</Channel>"))
     }
+
+    @Test
+    fun `setChannel posts SetChannel with Master channel and DesiredChannel`() {
+        // 原厂 com/wifiaudio/b/bl.java 的 master 分支走的就是这条（独立设备也能改声道）
+        val transport = RecordingTransport()
+        val client = UpnpRendererClient(description, transport)
+
+        client.setChannel(1)
+
+        val call = transport.calls.single()
+        assertEquals("\"urn:schemas-upnp-org:service:RenderingControl:1#SetChannel\"", call.soapAction)
+        assertTrue(call.body.contains("<Channel>Master</Channel>"))
+        assertTrue(call.body.contains("<DesiredChannel>1</DesiredChannel>"))
+    }
+
+    @Test
+    fun `setChannel clamps out of range values`() {
+        val transport = RecordingTransport()
+        UpnpRendererClient(description, transport).setChannel(9)
+        assertTrue(transport.calls.single().body.contains("<DesiredChannel>2</DesiredChannel>"))
+    }
+
+    @Test
+    fun `controlDeviceInfo posts GetControlDeviceInfo and parses body`() {
+        val transport = RecordingTransport().apply {
+            nextResponse = "<CurrentVolume>41</CurrentVolume><CurrentChannel>2</CurrentChannel>"
+        }
+        val info = UpnpRendererClient(description, transport).controlDeviceInfo()
+
+        assertEquals("\"urn:schemas-upnp-org:service:RenderingControl:1#GetControlDeviceInfo\"", transport.calls.single().soapAction)
+        assertEquals(41, info.volume)
+        assertEquals(2, info.channel)
+    }
 }
