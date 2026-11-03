@@ -38,6 +38,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -56,6 +57,9 @@ import io.github.laozhudu.linkplay.console.library.QueueScreen
 import io.github.laozhudu.linkplay.console.nas.NasScreen
 import io.github.laozhudu.linkplay.console.playback.PlayerScreen
 import io.github.laozhudu.linkplay.console.playback.QueueBus
+import io.github.laozhudu.linkplay.console.playback.VolumeBus
+import io.github.laozhudu.linkplay.console.playback.VolumeOsd
+import io.github.laozhudu.linkplay.console.playback.VolumeOverlay
 import io.github.laozhudu.linkplay.console.playback.QueueRunState
 import io.github.laozhudu.linkplay.console.provisioning.ProvisioningScreen
 import io.github.laozhudu.linkplay.console.radio.RadioScreen
@@ -106,7 +110,15 @@ class MainActivity : ComponentActivity() {
         val isVolDown = event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
         if ((isVolUp || isVolDown) && consoleVm.canHandleVolumeKey()) {
             if (event.action == KeyEvent.ACTION_DOWN) {
-                consoleVm.adjustVolumeByKey(if (isVolUp) 1 else -1)
+                // 返回新音量就顺手弹出系统样式的音量条（Android 自己那根已经被我们吞掉了）
+                consoleVm.adjustVolumeByKey(if (isVolUp) 1 else -1)?.let { v ->
+                    VolumeOsd.show(
+                        volume = v,
+                        mute = consoleVm.state.value.selectedIp?.let { VolumeBus.volumeOf(it)?.mute } ?: false,
+                        deviceName = consoleVm.state.value.saved
+                            .firstOrNull { it.ip == consoleVm.state.value.selectedIp }?.title,
+                    )
+                }
             }
             // DOWN 与 UP 都吞掉，系统就不会再去动手机自己的媒体音量
             return true
@@ -133,6 +145,37 @@ private enum class SubPage { Nas, LocalQueue, Library, Radio, Settings, Provisio
 
 @Composable
 fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
+    /**
+     * 整体包一层 Box：音量浮层必须画在所有页面之上（包括二级页），
+     * 所以放在这里而不是某个页面里。
+     */
+    Box(Modifier.fillMaxSize()) {
+        ConsoleBody(vm)
+        VolumeOsdHost()
+    }
+}
+
+/** 音量浮层的宿主：读 [VolumeOsd] 状态，1.4 秒无新按键就收起。 */
+@Composable
+private fun VolumeOsdHost() {
+    val osd by VolumeOsd.state.collectAsState()
+    val current = osd
+    LaunchedEffect(current?.nonce) {
+        if (current != null) {
+            kotlinx.coroutines.delay(1_400)
+            VolumeOsd.hideIfStill(current.nonce)
+        }
+    }
+    VolumeOverlay(
+        visible = current != null,
+        volume = current?.volume ?: 0,
+        mute = current?.mute ?: false,
+        deviceName = current?.deviceName,
+    )
+}
+
+@Composable
+private fun ConsoleBody(vm: ConsoleViewModel) {
     val state by vm.state.collectAsState()
     val queue by QueueBus.state.collectAsState()
 
@@ -245,6 +288,7 @@ fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
                     PlayerScreen(
                         deviceIp = state.selectedIp.orEmpty(),
                         deviceLocation = state.selectedLocation,
+                        deviceUuid = state.selectedUuid,
                         // 不传 onBack：播放页是一级页面，靠底部导航切换
                         onOpenSettings = { sub = SubPage.Settings },
                         onOpenNas = { sub = SubPage.Nas },

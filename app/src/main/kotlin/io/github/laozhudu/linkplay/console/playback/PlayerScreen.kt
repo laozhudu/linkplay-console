@@ -8,6 +8,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -46,6 +47,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -63,6 +65,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import coil.compose.AsyncImage
+import io.github.laozhudu.linkplay.console.session.SessionStore
 import io.github.laozhudu.linkplay.console.ui.components.AppShapesExpressive
 import io.github.laozhudu.linkplay.console.ui.components.BackGlyph
 import io.github.laozhudu.linkplay.console.ui.components.GlyphSize
@@ -78,6 +81,7 @@ import io.github.laozhudu.linkplay.console.ui.theme.Spacing
 import io.github.laozhudu.linkplay.console.ui.theme.StatusColors
 import io.github.laozhudu.linkplay.console.ui.theme.seedOf
 import io.github.laozhudu.linkplay.protocol.player.LoopMode
+import io.github.laozhudu.linkplay.protocol.player.PlayerSource
 import io.github.laozhudu.linkplay.protocol.queue.QueueItem
 import io.github.laozhudu.linkplay.protocol.upnp.TransportState
 
@@ -120,6 +124,8 @@ import io.github.laozhudu.linkplay.protocol.upnp.TransportState
 fun PlayerScreen(
     deviceIp: String,
     deviceLocation: String?,
+    /** 设备 uuid：用于按它恢复上次的播放列表。 */
+    deviceUuid: String? = null,
     /** 一级页面时不显示返回箭头（底部 Tab 换页）。 */
     onBack: (() -> Unit)? = null,
     onOpenSettings: () -> Unit = {},
@@ -127,9 +133,19 @@ fun PlayerScreen(
     onOpenLibrary: () -> Unit = {},
     onOpenLocalQueue: () -> Unit = {},
 ) {
+    val appContext = LocalContext.current.applicationContext
     val vm: PlaybackViewModel = viewModel(
         key = "player-$deviceIp",
-        factory = viewModelFactory { initializer { PlaybackViewModel(deviceIp, deviceLocation) } },
+        factory = viewModelFactory {
+            initializer {
+                PlaybackViewModel(
+                    deviceIp = deviceIp,
+                    location = deviceLocation,
+                    deviceUuid = deviceUuid,
+                    sessionStore = SessionStore.of(appContext),
+                )
+            }
+        },
     )
     val state by vm.state.collectAsState()
     val queue by QueueBus.state.collectAsState()
@@ -215,8 +231,12 @@ fun PlayerScreen(
                     )
                     Text(
                         buildString {
-                            append(if (playing) "正在播放" else state.channel ?: "连接中")
-                            state.sourceLabel?.let { append(" · ").append(it) }
+                            // 输入源以设备回报为准：模式数字 → 人话（PlayerSource.describe）
+                            append(
+                                if (state.mode != null) PlayerSource.describe(state.mode)
+                                else state.sourceLabel ?: "连接中",
+                            )
+                            if (playing) append(" · 播放中")
                         },
                         style = MaterialTheme.typography.labelSmall,
                         color = OnDarkPalette.muted,
@@ -393,6 +413,9 @@ fun PlayerScreen(
                     modifier = Modifier.width(32.dp),
                 )
             }
+
+            // ---------- 输入源：可切换 + 标出当前 ----------
+            InputSourceRow(state = state, vm = vm)
 
             (state.error ?: state.unavailableReason)?.let { msg ->
                 Text(
@@ -658,6 +681,81 @@ private fun CastPanel(
                 style = MaterialTheme.typography.labelSmall,
                 color = OnDarkPalette.muted,
             )
+        }
+    }
+}
+
+/**
+ * 输入源切换行。
+ *
+ * 三条设计约束：
+ * 1. **当前源必须看得见**：从设备回报的 `mode` 反查（[PlayerSource.currentIdOf]），
+ *    不是记住"上次点了哪个" —— 音箱可能被机身上的按键切走，界面要跟着变；
+ * 2. 切走 Wi-Fi 的源（蓝牙/线路/U 盘/光纤）在部分固件上会让手机控制不到设备，
+ *    所以这些源点了之后**先在原地给一句风险提示**，再点一次才执行 —— 不用弹窗（浮层是用户明确讨厌的）；
+ * 3. 命令回 OK 不算成功，切完回读 mode 再判断（这条在本项目反复吃亏）。
+ */
+@Composable
+private fun InputSourceRow(state: PlaybackUiState, vm: PlaybackViewModel) {
+    var pendingRisky by remember { mutableStateOf<PlayerSource.Source?>(null) }
+    val currentId = state.sourceId ?: PlayerSource.currentIdOf(state.mode)
+
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "输入源",
+                style = MaterialTheme.typography.labelSmall,
+                color = OnDarkPalette.muted,
+            )
+            PlayerSource.all.forEach { src ->
+                val selected = src.id == currentId
+                Box(
+                    modifier = Modifier
+                        .clip(AppShapesExpressive.pill)
+                        .background(
+                            if (selected) Color(0x339FD3FF) else OnDarkPalette.chip,
+                        )
+                        .clickable(enabled = !state.busy && !selected) {
+                            // 真机实测：切输入源会**打断当前播放**（.153 上 mode 2→0 且 status=stop）。
+                            // 所以只要设备在播，就必须二次确认；切走 Wi-Fi 的源另有风险提示。
+                            val interrupting = state.state == TransportState.PLAYING ||
+                                state.state == TransportState.PAUSED_PLAYBACK
+                            if (src.risky || interrupting) pendingRisky = src else vm.switchSource(src.id)
+                        }
+                        .padding(horizontal = Spacing.sm, vertical = 5.dp),
+                ) {
+                    Text(
+                        text = src.label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (selected) OnDarkPalette.text else OnDarkPalette.muted,
+                    )
+                }
+            }
+        }
+        pendingRisky?.let { src ->
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    if (src.risky) "切到「${src.label}」会中断当前播放，且手机可能控制不到音箱，要回机身上切回来。"
+                    else "切换输入源会中断当前播放。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = StatusColors.warn,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = { pendingRisky = null }) { Text("取消") }
+                TextButton(onClick = {
+                    vm.switchSource(src.id)
+                    pendingRisky = null
+                }) { Text("仍要切换") }
+            }
         }
     }
 }

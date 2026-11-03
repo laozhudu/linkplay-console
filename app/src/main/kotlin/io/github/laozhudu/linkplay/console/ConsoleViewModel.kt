@@ -136,6 +136,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         // 首页一进来就有内容：读已保存设备，并后台探活（不清空界面、不阻塞）
         reloadSaved()
         probeSaved()
+        restoreLastDevice()
         // 首页多房间卡片的低频心跳：不在播放页时也能跟上设备侧/遥控器的音量变化
         viewModelScope.launch {
             while (true) {
@@ -170,6 +171,28 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                 delay(90)
             }
         }
+    }
+
+    /**
+     * 重开 App 时自动回到上次那台设备。
+     *
+     * 用户要求「原厂退出后重开能读到原来的状态」。光恢复队列不够 ——
+     * 没有"当前设备"，播放页是空的、列表也无处可挂。所以这里按 uuid（其次 IP）找回，
+     * 找到了就静默选中，不跳 Tab（用户可能只想看设备列表）。
+     */
+    private fun restoreLastDevice() {
+        val key = runCatching { store.loadLastDevice() }.getOrNull() ?: return
+        val target = _state.value.saved.firstOrNull {
+            it.uuid == key || "ip:${it.ip}" == key
+        } ?: return
+        _state.update {
+            it.copy(
+                selectedIp = target.ip,
+                selectedLocation = target.location,
+                selectedUuid = target.uuid,
+            )
+        }
+        log("恢复上次设备：${target.title}（${target.ip}）")
     }
 
     // ---- 已保存设备 ----
@@ -293,6 +316,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                 slaves = emptyList(),
             )
         }
+        runCatching { store.saveLastDevice(device.uuid, device.ip) }
         refreshStatus()
     }
 
@@ -518,19 +542,25 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
      *
      * 步长按手机惯例 15 档换算成 0-100：每按一下 5，长按连续按也不至于跳变。
      */
-    fun adjustVolumeByKey(delta: Int): Boolean {
-        val ip = _state.value.selectedIp ?: return false
-        if (_state.value.online[ip] == false) return false
+    fun adjustVolumeByKey(delta: Int): Int? {
+        val ip = _state.value.selectedIp ?: return null
+        if (_state.value.online[ip] == false) return null
         val current = VolumeBus.volumeOf(ip)?.volume
             ?: _state.value.groupMembers.firstOrNull { it.ip == ip }?.volume
-            ?: return false
-        val next = VolumeStep.next(current, delta) ?: return false
-        if (!VolumeStep.shouldConsume(current, delta)) return false
-        if (next == current) return true          // 已经到顶/到底，仍然吞掉事件
+            ?: return null
+        if (!VolumeStep.shouldConsume(current, delta)) return null
+        val next = VolumeStep.next(current, delta) ?: return null
         VolumeBus.publishVolume(ip, next)
-        deviceVolumeChannel.trySend(ip to next)
+        // 音量键这条路**不走去抖通道**：用户按一下就要立刻听到变化，
+        // 合并通道是为拖动设计的，按键本来就是离散事件，多一次 60ms 等待只会显得钝。
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                runCatching { client.send(ip, LinkPlayCommands.playerVolume(next)) }
+                    .onFailure { log("音量键下发失败：${it.message}") }
+            }
+        }
         log("音量键 → $next")
-        return true
+        return next
     }
 
     /**

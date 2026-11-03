@@ -4,7 +4,14 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import io.github.laozhudu.linkplay.protocol.session.NasSession
+import io.github.laozhudu.linkplay.protocol.session.PlaybackKey
 import io.github.laozhudu.linkplay.protocol.session.PlaybackSession
+
+/**
+ * 应用级记录的 kind。单独一类而不是塞进 NAS/Playback：
+ * 这三类数据生命周期不同，清播放记录时不该把"上次用哪台设备"一起清掉。
+ */
+private const val KIND_APP = "app"
 
 /**
  * 极简 KV 持久化，专门放「上次的状态」。
@@ -35,6 +42,8 @@ class SessionStore private constructor(context: Context) : SQLiteOpenHelper(
         db.execSQL("drop table if exists tb_session")
         onCreate(db)
     }
+
+    // ---- 应用级会话（上次用的是哪台设备）----
 
     // ---- NAS 记忆 ----
 
@@ -67,6 +76,16 @@ class SessionStore private constructor(context: Context) : SQLiteOpenHelper(
      * 存成一段 JSON 而不是一张表：设备数量是个位数，而且「顺序 = 最近使用」
      * 本身就是排序语义，用表反而要维护一个 order 字段。
      */
+    /**
+     * 上次使用的设备键（uuid 优先，否则 `ip:x`）。
+     *
+     * 为什么需要：用户要求「重开 App 能读到原来的状态」。光恢复播放列表还不够 ——
+     * 得先知道**是哪台设备**，否则播放页还是空的，列表无处可挂。
+     */
+    fun saveLastDevice(uuid: String?, ip: String) = put(KIND_APP, "lastDevice", PlaybackKey.of(uuid, ip))
+
+    fun loadLastDevice(): String? = get(KIND_APP, "lastDevice")
+
     fun savedDevices(): List<io.github.laozhudu.linkplay.protocol.session.SavedDevice> =
         io.github.laozhudu.linkplay.protocol.session.DeviceList.decode(get(KIND_DEVICES, SUBJECT_ALL))
 

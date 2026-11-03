@@ -16,7 +16,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- 应用图标：自适应图标（v26+）+ 传统 PNG 兜底（24-25）。
+         前景是「音箱箱体 + 音量滑轨」，一眼读作音箱遥控。 -->
     <application
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:allowBackup="false"
         android:label="@string/app_name"
         android:supportsRtl="true"
