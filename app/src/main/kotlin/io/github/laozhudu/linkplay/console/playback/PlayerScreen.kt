@@ -495,9 +495,6 @@ fun PlayerScreen(
                 )
             }
 
-            // 输入源：可切换，且当前源固定排第一（横向滚动时永远看得见）
-            InputSourceRow(state = state, vm = vm)
-
             // 故障用红字；"该选歌了"这种可执行提示用中性色，别让人以为 App 坏了
             state.error?.let { msg ->
                 Text(
@@ -734,90 +731,6 @@ private fun CastPanel(
                 style = MaterialTheme.typography.labelSmall,
                 color = OnDarkPalette.muted,
             )
-        }
-    }
-}
-
-/**
- * 输入源切换行。
- *
- * 三条设计约束：
- * 1. **当前源必须看得见**：从设备回报的 `mode` 反查（[PlayerSource.currentIdOf]），
- *    不是记住"上次点了哪个" —— 音箱可能被机身上的按键切走，界面要跟着变；
- * 2. 切走 Wi-Fi 的源（蓝牙/线路/U 盘/光纤）在部分固件上会让手机控制不到设备，
- *    所以这些源点了之后**先在原地给一句风险提示**，再点一次才执行 —— 不用弹窗（浮层是用户明确讨厌的）；
- * 3. 命令回 OK 不算成功，切完回读 mode 再判断（这条在本项目反复吃亏）。
- */
-@Composable
-private fun InputSourceRow(state: PlaybackUiState, vm: PlaybackViewModel) {
-    var pendingRisky by remember { mutableStateOf<PlayerSource.Source?>(null) }
-    val currentId = state.sourceId ?: PlayerSource.currentIdOf(state.mode)
-    // **当前源排第一**，其余按原顺序跟在后面。
-    // 为什么：这一行是横向滚动的，窄屏时「现在在哪一路上」很可能被滚出屏幕外，
-    // 用户就完全看不出当前输入源。把当前源钉在首位，它永远可见。
-    val ordered = remember(currentId) {
-        val cur = PlayerSource.all.firstOrNull { it.id == currentId }
-        listOfNotNull(cur) + PlayerSource.all.filter { it.id != currentId }
-    }
-
-    Column(Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "输入源",
-                style = MaterialTheme.typography.labelSmall,
-                color = OnDarkPalette.muted,
-            )
-            ordered.forEach { src ->
-                val selected = src.id == currentId
-                Box(
-                    modifier = Modifier
-                        .clip(AppShapesExpressive.pill)
-                        .background(
-                            if (selected) Color(0x339FD3FF) else OnDarkPalette.chip,
-                        )
-                        .clickable(enabled = !state.busy && !selected) {
-                            // 真机实测：切输入源会**打断当前播放**（.153 上 mode 2→0 且 status=stop）。
-                            // 所以只要设备在播，就必须二次确认；切走 Wi-Fi 的源另有风险提示。
-                            val interrupting = state.state == TransportState.PLAYING ||
-                                state.state == TransportState.PAUSED_PLAYBACK
-                            if (src.risky || interrupting) pendingRisky = src else vm.switchSource(src.id)
-                        }
-                        .padding(horizontal = Spacing.sm, vertical = 5.dp),
-                ) {
-                    Text(
-                        // 当前源用一个实心圆点前缀明示，不靠颜色深浅去猜
-                        text = if (selected) "● ${src.label}" else src.label,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                        color = if (selected) OnDarkPalette.text else OnDarkPalette.muted,
-                    )
-                }
-            }
-        }
-        pendingRisky?.let { src ->
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    if (src.risky) "切到「${src.label}」会中断当前播放，且手机可能控制不到音箱，要回机身上切回来。"
-                    else "切换输入源会中断当前播放。",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = StatusColors.warn,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(onClick = { pendingRisky = null }) { Text("取消") }
-                TextButton(onClick = {
-                    vm.switchSource(src.id)
-                    pendingRisky = null
-                }) { Text("仍要切换") }
-            }
         }
     }
 }
