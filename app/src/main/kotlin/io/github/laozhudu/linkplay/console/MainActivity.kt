@@ -596,6 +596,8 @@ private fun HomeScreen(
                     masked = state.groupMembers.firstOrNull {
                         it.uuid?.equals(device.uuid, ignoreCase = true) == true
                     }?.masked == true,
+                    profile = state.cards[device.uuid]?.profile
+                        ?: io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile.UNKNOWN,
                     onCenter = { c -> centers[device.uuid] = c },
                     onOpen = { onOpenDevice(device) },
                     onSettings = { onOpenSettings(device) },
@@ -886,6 +888,8 @@ private fun DraggableDeviceCard(
     isGroupMaster: Boolean,
     /** 这台是否已被屏蔽（`mask=1`）。 */
     masked: Boolean,
+    /** 设备能力档：通用 DLNA 渲染器不显示组网/声道/屏蔽这些私有入口。 */
+    profile: io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile,
     onCenter: (Offset) -> Unit,
     onOpen: () -> Unit,
     onSettings: () -> Unit,
@@ -965,6 +969,7 @@ private fun DraggableDeviceCard(
             inGroup = groupedUnder != null || isGroupMaster,
             isMaster = isGroupMaster,
             masked = masked,
+            profile = profile,
             onOpen = onOpen,
             onSettings = onSettings,
             onVolume = onVolume,
@@ -1011,6 +1016,9 @@ private fun DeviceCardRow(
     isMaster: Boolean = false,
     /** 已被屏蔽（`mask=1`，不出声但留在组里）。 */
     masked: Boolean = false,
+    /** 设备能力档（默认 UNKNOWN：按 LinkPlay 显示，保持既有行为不变）。 */
+    profile: io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile =
+        io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile.UNKNOWN,
     onOpen: () -> Unit,
     onSettings: () -> Unit,
     onVolume: (Int) -> Unit,
@@ -1078,6 +1086,12 @@ private fun DeviceCardRow(
                         )
                     }
                 }
+            }
+            // 类型标签：必须让人一眼看出"这台是音箱还是电视盒子"——
+            // 两类设备能做的事不同（盒子没有组网/声道/预设）
+            if (profile == io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile.GENERIC_DMR) {
+                PillTag(text = "通用 DLNA", color = OnDarkPalette.muted)
+                Spacer(Modifier.width(Spacing.xs))
             }
             if (groupedUnder != null) {
                 PillTag(text = "组内", color = StatusColors.ok)
@@ -1165,10 +1179,27 @@ private fun DeviceCardRow(
                 modifier = Modifier.width(30.dp),
                 textAlign = TextAlign.End,
             )
-            if (inGroup) {
-                TextButton(onClick = onUngroup, contentPadding = PaddingValues(horizontal = 6.dp)) {
-                    Text("解除", style = MaterialTheme.typography.labelSmall, color = OnDarkPalette.muted)
+            // 屏蔽 / 解除：只有 LinkPlay 从机才有意义。通用 DLNA 渲染器整段不渲染
+            // （项目铁律：不给按了没反应的按钮）
+            if (profile != io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile.GENERIC_DMR) {
+                if (inGroup && !isMaster) {
+                    TextButton(onClick = onMask, contentPadding = PaddingValues(horizontal = 6.dp)) {
+                        Text(
+                            if (masked) "恢复" else "屏蔽",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (masked) StatusColors.warn else OnDarkPalette.muted,
+                        )
+                    }
                 }
+                if (inGroup) {
+                    TextButton(onClick = onUngroup, contentPadding = PaddingValues(horizontal = 6.dp)) {
+                        Text("解除", style = MaterialTheme.typography.labelSmall, color = OnDarkPalette.muted)
+                    }
+                }
+            }
+            if (profile == io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile.GENERIC_DMR) {
+                // 通用渲染器没有声道概念：这一格留空，而不是画一个假的 LR
+                return@Row
             }
             // 声道标签：0 立体声 / 1 仅左 / 2 仅右。
             // **可以点**：组内从机点一下就在 LR → L → R 之间循环，立刻下发
