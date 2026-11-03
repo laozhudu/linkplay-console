@@ -1180,46 +1180,48 @@ private fun DeviceCardRow(
             .clickable(onClick = onOpen)
             .padding(Spacing.md),
     ) {
-        // 第一行：设备名 + 状态 + 齿轮
+        // 第一行：设备名 + 电量 + 状态标签 + 齿轮
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(
-                    device.title,
-                    style = MaterialTheme.typography.titleLarge,
-                    // 卡片底是派生深色渐变，文字必须恒定白：跟主题变会在浅色模式下隐形
-                    color = OnDarkPalette.text,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        listOfNotNull(
-                            device.ip,
-                            groupedUnder?.let { "属 $it" }
-                                ?: when (online) {
-                                    true -> "在线"
-                                    false -> "离线"
-                                    null -> null
-                                },
-                        ).joinToString(" · "),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = OnDarkPalette.muted,
+                        device.title,
+                        style = MaterialTheme.typography.titleLarge,
+                        // 卡片底是派生深色渐变，文字必须恒定白：跟主题变会在浅色模式下隐形
+                        color = OnDarkPalette.text,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false),
                     )
-                    // 电量（原厂卡片上就有）：独立设备取 getStatusEx.battery_percent，
-                    // 组内从机取主机转述的 slave_list[].battery
+                    // 电量**放在名字这一行**，不放副标题行：
+                    // 副标题要显示 IP/在线状态，长 IP 会把电量挤出去（之前就是这样被挤没的）。
+                    // 独立设备/主机来自 `GetControlDeviceInfo` 的 `<Status>.battery_percent`，
+                    // 组内从机来自主机转述的 `slave_list[].battery`。
                     card?.battery?.let { pct ->
-                        Spacer(Modifier.width(Spacing.xs))
+                        Spacer(Modifier.width(Spacing.sm))
                         Text(
                             if (card.charging) "⚡$pct%" else "🔋$pct%",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = OnDarkPalette.muted,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = if (card.charging) StatusColors.ok else OnDarkPalette.text,
                             maxLines = 1,
                         )
                     }
                 }
+                Text(
+                    listOfNotNull(
+                        device.ip,
+                        groupedUnder?.let { "属 $it" }
+                            ?: when (online) {
+                                true -> "在线"
+                                false -> "离线"
+                                null -> null
+                            },
+                    ).joinToString(" · "),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = OnDarkPalette.muted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
             // 类型标签：必须让人一眼看出"这台是音箱还是电视盒子"——
             // 两类设备能做的事不同（盒子没有组网/声道/预设）

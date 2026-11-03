@@ -1,48 +1,34 @@
 package io.github.laozhudu.linkplay.console
 
-import io.github.laozhudu.linkplay.protocol.player.PlayState
-import io.github.laozhudu.linkplay.protocol.player.PlayerStatus
-import io.github.laozhudu.linkplay.protocol.upnp.ControlDeviceInfo
+import io.github.laozhudu.linkplay.protocol.snapshot.DeviceSnapshot
 
 /**
- * 设备卡片的**合并**规则（纯函数，可单测）。
+ * 把 [DeviceSnapshot] 合并进界面卡片 —— **全项目唯一**的写卡片路径。
  *
- * ## 为什么必须合并而不是替换
+ * ## 为什么只有这一处
  *
- * 首页卡片的信息来自两条完全不同的通道：
- * - `getPlayerStatus`（httpapi）→ 曲名 / 音量 / 播放状态 / 列表长度；
- * - `GetControlDeviceInfo`（UPnP，Wiimu 扩展）→ 声道 / 电量 / 静音。
+ * 改造前有 4 个地方各自 `cards + (uuid to 新卡片)`：首页 3 秒心跳、设备信息轮询、
+ * 组信息刷新、DMR 探测。每个都只填自己知道的字段，其余留 null 整体覆盖 ——
+ * 于是「电量刚由 A 写入，被 B 的下一轮清成 null」。用户看到的就是电量时有时无。
  *
- * 之前两处都是 `cards + (uuid to 全新DeviceCard)`，谁后跑谁把对方写的字段清成默认值：
- * 每 3 秒的播放轮询一跑，电量就消失、声道标签回到"立体声"。
- * 用户看到的就是「电量有时有有时没有」「声道切换后显示不变」。
- *
- * 规则只有一条：**设备没报的字段，保留上一轮的值**；报了才覆盖。
+ * 现在所有通道的结果先归一成 [DeviceSnapshot]（core-protocol 的 `DeviceSnapshotReader`，
+ * 最短路径是 `GetControlDeviceInfo` + `getPlayerStatus` 两次请求），
+ * 再由这一个函数合并进卡片。规则只有一条 —— **快照里没有的字段，保留卡片原值**。
  */
 internal object CardMerge {
 
-    /** 播放态轮询（`getPlayerStatus`）：只覆盖它真正提供的字段。 */
-    fun applyPlayerStatus(old: DeviceCard, fresh: PlayerStatus): DeviceCard = old.copy(
-        // 设备不回填元数据时 Title 是 "Unknown" 或空，这时保留控制端自己记的曲名
-        title = fresh.title?.takeIf { it.isNotBlank() && it != "Unknown" } ?: old.title,
-        volume = fresh.volume,
-        mute = fresh.mute,
-        mode = fresh.mode,
-        channel = fresh.channel ?: old.channel,
-        plicount = fresh.playListCount ?: 0,
-        plicurr = fresh.playListCurrent ?: 0,
-        playing = fresh.playState == PlayState.PLAY,
+    fun apply(old: DeviceCard, snap: DeviceSnapshot): DeviceCard = old.copy(
+        title = snap.title ?: old.title,
+        volume = snap.volume ?: old.volume,
+        mute = snap.mute ?: old.mute,
+        mode = snap.mode ?: old.mode,
+        // 声道/电量是"设备报什么就是什么"的字段：报了就覆盖，没报就保留，
+        // 绝不用默认值（0 / null）去覆盖已知的真值
+        channel = snap.channel ?: old.channel,
+        battery = snap.batteryPercent ?: old.battery,
+        charging = snap.onBattery?.let { !it } ?: old.charging,
+        plicount = snap.plicount ?: old.plicount,
+        plicurr = snap.plicurr ?: old.plicurr,
+        playing = snap.playing ?: old.playing,
     )
-
-    /** 设备信息（`GetControlDeviceInfo`）：声道/音量/静音/电量/充电态。 */
-    fun applyDeviceInfo(old: DeviceCard, info: ControlDeviceInfo, battery: Int?): DeviceCard {
-        val pct = battery ?: info.status?.batteryPercent ?: old.battery
-        return old.copy(
-            volume = info.volume ?: old.volume,
-            mute = info.mute,
-            channel = info.channel ?: old.channel,
-            battery = pct,
-            charging = info.status?.onBattery?.let { !it } ?: old.charging,
-        )
-    }
 }
