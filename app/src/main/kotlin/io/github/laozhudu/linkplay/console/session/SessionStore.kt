@@ -86,6 +86,17 @@ class SessionStore private constructor(context: Context) : SQLiteOpenHelper(
 
     fun loadLastDevice(): String? = get(KIND_APP, "lastDevice")
 
+    /**
+     * 在线曲库（Subsonic / tt-music）配置。
+     *
+     * 存在 `app` 这一类里而不是按设备存：一个家庭只有一套曲库，和设备无关。
+     * 密码是明文存在本机 SQLite 里 —— 这里如实说明：它本来就是家里内网服务，
+     * 且我们不带任何云同步；要做加密得引 Android Keystore，当前不值得。
+     */
+    fun saveSubsonic(json: String) = put(KIND_APP, KEY_SUBSONIC, json)
+
+    fun loadSubsonic(): String? = get(KIND_APP, KEY_SUBSONIC)
+
     fun savedDevices(): List<io.github.laozhudu.linkplay.protocol.session.SavedDevice> =
         io.github.laozhudu.linkplay.protocol.session.DeviceList.decode(get(KIND_DEVICES, SUBJECT_ALL))
 
@@ -124,6 +135,7 @@ class SessionStore private constructor(context: Context) : SQLiteOpenHelper(
     companion object {
         private const val DB_NAME = "linkplay-session.db"
         private const val DB_VERSION = 1
+        private const val KEY_SUBSONIC = "subsonic"
         private const val KIND_NAS = "nas"
         private const val KIND_PLAYBACK = "playback"
         private const val KIND_DEVICES = "devices"

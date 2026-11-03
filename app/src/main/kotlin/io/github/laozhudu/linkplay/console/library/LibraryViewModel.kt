@@ -8,7 +8,7 @@ import io.github.laozhudu.linkplay.protocol.LinkPlayDevice
 import io.github.laozhudu.linkplay.protocol.library.LibrarySearch
 import io.github.laozhudu.linkplay.protocol.library.SearchHit
 import io.github.laozhudu.linkplay.console.playback.QueueBus
-import io.github.laozhudu.linkplay.console.playback.DevicePlaylistGateway
+import io.github.laozhudu.linkplay.console.playback.startQueueOnDevice
 import io.github.laozhudu.linkplay.console.playback.DeviceQueuePush
 import io.github.laozhudu.linkplay.protocol.DeviceHttpClient
 import io.github.laozhudu.linkplay.console.playback.QueuePlaybackService
@@ -349,50 +349,23 @@ class LibraryViewModel(
      * 抽出来是因为**两条入口必须同一条路**，否则「从音乐库播」和「从歌单播」
      * 会出现设备侧行为不一致（历史上就是不同入口各写一遍才漂移的）。
      */
+    /**
+     * 整单下发 —— 委托给全 App 唯一入口 [startQueueOnDevice]。
+     *
+     * 这里不保留任何自己的一套降级逻辑：以前音乐库 / 歌单 / NAS 各写一遍，
+     * 设备侧行为就不一致（有的入口有设备队列、有的没有）。
+     */
     private suspend fun startQueue(items: List<QueueItem>, startAt: Int, note: String) {
-        val session = PlaybackSession(
-            deviceUuid = deviceLabel ?: deviceIp,
+        startQueueOnDevice(
+            context = getApplication(),
             deviceIp = deviceIp,
+            location = location,
+            deviceUuid = deviceUuid,
             items = items,
-            index = startAt,
-            loopMode = ClientSideQueue.LOOP_ALL,
+            startAt = startAt,
+            note = note,
+            log = ::log,
         )
-        // ① 原厂机制：CreateQueue + PlayQueueWithIndex
-        val upstream = DevicePlaylistGateway.push(deviceIp, location, items, startAt)
-        if (upstream.ok) {
-            withContext(Dispatchers.IO) {
-                runCatching { sessions.savePlayback(PlaybackKey.of(deviceUuid, deviceIp), session) }
-            }
-            QueueBus.restore(
-                items, startAt, items.getOrNull(startAt)?.title,
-                deviceOwned = true,
-                note = "$note ${items.size} 首 · 第 ${startAt + 1} 首",
-            )
-            log(upstream.detail + "（设备侧队列 · 原厂 PlayQueue）")
-            return
-        }
-        log("PlayQueue 未接受：${upstream.detail}")
-
-        // ② 兜底：m3u + setPlayerCmd:playlist
-        val pushed = withContext(Dispatchers.IO) {
-            DeviceQueuePush.push(DeviceHttpClient(), deviceIp, items, startAt)
-        }
-        withContext(Dispatchers.IO) {
-            runCatching {
-                sessions.savePlayback(
-                    PlaybackKey.of(deviceUuid, deviceIp),
-                    session.copy(deviceOffset = pushed.offset),
-                )
-            }
-        }
-        if (pushed.ok) {
-            QueueBus.restore(items, startAt, items.getOrNull(startAt)?.title, deviceOwned = true, offset = pushed.offset)
-            QueueBus.markDeviceOwned(pushed.offset)
-            log(pushed.detail + "（设备侧队列）")
-        } else {
-            log("设备未接收整列表：${pushed.detail} —— 退回客户端逐首投流")
-            withContext(Dispatchers.IO) { QueuePlaybackService.start(getApplication(), location, session) }
-        }
     }
 
     /** 当前分区里的曲目列表（点一首时要连带推它所在的那一屏）。 */

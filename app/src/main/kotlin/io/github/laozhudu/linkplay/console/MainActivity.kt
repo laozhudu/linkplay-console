@@ -69,6 +69,7 @@ import io.github.laozhudu.linkplay.console.device.DeviceSettingsScreen
 import io.github.laozhudu.linkplay.console.library.LibraryScreen
 import io.github.laozhudu.linkplay.console.library.QueueScreen
 import io.github.laozhudu.linkplay.console.nas.NasScreen
+import io.github.laozhudu.linkplay.console.online.OnlineScreen
 import io.github.laozhudu.linkplay.console.playback.PlayerScreen
 import io.github.laozhudu.linkplay.console.playback.QueueBus
 import io.github.laozhudu.linkplay.console.playback.VolumeBus
@@ -155,7 +156,7 @@ private enum class Tab(val label: String, val glyph: String) {
 }
 
 /** 二级页面：从一级页推进去，返回即回一级。 */
-private enum class SubPage { Nas, LocalQueue, Library, Radio, Settings, Provisioning, DeviceContent }
+private enum class SubPage { Nas, LocalQueue, Library, Radio, Settings, Provisioning, DeviceContent, Online }
 
 @Composable
 fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
@@ -256,6 +257,13 @@ private fun ConsoleBody(vm: ConsoleViewModel) {
                 onBack = { sub = null },
             )
 
+            SubPage.Online -> OnlineScreen(
+                deviceIp = state.selectedIp.orEmpty(),
+                location = state.selectedLocation,
+                deviceUuid = state.selectedUuid,
+                onBack = { sub = null },
+            )
+
             SubPage.Settings -> DeviceSettingsScreen(
                 state = state,
                 vm = vm,
@@ -334,6 +342,7 @@ private fun ConsoleBody(vm: ConsoleViewModel) {
 
                 Tab.Sources -> SourcesScreen(
                     state = state,
+                    onOpenOnline = { sub = SubPage.Online },
                     onOpenNas = { sub = SubPage.Nas },
                     onOpenLibrary = { sub = SubPage.Library },
                     onOpenLocal = { sub = SubPage.LocalQueue },
@@ -405,6 +414,7 @@ private fun SourcesScreen(
     onOpenLibrary: () -> Unit,
     onOpenLocal: () -> Unit,
     onOpenRadio: () -> Unit,
+    onOpenOnline: () -> Unit = {},
     onGoDevices: () -> Unit,
 ) {
     Column(
@@ -432,6 +442,10 @@ private fun SourcesScreen(
         VSpace(Spacing.sm)
         AppCard(onClick = onOpenLocal) {
             SectionTitle("手机本地音乐", "手机里的歌，通过本机 HTTP 服务推给音箱")
+        }
+        VSpace(Spacing.sm)
+        AppCard(onClick = onOpenOnline) {
+            SectionTitle("在线曲库", "接 Subsonic / tt-music，搜什么投什么（走设备侧队列）")
         }
         VSpace(Spacing.sm)
         AppCard(onClick = onOpenRadio) {
