@@ -15,7 +15,7 @@
 
 - [x] **NAS** — PR #70（`SourceFailure` + `NasSourceStatus`）
 - [x] **本地曲库** — PR #74（`LocalSourceStatus` + `queryWithStats`）
-- [ ] **在线曲库** — `online/OnlineViewModel.kt`
+- [x] **在线曲库** — PR #75（`SubsonicSourceStatus`）
 - [ ] **电台** — `radio/RadioViewModel.kt`
 - [ ] **配网** — `provisioning/`
 - [ ] **语音** — `voice/VoiceController.kt`
