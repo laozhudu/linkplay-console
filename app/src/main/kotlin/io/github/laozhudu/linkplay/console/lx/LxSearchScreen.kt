@@ -121,8 +121,14 @@ internal fun LxSearchScreen(
         when {
             state.searching -> AppCard { Text("正在搜…", style = MaterialTheme.typography.bodyMedium) }
             error != null -> AppCard {
-                SectionTitle("没成功", "原因原样给你，不猜")
-                Text(error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        SectionTitle("没成功", "原因原样给你，不猜")
+                        Text(error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    }
+                    // 搜到了却一直顶着红字会让人以为搜索也失败了，所以让它能关掉
+                    TextButton(onClick = { vm.clearError() }) { Text("知道了") }
+                }
             }
             note != null -> AppCard { Text(note, style = MaterialTheme.typography.bodyMedium) }
             state.results.isEmpty() && state.searchedKeyword != null -> AppCard {
