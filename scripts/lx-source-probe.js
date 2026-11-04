@@ -2,7 +2,7 @@
 //       仓库自带的 probe.py 只做静态主机探测、明确不执行脚本 —— 所以它报「可用」
 //       只代表上游主机活着。六音那种「返回 success 但没有 url」的坏法它抓不到。
 //       这里真的跑脚本、真的取 URL、真的去拉一下。
-// 来源：docs/78-lx-source-integration.md
+// 来源：docs/80-lx-source-integration.md
 // 调度：手动 / 批量（scripts/lx-source-sync.sh 会循环调用）
 // 影响范围：只读网络 + 只读脚本文件，不写任何东西。
 // 依赖：node（用 /opt/node-26.13.0）、core-lx 的 lx-preload.js 与 lx-music-sdk.bundle.js
