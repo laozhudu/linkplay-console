@@ -7,6 +7,7 @@ import io.github.laozhudu.linkplay.console.diagnostics.AppDiagnostics
 import io.github.laozhudu.linkplay.console.diagnostics.DiagnosticsReport
 import io.github.laozhudu.linkplay.console.diagnostics.NavTrace
 import io.github.laozhudu.linkplay.console.library.LocalMediaRegistry
+import io.github.laozhudu.linkplay.console.library.LocalSourceStatus
 import io.github.laozhudu.linkplay.console.nas.NasSourceStatus
 import io.github.laozhudu.linkplay.console.playback.QueueBus
 import io.github.laozhudu.linkplay.console.session.SessionRestore
@@ -127,6 +128,17 @@ internal class ConsoleDiagnostics(
                 appendLine("  耗时=${st.elapsedMs}ms")
             }
         }
+        // 内容源 · 本地曲库 —— 第二个盲区（`docs/65` 批次 1）。
+        // 它要回答的是「扫描 0 首」到底是没权限、真没歌、还是查到全被跳过。
+        AppDiagnostics.sections.register(
+            "source-local",
+            "本地曲库",
+            {
+                val st = LocalSourceStatus.snapshot()
+                if (st.granted == false || st.failure != null) Severity.WARN else Severity.INFO
+            },
+        ) { LocalSourceStatus.render() }
+
         // 内容源 · NAS —— 七个盲区里的第一个（`docs/61` 的施工顺序），
         // 选它打头是因为 `docs/60` 要改 NAS 的推流路径，改之前必须先能看见现在的行为。
         AppDiagnostics.sections.register(

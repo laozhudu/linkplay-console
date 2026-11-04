@@ -9,6 +9,9 @@ import io.github.laozhudu.linkplay.protocol.media.MediaResolver
 import io.github.laozhudu.linkplay.protocol.playqueue.PlaylistTrack
 import java.io.File
 
+/** 一次查询的结果：能用的曲目 + 查到却被跳过的条数。 */
+data class LocalQueryResult(val tracks: List<LocalTrack>, val skipped: Int)
+
 /** 本地曲目（来自 MediaStore）。 */
 data class LocalTrack(
     val id: Long,
@@ -35,7 +38,17 @@ object LocalLibrary {
 
     private val SUPPORTED_EXT = setOf("mp3", "m4a", "aac", "flac", "ogg", "oga", "wav", "wma", "ape")
 
-    fun query(context: Context, limit: Int = 2000): List<LocalTrack> {
+    fun query(context: Context, limit: Int = 2000): List<LocalTrack> =
+        queryWithStats(context, limit).tracks
+
+    /**
+     * 同 [query]，但把「查到却被跳过多少条」一起带回来。
+     *
+     * 为什么要这个数字：`扫描 0 首` 有两种完全不同的含义——
+     * 手机里真没歌，还是查到了但条目的路径为空（云盘条目）或格式不支持、全被过滤掉了。
+     * 界面上两者都是"没有找到音乐"，而一个要你去下歌，一个要你换格式。
+     */
+    fun queryWithStats(context: Context, limit: Int = 2000): LocalQueryResult {
         val collection: Uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
         } else {
@@ -55,6 +68,7 @@ object LocalLibrary {
         val order = "${MediaStore.Audio.Media.TITLE} COLLATE NOCASE ASC"
 
         val out = ArrayList<LocalTrack>()
+        var skipped = 0
         context.contentResolver.query(collection, projection, selection, null, order)?.use { cursor ->
             val idCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
             val titleCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
@@ -66,10 +80,16 @@ object LocalLibrary {
             val dataCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DATA)
 
             while (cursor.moveToNext() && out.size < limit) {
-                val path = cursor.getString(dataCol) ?: continue
-                if (path.isBlank()) continue
+                val path = cursor.getString(dataCol)
+                if (path.isNullOrBlank()) {
+                    skipped++
+                    continue
+                }
                 val ext = path.substringAfterLast('.', "").lowercase()
-                if (ext !in SUPPORTED_EXT && !File(path).exists()) continue
+                if (ext !in SUPPORTED_EXT && !File(path).exists()) {
+                    skipped++
+                    continue
+                }
                 out += LocalTrack(
                     id = cursor.getLong(idCol),
                     title = cursor.getString(titleCol) ?: File(path).name,
@@ -83,7 +103,7 @@ object LocalLibrary {
                 )
             }
         }
-        return out
+        return LocalQueryResult(out, skipped)
     }
 
     /** 把 id 映射成文件路径的解析器，供 HTTP 服务用；路径形如 `/t/<id>`。 */
