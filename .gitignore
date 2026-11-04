@@ -11,3 +11,7 @@ local.properties
 *.apk
 *.keystore
 !docs/examples/*.json
+
+# 音源脚本本体不入库（无许可证、且「禁止批量下载」）—— 只用 scripts/lx-source-sync.py 现拉
+lx-sources/
+lx-sources.recommended.json
