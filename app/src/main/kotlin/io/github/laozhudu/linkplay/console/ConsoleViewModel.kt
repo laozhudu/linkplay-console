@@ -34,7 +34,6 @@ import io.github.laozhudu.linkplay.protocol.mediasource.SubsonicConfig
 import io.github.laozhudu.linkplay.protocol.FirmwareUpdate
 import io.github.laozhudu.linkplay.protocol.player.PlayerStatus
 import io.github.laozhudu.linkplay.protocol.player.SleepTimer
-import io.github.laozhudu.linkplay.protocol.player.VolumeStep
 import io.github.laozhudu.linkplay.protocol.session.SavedDevice
 import io.github.laozhudu.linkplay.protocol.upnp.UpnpRendererClient
 import kotlinx.coroutines.CoroutineScope
@@ -820,31 +819,6 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun sendCommand(command: String) {
-        val ip = _state.value.selectedIp ?: return
-        if (command.isBlank()) return
-        run(command) {
-            val raw = client.send(ip, command)
-            log("返回：" + raw.take(400))
-        }
-    }
-
-    fun renameDevice(name: String) {
-        val ip = _state.value.selectedIp ?: return
-        if (name.isBlank()) return
-        run("setDeviceName") {
-            client.send(ip, LinkPlayCommands.deviceName(name))
-            log("已请求改名为 $name")
-        }
-    }
-
-    fun switchMode(mode: String) {
-        val ip = _state.value.selectedIp ?: return
-        run("switchMode($mode)") { client.send(ip, LinkPlayCommands.switchMode(mode)) }
-    }
-
-    // ---- 多房间组：首页直接操作 ----
-
     /** 重新探活并刷新组结构（首页下拉/进入时调用）。 */
     fun refreshGroup() = probeSaved()
 
@@ -861,8 +835,6 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         }
         probeSaved()
     }
-
-    
 
     /**
      * 给某台设备改名（原厂「重命名」）。
@@ -926,210 +898,6 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    
-
-
-
-    
-
-    
-
-    
-
-    /**
-     * 手机实体音量键 → 音箱音量（原厂 App 就是这个行为）。
-     *
-     * @return true 表示"这一下我处理了，别让系统再调手机自己的音量"
-     *
-     * 为什么必须吞掉事件：不吞的话按一次键会同时改手机媒体音量和音箱音量，
-     * 用户会看到手机上的人声/铃声变了，而音箱只动了一点点，非常困惑。
-     *
-     * 步长按手机惯例 15 档换算成 0-100：每按一下 5，长按连续按也不至于跳变。
-     */
-    fun adjustVolumeByKey(delta: Int): Int? {
-        val ip = _state.value.selectedIp ?: return null
-        if (_state.value.online[ip] == false) return null
-        val current = VolumeBus.volumeOf(ip)?.volume
-            ?: _state.value.groupMembers.firstOrNull { it.ip == ip }?.volume
-            ?: return null
-        if (!VolumeStep.shouldConsume(current, delta)) return null
-        val next = VolumeStep.next(current, delta) ?: return null
-        VolumeBus.publishVolume(ip, next)
-        // 音量键这条路**不走去抖通道**：用户按一下就要立刻听到变化，
-        // 合并通道是为拖动设计的，按键本来就是离散事件，多一次 60ms 等待只会显得钝。
-        safeLaunch("adjustVolumeByKey") {
-            withContext(Dispatchers.IO) {
-                runCatching { client.send(ip, LinkPlayCommands.playerVolume(next)) }
-                    .onFailure { log("音量键下发失败：${it.message}") }
-            }
-        }
-        log("音量键 → $next")
-        return next
-    }
-
-    /**
-     * 现在能不能接管音量键。
-     *
-     * 活动必须在 ACTION_DOWN 与 ACTION_UP 上给出**一致的**答案，
-     * 否则会出现"按下改了音箱、抬起又改了手机"的双重响应。
-     */
-    fun canHandleVolumeKey(): Boolean {
-        val ip = _state.value.selectedIp ?: return false
-        if (_state.value.online[ip] == false) return false
-        return VolumeBus.volumeOf(ip) != null || _state.value.groupMembers.any { it.ip == ip }
-    }
-
-    /** 开定时关闭（分钟）。0 = 取消。原厂设备菜单第四项。 */
-    fun setSleepTimer(minutes: Int) {
-        val timer = if (minutes <= 0) SleepTimer().cancel()
-        else SleepTimer().start(minutes, System.currentTimeMillis())
-        _state.update { it.copy(sleepTimer = timer, nowMs = System.currentTimeMillis()) }
-        log(if (timer.active) "定时关闭：${minutes} 分钟后停止" else "定时关闭：已取消")
-    }
-
-    fun cancelSleepTimer() = setSleepTimer(0)
-
-    /**
-     * 首页卡片上拖音量（原厂卡片就是这个交互）。
-     *
-     * 走 [deviceVolumeChannel] 合并通道：拖动会连续产生几十个值，
-     * 每个都发一次 HTTP 会把老固件压垮，合并只保留最新值。
-     */
-    fun setCardVolume(device: SavedDevice, volume: Int) {
-        val ip = device.ip
-        VolumeBus.publishVolume(ip, volume)
-        deviceVolumeChannel.trySend(ip to volume.coerceIn(0, 100))
-    }
-
-    // ---- 勾选式分组（Sonos Grouping 菜单）----
-
-    
-
-
-
-
-
-
-
-    
-
-    /**
-     * 播放/暂停切换（媒体播放器惯例：按钮显示**将发生的动作**）。
-     *
-     * 主页聚合条、底部大按钮都调它 —— 共用一处判定，才不会"按钮说暂停、其实还在放"。
-     */
-    fun togglePlayAll() {
-        if (_state.value.anyPlaying) pauseAll() else playAll()
-    }
-
-    /**
-     * 单台设备的播放/暂停（卡片上的小按钮）。
-     *
-     * 组内从机不单独控制：它跟随主机，单独下发只会得到一条无效命令。
-     * 界面已对从机隐藏该按钮，这里再兜一层。
-     */
-    fun toggleDevicePlay(device: SavedDevice) {
-        val st = _state.value
-        val member = UuidMatch.find(device.uuid, st.groupMembers) { it.uuid }
-        if (member != null && !member.isMaster) {
-            _state.update { it.copy(multiroomNote = "「${device.title}」跟随主机播放，请在主机上控制") }
-            return
-        }
-        val playing = st.cards[device.uuid]?.playing == true
-        run(if (playing) "暂停 ${device.title}" else "播放 ${device.title}") {
-            val ok: Boolean = withContext(Dispatchers.IO) {
-                runCatching {
-                    if (playing) UpnpRendererClient.ofDevice(device.ip).pause()
-                    else UpnpRendererClient.ofDevice(device.ip).play()
-                    true
-                }.getOrDefault(false)
-            }
-            if (!ok) {
-                withContext(Dispatchers.IO) {
-                    runCatching {
-                        client.send(device.ip, if (playing) "setPlayerCmd:pause" else "setPlayerCmd:play")
-                    }
-                }
-            }
-            delay(800)
-            refreshDevicesInGroup()
-        }
-    }
-
-    /**
-     * 全部播放：让「组内所有音箱一起响」。
-     *
-     * 原厂的语义就是这样 —— 组已经建立后，只要主机开始播放，从机自动跟着响，
-     * 所以这里不需要对每台设备下发命令，**只对主机下发**即可。
-     *
-     * 真机验证（2026-11-03）：主机 `.164`（`plicount=28, pause`）收到
-     * `AVTransport.Play` 后 `status=play`，返回 200。
-     */
-    fun playAll() {
-        run("全部播放") {
-            val st = _state.value
-            val masterIp = st.groupMasterIp ?: st.selectedIp ?: st.saved.firstOrNull()?.ip
-            if (masterIp == null) {
-                _state.update { it.copy(error = "还没有音箱") }
-                return@run
-            }
-            val uuid = st.saved.firstOrNull { it.ip == masterIp }?.uuid
-            val card = uuid?.let { st.cards[it] }
-            if ((card?.plicount ?: 0) <= 0) {
-                // 设备没队列：从本地快照恢复（和设备侧一样只存一份真相）
-                val restored = PlaybackKey.candidates(uuid, masterIp).firstNotNullOfOrNull { key ->
-                    runCatching { store.loadPlayback(key) }.getOrNull()
-                }
-                if (restored == null || restored.items.isEmpty()) {
-                    _state.update { it.copy(error = "音箱上还没有列表，先去「我的音乐」点一首") }
-                    return@run
-                }
-                QueueBus.restore(
-                    deviceIp = masterIp,
-                    items = restored.items,
-                    index = restored.index.coerceIn(0, restored.items.lastIndex),
-                    title = restored.items.getOrNull(restored.index)?.title,
-                    deviceOwned = false,
-                    note = "从上次播放继续",
-                )
-            }
-            val ok: Boolean = withContext(Dispatchers.IO) {
-                runCatching {
-                    UpnpRendererClient.ofDevice(masterIp).play()
-                    true
-                }.getOrDefault(false)
-            }
-            if (!ok) {
-                withContext(Dispatchers.IO) { runCatching { client.send(masterIp, "setPlayerCmd:play") } }
-            }
-            log("全部播放 → ${st.groupMasterName ?: masterIp}（组内 ${st.groupMembers.size.coerceAtLeast(1)} 台）")
-            // 让界面的"在放什么"立刻刷新，不用等 3 秒心跳
-            delay(1200)
-            refreshDevicesInGroup()
-        }
-    }
-
-    /** 全部暂停（组内一起停）。 */
-    fun pauseAll() {
-        run("全部暂停") {
-            val st = _state.value
-            val targets = buildList {
-                st.groupMasterIp?.let { add(it) }
-                if (st.groupMasterIp == null) addAll(st.saved.map { it.ip })
-            }.distinct()
-            targets.forEach { ip ->
-                val ok: Boolean = withContext(Dispatchers.IO) {
-                    runCatching {
-                        UpnpRendererClient.ofDevice(ip).pause()
-                        true
-                    }.getOrDefault(false)
-                }
-                if (!ok) withContext(Dispatchers.IO) { runCatching { client.send(ip, "setPlayerCmd:pause") } }
-            }
-            log("全部暂停 → ${targets.size} 台")
-        }
-    }
-
     /** 立刻重读一遍组内设备（比等 3 秒心跳快）。 */
     private suspend fun refreshDevicesInGroup() {
         val st = _state.value
@@ -1144,65 +912,6 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
             applySnapshot(uuid, snap)
         }
     }
-
-    /**
-     * 按第 [uiIndex] 个预设键（0 基）。
-     *
-     * 原厂 `DeviceContentActivity` 的预设列表就是发 `MCUKeyShortClick:<i+1>`，
-     * 真机 `.164` 回 `OK`。它触发**设备端**存好的动作（电台/歌单），
-     * 所以我们不需要知道内容，只把索引发过去。
-     */
-    fun pressPreset(uiIndex: Int) {
-        val ip = _state.value.selectedIp ?: return
-        run("预设键 ${uiIndex + 1}") {
-            val reply = client.send(ip, LinkPlayCommands.presetKey(uiIndex))
-            log("MCUKeyShortClick:${uiIndex + 1} → $reply")
-            delay(800)
-            refreshDevicesInGroup()
-        }
-    }
-
-    /** 查固件更新：照原厂顺序四条命令读一遍，结果如实展示。 */
-    fun checkFirmware() {
-        val ip = _state.value.selectedIp ?: return
-        run("检查固件更新") {
-            val fw = withContext(Dispatchers.IO) {
-                runCatching {
-                    client.send(ip, LinkPlayCommands.firmwareUpdateStart())
-                    delay(1_500)
-                    val remote = client.send(ip, LinkPlayCommands.firmwareUpdateStatus())
-                    val dl = runCatching { client.send(ip, LinkPlayCommands.firmwareDownloadStatus()) }.getOrNull()
-                    val burn = runCatching { client.send(ip, LinkPlayCommands.firmwareBurnPercent()) }.getOrNull()
-                    FirmwareUpdate.of(remote, dl, burn)
-                }.getOrElse { t ->
-                    log("检查固件失败：${t.message}")
-                    FirmwareUpdate()
-                }
-            }
-            _state.update { it.copy(firmware = fw) }
-            log("固件：${fw.phase}（status=${fw.statusRaw}）")
-        }
-    }
-
-    /** 开始升级（界面只在 [FirmwareUpdate.canStart] 时放开这个按钮）。 */
-    fun startFirmwareUpdate() {
-        val ip = _state.value.selectedIp ?: return
-        run("开始升级固件") {
-            log("开始下载固件…")
-            client.send(ip, "setMvRemoteUpdateStart")
-            repeat(40) {
-                delay(3_000)
-                val dl = runCatching { client.send(ip, LinkPlayCommands.firmwareDownloadStatus()) }.getOrNull()
-                val burn = runCatching { client.send(ip, LinkPlayCommands.firmwareBurnPercent()) }.getOrNull()
-                val fw = FirmwareUpdate.of(_state.value.firmware.statusRaw?.toString(), dl, burn)
-                _state.update { it.copy(firmware = fw) }
-                log("固件：${fw.phase}")
-                if (fw.burnPercent >= 100) return@run
-            }
-        }
-    }
-
-    
 
     /** 刷新「我的音乐」六个入口的数量。 */
     fun refreshMusicCounts() {
@@ -1272,12 +981,6 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    
-
-    
-
-
-
     // ---- 多房间 ----
 
     /**
@@ -1294,41 +997,6 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
      * 从机可能短暂离开原网段。失败时它会自己连回原来的 Wi-Fi，但要等一会儿。
      */
     
-
-
-
-
-
-
-
-    
-
-
-
-
-
-
-
-
-
-    fun restoreToDefault() {
-        val ip = _state.value.selectedIp ?: return
-        run("restoreToDefault") { client.send(ip, LinkPlayCommands.restoreToDefault()) }
-    }
-
-    /** 从设备页返回首页：清掉选中态，但保留已保存列表。 */
-    fun leaveDevice() {
-        _state.update {
-            it.copy(
-                selectedIp = null,
-                selectedLocation = null,
-                selectedUuid = null,
-                status = null,
-                error = null,
-            )
-        }
-    }
-
     fun clearLog() = _state.update { it.copy(log = emptyList()) }
 
     private fun run(label: String, block: suspend () -> Unit) {
@@ -1351,8 +1019,13 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- 多房间：全部委托给 GroupController（见该类注释）----
 
-    private val groups = GroupController(
-        object : GroupController.GroupHost {
+    /**
+     * 控制器共享的能力面实现。
+     *
+     * 抽成一个字段而不是每个控制器各写一个匿名对象 —— 各写一份必然漂移
+     * （同一个能力在两处名字/语义不同，正是本项目一直在治的病）。
+     */
+    private val consoleHost = object : ConsoleHost {
             override val state get() = _state
             override fun update(transform: (ConsoleUiState) -> ConsoleUiState) = _state.update(transform)
             override fun log(message: String) = this@ConsoleViewModel.log(message)
@@ -1372,11 +1045,20 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                 safeLaunch("log") { refreshDevicesInGroup() }
             }
             override fun renderer(device: SavedDevice): UpnpRendererClient = rendererFor(device)
-            override fun pushDeviceVolume(ip: String, volume: Int) {
-                deviceVolumeChannel.trySend(ip to volume)
+        override fun pushDeviceVolume(ip: String, volume: Int) {
+            deviceVolumeChannel.trySend(ip to volume)
+        }
+        override suspend fun refreshCards() = refreshDevicesInGroup()
+        override fun loadPlayback(
+            uuid: String?,
+            ip: String,
+        ): io.github.laozhudu.linkplay.protocol.session.PlaybackSession? =
+            PlaybackKey.candidates(uuid, ip).firstNotNullOfOrNull { key ->
+                runCatching { store.loadPlayback(key) }.getOrNull()
             }
-        },
-    )
+    }
+
+    private val groups = GroupController(consoleHost)
 
     fun ungroupCard(device: SavedDevice) = groups.ungroupCard(device)
     fun setCardChannel(device: SavedDevice, channel: Int) = groups.setCardChannel(device, channel)
@@ -1386,6 +1068,28 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     fun selectEverywhere() = groups.selectEverywhere()
     fun applyGrouping() = groups.applyGrouping()
     fun toggleMask(device: SavedDevice) = groups.toggleMask(device)
+
+    // ---- 设备动作：全部委托给 DeviceControl（见该类注释）----
+
+    private val control = DeviceControl(consoleHost)
+
+    fun sendCommand(command: String) = control.sendCommand(command)
+    fun renameDevice(name: String) = control.renameDevice(name)
+    fun switchMode(mode: String) = control.switchMode(mode)
+    fun adjustVolumeByKey(delta: Int): Int? = control.adjustVolumeByKey(delta)
+    fun canHandleVolumeKey(): Boolean = control.canHandleVolumeKey()
+    fun setSleepTimer(minutes: Int) = control.setSleepTimer(minutes)
+    fun cancelSleepTimer() = control.cancelSleepTimer()
+    fun setCardVolume(device: SavedDevice, volume: Int) = control.setCardVolume(device, volume)
+    fun togglePlayAll() = control.togglePlayAll()
+    fun toggleDevicePlay(device: SavedDevice) = control.toggleDevicePlay(device)
+    fun playAll() = control.playAll()
+    fun pauseAll() = control.pauseAll()
+    fun pressPreset(uiIndex: Int) = control.pressPreset(uiIndex)
+    fun checkFirmware() = control.checkFirmware()
+    fun startFirmwareUpdate() = control.startFirmwareUpdate()
+    fun restoreToDefault() = control.restoreToDefault()
+    fun leaveDevice() = control.leaveDevice()
 
     // ---- 诊断 ----
 

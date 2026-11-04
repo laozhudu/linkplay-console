@@ -1,17 +1,12 @@
 package io.github.laozhudu.linkplay.console
 
-import io.github.laozhudu.linkplay.protocol.LinkPlayStatus
 import io.github.laozhudu.linkplay.protocol.LinkPlayCommands
-import io.github.laozhudu.linkplay.protocol.DeviceHttpClient
 import io.github.laozhudu.linkplay.protocol.identity.UuidMatch
 import io.github.laozhudu.linkplay.protocol.multiroom.GroupPlan
 import io.github.laozhudu.linkplay.protocol.multiroom.MultiroomClient
 import io.github.laozhudu.linkplay.protocol.session.SavedDevice
-import io.github.laozhudu.linkplay.protocol.upnp.UpnpRendererClient
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
 
 /**
@@ -25,39 +20,15 @@ import kotlinx.coroutines.withContext
  * 拆分的边界不是"按文件切"，而是**按关注点切**：这里只有"组"相关的东西。
  * 音量、播放控制、设备发现、会话恢复仍在 ViewModel 里，下一轮继续搬。
  *
- * ## 为什么用 [GroupHost] 而不是直接拿 ViewModel
+ * ## 为什么用 [ConsoleHost] 而不是直接拿 ViewModel
  *
  * 这块代码要读写共享状态、要发命令、要跑协程、要拿 UPnP 客户端。
  * 直接传 `ConsoleViewModel` 会形成循环依赖（VM → Controller → VM），
  * 而且控制器会顺手用到不该用的东西。所以只暴露它**真正需要**的 10 个操作，
  * 依赖面一目了然，也方便以后单独测试。
  */
-internal class GroupController(private val host: GroupHost) {
+internal class GroupController(private val host: ConsoleHost) {
 
-    /**
-     * 宿主能力面：控制器需要的全部外部操作。
-     *
-     * 刻意保持很小 —— 每多一个方法，控制器就多一条能"顺手改别人"的路。
-     */
-    internal interface GroupHost {
-        val state: StateFlow<ConsoleUiState>
-        fun update(transform: (ConsoleUiState) -> ConsoleUiState)
-        fun log(message: String)
-        /** 带 busy 闸门的动作执行（与 ViewModel 的 run 同一套语义）。 */
-        fun run(label: String, block: suspend () -> Unit)
-        /** 启动一个协程（异常已被 safeLaunch 收口）。 */
-        fun launch(block: suspend CoroutineScope.() -> Unit)
-        /** 原始 HTTP 客户端（MultiroomClient 这类协议客户端需要它）。 */
-        fun http(): DeviceHttpClient
-        fun send(ip: String, command: String): String
-        fun status(ip: String): LinkPlayStatus
-        /** 探活 + 刷新卡片并**等待完成**（协程内用；原来叫 probeSaved + refreshDevicesInGroup）。 */
-        suspend fun refreshAll()
-        /** 同上但不等（非协程上下文用，内部自己起协程）。 */
-        fun refresh()
-        fun renderer(device: SavedDevice): UpnpRendererClient
-        fun pushDeviceVolume(ip: String, volume: Int)
-    }
 
     
 
