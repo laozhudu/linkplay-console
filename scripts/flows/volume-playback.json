@@ -1,0 +1,23 @@
+{
+  "_说明": "示例流程：音量与播放对账。语法见 docs/76 第六节。",
+  "_注意": "device 的 ip 用路由侧地址；从机在主机 AP 网段时不可达，要用主机代转。",
+  "name": "音量与播放对账",
+  "continue_on_fail": false,
+  "steps": [
+    {"do": "clear"},
+    {"do": "start"},
+    {"do": "wait", "until": "ui:设备", "timeout": 15},
+    {"do": "shot", "as": "01-home"},
+
+    {"do": "tap", "text": "播放"},
+    {"do": "wait", "until": "device:192.168.99.164:status=play", "timeout": 10},
+    {"do": "shot", "as": "02-playing"},
+    {"do": "assert", "that": "device:192.168.99.164:totlen>0"},
+
+    {"do": "tap", "text": "暂停"},
+    {"do": "wait", "until": "device:192.168.99.164:status=pause", "timeout": 8},
+    {"do": "shot", "as": "03-paused"},
+
+    {"do": "audio", "seconds": 6, "expect": "silence"}
+  ]
+}
