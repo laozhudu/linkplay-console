@@ -273,6 +273,14 @@ internal fun ConsoleBody(vm: ConsoleViewModel) {
                     )
                 }
 
+                Tab.Lx -> io.github.laozhudu.linkplay.console.lx.LxSearchScreen(
+                    deviceIp = state.selectedIp.orEmpty(),
+                    location = state.selectedLocation,
+                    deviceUuid = state.selectedUuid,
+                    showBack = false,
+                    onOpenScripts = { sub = SubPage.Scripts },
+                )
+
                 Tab.Sources -> SourcesScreen(
                     state = state,
                     vm = vm,
@@ -315,7 +323,7 @@ internal fun BottomNav(current: Tab, onSelect: (Tab) -> Unit) {
                 modifier = Modifier
                     .clip(AppShapesExpressive.squircle)
                     .clickable { onSelect(t) }
-                    .padding(horizontal = Spacing.xl, vertical = Spacing.xs),
+                    .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(glyph, style = MaterialTheme.typography.titleMedium, color = color)
