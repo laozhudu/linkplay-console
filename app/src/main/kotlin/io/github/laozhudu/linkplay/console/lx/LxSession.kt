@@ -45,7 +45,10 @@ object LxSession {
         val created = LxMusicSdk(engine, LxAssets.musicSdk(context))
         val started = System.currentTimeMillis()
         created.load()
-        LxSourceStatus.loaded(System.currentTimeMillis() - started)
+        LxSourceStatus.loaded(
+            ms = System.currentTimeMillis() - started,
+            bundleVersion = LxAssets.bundleVersion(context),
+        )
         sdkEngine = engine
         sdk = created
         created

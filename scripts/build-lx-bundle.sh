@@ -80,3 +80,10 @@ echo "产物: $OUT"
 echo "大小: $SIZE 字节"
 grep -q "lxSdkCall" "$OUT" || { echo "!! 产物里没有 lxSdkCall，打包失败"; exit 1; }
 echo "自检: 产物包含 lxSdkCall ✓"
+
+# 把上游 tag 写进 assets，让 App 能在诊断里说出"现在跑的是哪一版"。
+# 为什么要这一步：官方升级后，如果没有这个文件，App 里看到的和实际跑的无法核对，
+# "要不要升级"就永远靠猜。
+VER_FILE="$ROOT/core-lx/src/main/assets/lx-bundle-version.txt"
+printf '%s\n' "$LX_TAG" > "$VER_FILE"
+echo "   bundle 版本已写入 ${VER_FILE#$ROOT/} → $LX_TAG"

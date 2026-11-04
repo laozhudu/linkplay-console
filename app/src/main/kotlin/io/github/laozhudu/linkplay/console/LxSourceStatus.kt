@@ -44,7 +44,9 @@ object LxSourceStatus {
         it.copy(phase = "加载中", ok = null, error = null, atMs = System.currentTimeMillis())
     }
 
-    fun loaded(ms: Long) = mutate { it.copy(phase = "已加载", loadMs = ms) }
+    fun loaded(ms: Long, bundleVersion: String? = null) = mutate {
+        it.copy(phase = "已加载", loadMs = ms, bundleVersion = bundleVersion ?: it.bundleVersion)
+    }
 
     fun searched(source: String, query: String, count: Int, ms: Long) = mutate {
         it.copy(
@@ -112,7 +114,11 @@ object LxSourceStatus {
             if (s.phase == null) {
                 appendLine("  还没跑过自检（启动时会自动跑一次）")
             } else {
-            appendLine("  引擎=${s.phase}" + if (s.loadMs > 0) "（加载 ${s.loadMs}ms）" else "")
+            appendLine(
+                "  引擎=${s.phase}" +
+                    (if (s.loadMs > 0) "（加载 ${s.loadMs}ms）" else "") +
+                    (s.bundleVersion?.let { "  bundle=$it" } ?: ""),
+            )
             if (s.count >= 0) {
                 appendLine(
                     "  自检=搜「${s.query}」@${s.source} → ${s.count} 条 / ${s.searchMs}ms" +
@@ -159,4 +165,6 @@ data class LxStatus(
     /** 最近一次投送结果（null = 还没投过）。 */
     val castNote: String? = null,
     val castOk: Boolean? = null,
+    /** bundle 来自洛雪官方哪个 tag —— "要不要跟着官方升级"靠它判断。 */
+    val bundleVersion: String? = null,
 )
