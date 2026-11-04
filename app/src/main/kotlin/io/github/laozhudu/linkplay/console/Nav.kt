@@ -15,4 +15,9 @@ internal enum class Tab(val label: String, val glyph: String) {
 }
 
 /** 二级页面：从一级页推进去，返回即回一级。 */
-internal enum class SubPage { Nas, LocalQueue, Library, Radio, Settings, Provisioning, DeviceContent, Online, Wps, Diagnostics }
+internal enum class SubPage {
+    Nas, LocalQueue, Library, Radio, Settings, Provisioning, DeviceContent, Online, Wps, Diagnostics,
+
+    /** 洛雪音源脚本（装了什么 / 哪支在用 / 导入新的）。 */
+    Scripts,
+}

@@ -161,6 +161,7 @@ object AppDiagnostics {
     fun clear(context: Context) {
         log.clear()
         ActionTiming.clear()
+        io.github.laozhudu.linkplay.console.lx.ScriptSourceStatus.clear()
         io.github.laozhudu.linkplay.protocol.remote.CommandTrace.DEFAULT.clear()
         store(context).delete(ISSUE_FILE)
     }

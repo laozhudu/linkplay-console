@@ -167,6 +167,10 @@ internal fun ConsoleBody(vm: ConsoleViewModel) {
                 onBack = { sub = null },
             )
 
+            SubPage.Scripts -> io.github.laozhudu.linkplay.console.lx.ScriptsScreen(
+                onBack = { sub = null },
+            )
+
             SubPage.Settings -> DeviceSettingsScreen(
                 state = state,
                 vm = vm,
@@ -270,6 +274,7 @@ internal fun ConsoleBody(vm: ConsoleViewModel) {
                     onOpenLocal = { sub = SubPage.LocalQueue },
                     onOpenRadio = { sub = SubPage.Radio },
                     onOpenSettings = { sub = SubPage.Settings },
+                    onOpenScripts = { sub = SubPage.Scripts },
                     onGoDevices = { tab = Tab.Devices },
                 )
             }

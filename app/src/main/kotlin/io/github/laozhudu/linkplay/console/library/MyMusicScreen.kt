@@ -61,6 +61,7 @@ fun MyMusicScreen(
     onOpenRadio: () -> Unit,
     onOpenLibrary: () -> Unit,
     onOpenDeviceSettings: () -> Unit,
+    onOpenScripts: () -> Unit,
     onGoDevices: () -> Unit = {},
 ) {
     // 进页面刷一次：数量会随"刚导入的歌 / 刚连的 NAS / 刚建的歌单"变化，
@@ -175,6 +176,11 @@ fun MyMusicScreen(
             }
         }
         item {
+            // 洛雪音源脚本：搜索结果能不能放，取决于这里装了什么（洛雪只负责搜）
+            AppCard(onClick = onOpenScripts) {
+                SectionTitle("洛雪音源脚本", "装了几支、哪支在用 —— 没有脚本搜到也放不了")
+            }
+
             AppCard(onClick = onOpenDeviceSettings) {
                 SectionTitle("音箱设置", "改名 · 固件 · 预设键 · 定时关闭")
             }
