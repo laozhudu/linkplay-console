@@ -249,92 +249,6 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     private val _state = MutableStateFlow(ConsoleUiState())
     val state: StateFlow<ConsoleUiState> = _state.asStateFlow()
 
-    init {
-        registerDiagnostics()
-        // 上一次运行是否崩过：有就在首页顶部给一条可点开的横幅。
-        // 这是"用户能截图给我"的入口 —— 系统弹窗只给模板文案，我们给堆栈。
-        runCatching {
-            val crash = CrashGuard.lastReport(app)
-            if (crash != null) _state.update { it.copy(lastCrashAtStart = crash) }
-        }
-        // 首页一进来就有内容：读已保存设备，并后台探活（不清空界面、不阻塞）
-        reloadSaved()
-        probeSaved()
-        restoreLastDevice()
-        // 队列恢复必须在**启动时**做，而不是等用户点开播放页：
-        // 否则"重开 App 列表是空的"会被当成恢复失效
-        restoreLastQueue()
-        // 首页多房间卡片的低频心跳：不在播放页时也能跟上设备侧/遥控器的音量变化
-        safeLaunch("ConsoleViewModel") {
-            while (true) {
-                delay(2500)
-                val masterIp = _state.value.groupMasterIp ?: continue
-                withContext(Dispatchers.IO) {
-                    runCatching {
-                        val st = PlayerStatus.parse(client.send(masterIp, "getPlayerStatus"))
-                        VolumeBus.publish(masterIp, st.volume, st.mute)
-                    }
-                }
-            }
-        }
-        // 首页卡片心跳：每 3 秒逐台读 getPlayerStatus（原厂设备列表就显示每台的曲名/音量）。
-        // 为什么不用 1 秒：卡片信息变化慢，3 秒够了；设备只有 2 台，但别把老固件打爆。
-        safeLaunch("ConsoleViewModel") {
-            while (true) {
-                delay(3_000)
-                val saved = _state.value.saved
-                if (saved.isEmpty()) continue
-                for (d in saved) {
-                    if (_state.value.online[d.uuid] == false) continue
-                    // 只轮询"路由器侧够得着"的设备：入组的从机在主机 AP 网段里，
-                    // 从这边直接连必然超时（真机实测），跳过去，靠主机的 slave_list 表达它的状态。
-                    if (_state.value.groupedUnder.containsKey(UuidMatch.key(d.uuid))) continue
-                    // 走**唯一**的取数入口：一次拿全（含电量/声道/设备名），
-                    // 再由 applySnapshot 合并进卡片。之前这里自己拼一张全新 DeviceCard 整体覆盖，
-                    // 把另一条通道刚写的电量清成 null —— 用户报的"电量时有时无"就是这个。
-                    val known = _state.value.cards[d.uuid]?.profile
-                    val snap = withContext(Dispatchers.IO) {
-                        if (known == DeviceProfile.GENERIC_DMR) snapshots.readGenericDmr(d.ip)
-                        else snapshots.read(d.ip)
-                    } ?: continue
-                    applySnapshot(d.uuid, snap)
-                }
-            }
-        }
-        // 定时关闭的时钟：每秒推进一次，到点下发停止。
-        safeLaunch("ConsoleViewModel") {
-            while (true) {
-                delay(1_000)
-                val now = System.currentTimeMillis()
-                val timer = _state.value.sleepTimer
-                if (now - _state.value.nowMs < 900 && !timer.active) continue
-                _state.update { it.copy(nowMs = now) }
-                if (timer.isDue(now)) {
-                    val ip = _state.value.selectedIp
-                        ?: _state.value.saved.firstOrNull()?.ip
-                    _state.update { it.copy(sleepTimer = SleepTimer()) }
-                    if (ip != null) {
-                        withContext(Dispatchers.IO) {
-                            runCatching { client.send(ip, "setPlayerCmd:stop") }
-                        }
-                        log("定时关闭到点：已停止 $ip")
-                        QueueBus.stopped()
-                    }
-                }
-            }
-        }
-        safeLaunch("ConsoleViewModel") {
-            for ((ip, v) in deviceVolumeChannel) {
-                withContext(Dispatchers.IO) {
-                    // 原厂做法：UPnP RenderingControl 优先，httpapi 兜底（见 DeviceVolumeControl）
-                    runCatching { DeviceVolumeControl.setVolume(ip, v) }
-                        .onFailure { log("调音量失败：${it.message}") }
-                }
-                delay(60)
-            }
-        }
-    }
-
     /**
      * 重开 App 时自动回到上次那台设备。
      *
@@ -369,7 +283,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
      * 而两者都在同一个 init 里，这里按"当前已选设备"读，拿不到就退回上次的记录。
      */
     private fun restoreLastQueue() {
-        safeLaunch("ConsoleViewModel") {
+        safeLaunch("restoreLastQueue") {
             delay(150)
             val uuid = _state.value.selectedUuid
             val ip = _state.value.selectedIp ?: return@safeLaunch
@@ -440,7 +354,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     private fun probeSaved() {
         val targets = _state.value.saved
         if (targets.isEmpty()) return
-        safeLaunch("ConsoleViewModel") {
+        safeLaunch("probeSaved") {
             val result = mutableMapOf<String, Boolean>()
             for (d in targets) {
                 // 走唯一的取数入口（最短路径：GetControlDeviceInfo + getPlayerStatus）
@@ -569,13 +483,14 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
      * + `getPlayerStatus`（曲名/进度/播放态）—— 真机 80ms + 32ms。
      * UPnP 不通时自动退 `getStatusEx`，电量不会因为 UPnP 挂了而消失。
      */
-    private val snapshots: DeviceSnapshotReader by lazy {
+    // 不用 by lazy：DeviceSnapshotReader 构造只存字段（无副作用），
+    // 而 lazy 会引入"delegate 尚未初始化就被访问"这一整类故障（见类末尾启动流程的注释）。
+    private val snapshots: DeviceSnapshotReader =
         DeviceSnapshotReader(
             http = client,
             controlInfo = { ip -> runCatching { rendererByIp(ip).controlDeviceInfo() }.getOrNull() },
             dmrProbe = { ip -> probeGenericDmr(ip) },
         )
-    }
 
     /** 取一台设备的 UPnP 客户端（按 ip 缓存；描述拉一次就够）。 */
     private fun rendererByIp(ip: String): UpnpRendererClient {
@@ -748,7 +663,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     fun scan() {
         if (_state.value.scanning) return
         _state.update { it.copy(scanning = true, error = null, filteredOutCount = 0) }
-        safeLaunch("ConsoleViewModel") {
+        safeLaunch("scan") {
             val lock = acquireMulticastLock()
             try {
                 val all = withContext(Dispatchers.IO) { runCatching { discovery.discover() }.getOrDefault(emptyList()) }
@@ -802,7 +717,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         if (raw.isEmpty()) return
         val ip = raw.substringBefore(':')
         val port = raw.substringAfter(':', "80").toIntOrNull() ?: 80
-        safeLaunch("ConsoleViewModel") {
+        safeLaunch("addManual") {
             _state.update { it.copy(busy = true, error = null) }
             val outcome = withContext(Dispatchers.IO) { runCatching { identify(ip, port) } }
             _state.update { it.copy(busy = false) }
@@ -1042,7 +957,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         VolumeBus.publishVolume(ip, next)
         // 音量键这条路**不走去抖通道**：用户按一下就要立刻听到变化，
         // 合并通道是为拖动设计的，按键本来就是离散事件，多一次 60ms 等待只会显得钝。
-        safeLaunch("ConsoleViewModel") {
+        safeLaunch("adjustVolumeByKey") {
             withContext(Dispatchers.IO) {
                 runCatching { client.send(ip, LinkPlayCommands.playerVolume(next)) }
                     .onFailure { log("音量键下发失败：${it.message}") }
@@ -1291,7 +1206,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 刷新「我的音乐」六个入口的数量。 */
     fun refreshMusicCounts() {
-        safeLaunch("ConsoleViewModel") {
+        safeLaunch("refreshMusicCounts") {
             val app = getApplication<Application>()
             val local = withContext(Dispatchers.IO) {
                 runCatching { LocalLibrary.query(app).size }.getOrDefault(0)
@@ -1349,7 +1264,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
      * 与 [refreshMusicCounts] 并存，不改动已有调用方。
      */
     fun refreshPlaylistCount() {
-        safeLaunch("ConsoleViewModel") {
+        safeLaunch("refreshPlaylistCount") {
             val lists = withContext(Dispatchers.IO) {
                 runCatching { PlaylistStore.get(getApplication()).count() }.getOrDefault(0)
             }
@@ -1419,7 +1334,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     private fun run(label: String, block: suspend () -> Unit) {
         if (_state.value.busy) return
         _state.update { it.copy(busy = true, error = null) }
-        safeLaunch("ConsoleViewModel") {
+        safeLaunch("run") {
             try {
                 withContext(Dispatchers.IO) { block() }
                 log("$label 完成")
@@ -1443,7 +1358,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
             override fun log(message: String) = this@ConsoleViewModel.log(message)
             override fun run(label: String, block: suspend () -> Unit) = this@ConsoleViewModel.run(label, block)
             override fun launch(block: suspend CoroutineScope.() -> Unit) {
-                safeLaunch("GroupController") { block() }
+                safeLaunch("log") { block() }
             }
             override fun http(): DeviceHttpClient = client
             override fun send(ip: String, command: String): String = client.send(ip, command)
@@ -1454,7 +1369,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
             }
             override fun refresh() {
                 probeSaved()
-                safeLaunch("GroupController") { refreshDevicesInGroup() }
+                safeLaunch("log") { refreshDevicesInGroup() }
             }
             override fun renderer(device: SavedDevice): UpnpRendererClient = rendererFor(device)
             override fun pushDeviceVolume(ip: String, volume: Int) {
@@ -1610,4 +1525,102 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
             acquire()
         }
     }.getOrNull()
+    // ============================================================
+    // 启动流程
+    //
+    // **必须放在所有属性声明之后**。这不是风格问题，是踩过的坑：
+    // 之前 init 块在 `snapshots`（by lazy）声明之前，init 里 probeSaved() 启动的协程
+    // 经 withContext(Dispatchers.IO) 派发到 IO 线程，抢在主线程跑完 init 之前
+    // 访问了 `snapshots` → `Lazy.getValue() on null` → 整个探活协程终止
+    // → 三台设备全部"状态=未探测"（诊断报告 2026-11-04 09:45:34 那条 NPE）。
+    //
+    // Kotlin 按声明顺序初始化字段与 init 块，所以 init 永远放最后。
+    // CI 里有静态检查（scripts/check-init-order.sh）防止再犯。
+    // ============================================================
+
+    init {
+        registerDiagnostics()
+        // 上一次运行是否崩过：有就在首页顶部给一条可点开的横幅。
+        // 这是"用户能截图给我"的入口 —— 系统弹窗只给模板文案，我们给堆栈。
+        runCatching {
+            val crash = CrashGuard.lastReport(app)
+            if (crash != null) _state.update { it.copy(lastCrashAtStart = crash) }
+        }
+        // 首页一进来就有内容：读已保存设备，并后台探活（不清空界面、不阻塞）
+        reloadSaved()
+        probeSaved()
+        restoreLastDevice()
+        // 队列恢复必须在**启动时**做，而不是等用户点开播放页：
+        // 否则"重开 App 列表是空的"会被当成恢复失效
+        restoreLastQueue()
+        // 首页多房间卡片的低频心跳：不在播放页时也能跟上设备侧/遥控器的音量变化
+        safeLaunch("acquireMulticastLock") {
+            while (true) {
+                delay(2500)
+                val masterIp = _state.value.groupMasterIp ?: continue
+                withContext(Dispatchers.IO) {
+                    runCatching {
+                        val st = PlayerStatus.parse(client.send(masterIp, "getPlayerStatus"))
+                        VolumeBus.publish(masterIp, st.volume, st.mute)
+                    }
+                }
+            }
+        }
+        // 首页卡片心跳：每 3 秒逐台读 getPlayerStatus（原厂设备列表就显示每台的曲名/音量）。
+        // 为什么不用 1 秒：卡片信息变化慢，3 秒够了；设备只有 2 台，但别把老固件打爆。
+        safeLaunch("acquireMulticastLock") {
+            while (true) {
+                delay(3_000)
+                val saved = _state.value.saved
+                if (saved.isEmpty()) continue
+                for (d in saved) {
+                    if (_state.value.online[d.uuid] == false) continue
+                    // 只轮询"路由器侧够得着"的设备：入组的从机在主机 AP 网段里，
+                    // 从这边直接连必然超时（真机实测），跳过去，靠主机的 slave_list 表达它的状态。
+                    if (_state.value.groupedUnder.containsKey(UuidMatch.key(d.uuid))) continue
+                    // 走**唯一**的取数入口：一次拿全（含电量/声道/设备名），
+                    // 再由 applySnapshot 合并进卡片。之前这里自己拼一张全新 DeviceCard 整体覆盖，
+                    // 把另一条通道刚写的电量清成 null —— 用户报的"电量时有时无"就是这个。
+                    val known = _state.value.cards[d.uuid]?.profile
+                    val snap = withContext(Dispatchers.IO) {
+                        if (known == DeviceProfile.GENERIC_DMR) snapshots.readGenericDmr(d.ip)
+                        else snapshots.read(d.ip)
+                    } ?: continue
+                    applySnapshot(d.uuid, snap)
+                }
+            }
+        }
+        // 定时关闭的时钟：每秒推进一次，到点下发停止。
+        safeLaunch("acquireMulticastLock") {
+            while (true) {
+                delay(1_000)
+                val now = System.currentTimeMillis()
+                val timer = _state.value.sleepTimer
+                if (now - _state.value.nowMs < 900 && !timer.active) continue
+                _state.update { it.copy(nowMs = now) }
+                if (timer.isDue(now)) {
+                    val ip = _state.value.selectedIp
+                        ?: _state.value.saved.firstOrNull()?.ip
+                    _state.update { it.copy(sleepTimer = SleepTimer()) }
+                    if (ip != null) {
+                        withContext(Dispatchers.IO) {
+                            runCatching { client.send(ip, "setPlayerCmd:stop") }
+                        }
+                        log("定时关闭到点：已停止 $ip")
+                        QueueBus.stopped()
+                    }
+                }
+            }
+        }
+        safeLaunch("acquireMulticastLock") {
+            for ((ip, v) in deviceVolumeChannel) {
+                withContext(Dispatchers.IO) {
+                    // 原厂做法：UPnP RenderingControl 优先，httpapi 兜底（见 DeviceVolumeControl）
+                    runCatching { DeviceVolumeControl.setVolume(ip, v) }
+                        .onFailure { log("调音量失败：${it.message}") }
+                }
+                delay(60)
+            }
+        }
+    }
 }

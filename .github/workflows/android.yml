@@ -59,6 +59,12 @@ jobs:
           echo "本次 versionCode = $CODE"
           echo "LINKPLAY_VERSION_CODE=$CODE" >> "$GITHUB_ENV"
 
+      # init 块必须写在所有类级属性之后。Kotlin 按声明顺序初始化，
+      # init 里启动的协程可能在后面字段还是 null 时就访问它们 —— 编译器不报、单测测不到。
+      # 真实事故见 scripts/check-init-order.py 的文档注释。
+      - name: Check init block ordering
+        run: python3 scripts/check-init-order.py
+
       - name: Protocol unit tests
         run: ./gradlew --no-daemon :core-protocol:test :app:testDebugUnitTest
 

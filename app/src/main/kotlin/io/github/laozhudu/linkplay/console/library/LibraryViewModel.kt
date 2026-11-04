@@ -99,7 +99,7 @@ class LibraryViewModel(
 
     fun refreshAll() {
         _state.update { it.copy(loading = true) }
-        safeLaunch("LibraryViewModel") {
+        safeLaunch("refreshAll") {
             val result = runCatching {
                 withContext(Dispatchers.IO) {
                     localTracks = LocalLibrary.query(getApplication())
@@ -173,7 +173,7 @@ class LibraryViewModel(
             .ifEmpty { listOf(track) }
         val start = PlayFromList.startIndex(list, track.dedupeKey) { it.dedupeKey }
         _state.update { it.copy(busy = true, error = null) }
-        safeLaunch("LibraryViewModel") {
+        safeLaunch("play") {
             try {
                 // 先把整条列表的地址都解析出来：本机文件要登记到 LocalMediaServer 才有可投的 URL
                 val items = withContext(Dispatchers.IO) {
@@ -220,7 +220,7 @@ class LibraryViewModel(
             _state.update { it.copy(error = "歌单名不能为空") }
             return
         }
-        safeLaunch("LibraryViewModel") {
+        safeLaunch("createPlaylist") {
             val id = withContext(Dispatchers.IO) { playlists.createOrGet(name) }
             if (id <= 0) {
                 _state.update { it.copy(error = "歌单数量已到上限（${PlaylistOps.MAX_LISTS} 个）") }
@@ -242,7 +242,7 @@ class LibraryViewModel(
         if (tracks.isEmpty()) return
         val name = PlaylistOps.normalizeName(rawName) ?: return
         _state.update { it.copy(busy = true, error = null) }
-        safeLaunch("LibraryViewModel") {
+        safeLaunch("addToPlaylist") {
             try {
                 val items = withContext(Dispatchers.IO) {
                     tracks.mapNotNull { t ->
@@ -286,7 +286,7 @@ class LibraryViewModel(
         }
         if (_state.value.busy) return
         _state.update { it.copy(busy = true, error = null) }
-        safeLaunch("LibraryViewModel") {
+        safeLaunch("playPlaylist") {
             try {
                 startQueue(list.tracks, startIndex.coerceIn(0, list.tracks.lastIndex), "歌单「${list.name}」")
                 val first = list.tracks.getOrNull(startIndex) ?: list.tracks.first()
@@ -298,7 +298,7 @@ class LibraryViewModel(
     }
 
     fun removeFromPlaylist(listId: Long, index: Int) {
-        safeLaunch("LibraryViewModel") {
+        safeLaunch("removeFromPlaylist") {
             val lists = withContext(Dispatchers.IO) {
                 playlists.removeTrackAt(listId, index)
                 playlists.lists()
@@ -308,7 +308,7 @@ class LibraryViewModel(
     }
 
     fun moveInPlaylist(listId: Long, from: Int, to: Int) {
-        safeLaunch("LibraryViewModel") {
+        safeLaunch("moveInPlaylist") {
             val lists = withContext(Dispatchers.IO) {
                 playlists.moveTrack(listId, from, to)
                 playlists.lists()
@@ -318,7 +318,7 @@ class LibraryViewModel(
     }
 
     fun renamePlaylist(listId: Long, rawName: String) {
-        safeLaunch("LibraryViewModel") {
+        safeLaunch("renamePlaylist") {
             val ok = withContext(Dispatchers.IO) { playlists.rename(listId, rawName) }
             val lists = withContext(Dispatchers.IO) { playlists.lists() }
             _state.update {
@@ -331,7 +331,7 @@ class LibraryViewModel(
     }
 
     fun deletePlaylist(listId: Long) {
-        safeLaunch("LibraryViewModel") {
+        safeLaunch("deletePlaylist") {
             withContext(Dispatchers.IO) { playlists.delete(listId) }
             val lists = withContext(Dispatchers.IO) { playlists.lists() }
             _state.update {
@@ -388,7 +388,7 @@ class LibraryViewModel(
     }
 
     fun toggleFavorite(track: TrackRecord) {
-        safeLaunch("LibraryViewModel") {
+        safeLaunch("toggleFavorite") {
             val isFav = withContext(Dispatchers.IO) { store.favorites.contains(track.dedupeKey) }
             withContext(Dispatchers.IO) {
                 if (isFav) store.favorites.remove(track.dedupeKey) else store.favorites.add(track)
@@ -405,7 +405,7 @@ class LibraryViewModel(
     // ---- 预设键 ----
 
     fun pressPreset(index: Int) {
-        safeLaunch("LibraryViewModel") {
+        safeLaunch("pressPreset") {
             val failure = runCatching {
                 withContext(Dispatchers.IO) {
                     LinkPlayDevice.open(deviceIp, location).pressPreset(index)

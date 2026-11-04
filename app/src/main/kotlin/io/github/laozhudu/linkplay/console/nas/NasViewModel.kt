@@ -104,11 +104,6 @@ class NasViewModel(
     /** 记忆的键：优先设备 UUID；拿不到（比如手动 IP 且未连上）就退回 IP。 */
     private val memoryKey: String = PlaybackKey.of(deviceUuid, rendererIp)
 
-    init {
-        restoreMemory()
-        observeQueue()
-    }
-
     /** 读出「上次连的 NAS / 停在哪层 / 没播完的队列」，只读一次，不自动连接（避免一进页面就发请求）。 */
     private fun restoreMemory() {
         val nas = runCatching { sessions.loadNasSession(memoryKey) }.getOrNull()
@@ -129,7 +124,7 @@ class NasViewModel(
     fun scan() {
         if (_state.value.scanning) return
         _state.update { it.copy(scanning = true, error = null) }
-        safeLaunch("NasViewModel") {
+        safeLaunch("scan") {
             val found = runCatching { withContext(Dispatchers.IO) { discovery.discoverMediaServers() } }
                 .getOrDefault(emptyList())
             _state.update { it.copy(scanning = false, servers = found) }
@@ -206,7 +201,7 @@ class NasViewModel(
 
     fun connect(location: String) {
         _state.update { it.copy(loadingDir = true, error = null) }
-        safeLaunch("NasViewModel") {
+        safeLaunch("connect") {
             try {
                 val desc = withContext(Dispatchers.IO) { UpnpRendererClient.describe(location) }
                 val url = ContentDirectoryClient.controlUrlOf(desc)
@@ -247,7 +242,7 @@ class NasViewModel(
     }
 
     fun openDir(objectId: String, title: String, push: Boolean = true) {
-        safeLaunch("NasViewModel") { browseInto(objectId, title, push) }
+        safeLaunch("openDir") { browseInto(objectId, title, push) }
     }
 
     /**
@@ -409,7 +404,7 @@ class NasViewModel(
         PlayJournal.recordCurrent(getApplication(), items, start)
 
         // 先试「整列表交给设备」：这样 App 退出后设备仍能自己往下播，设备的上一首/下一首也生效
-        safeLaunch("NasViewModel") {
+        safeLaunch("pushQueue") {
             val session = PlaybackSession(
                 deviceUuid = deviceUuid ?: rendererIp,
                 deviceIp = rendererIp,
@@ -447,7 +442,7 @@ class NasViewModel(
 
     /** 订阅服务侧状态：播放进度、控制面掉线都由服务上报。 */
     private fun observeQueue() {
-        safeLaunch("NasViewModel") {
+        safeLaunch("observeQueue") {
             QueueBus.state.collect { run ->
                 _state.update {
                     it.copy(
@@ -478,7 +473,7 @@ class NasViewModel(
         if (_state.value.healing) return
         _state.update { it.copy(healing = true) }
         log("正在重启音箱（约 40 秒）…")
-        safeLaunch("NasViewModel") {
+        safeLaunch("restartRenderer") {
             val ok = withContext(Dispatchers.IO) {
                 val http = DeviceHttpClient()
                 val probe = object : RendererProbe {
@@ -513,7 +508,7 @@ class NasViewModel(
     fun stopQueue() {
         QueuePlaybackService.stop(getApplication())
         // 停止后仍要在音箱侧真正停下：服务只负责不再投新曲
-        safeLaunch("NasViewModel") {
+        safeLaunch("stopQueue") {
             withContext(Dispatchers.IO) {
                 runCatching {
                     val c = if (!rendererLocation.isNullOrBlank()) {
@@ -545,5 +540,12 @@ class NasViewModel(
             !entry.isContainer && entry.url?.contains("audio", ignoreCase = true) != false
 
         val REQUIRED_SERVICE = UpnpServices.AV_TRANSPORT
+    }
+    // 启动流程：**必须放在所有属性声明之后**（Kotlin 按声明顺序初始化字段与 init 块）。
+    // 详见 ConsoleViewModel 类末尾的说明与 scripts/check-init-order.py。
+
+    init {
+        restoreMemory()
+        observeQueue()
     }
 }

@@ -73,7 +73,7 @@ class ProvisioningViewModel : ViewModel() {
     fun findDevice() {
         if (_state.value.finding) return
         _state.update { it.copy(finding = true, error = null, findLog = emptyList()) }
-        safeLaunch("ProvisioningViewModel") {
+        safeLaunch("findDevice") {
             try {
                 val found = withContext(Dispatchers.IO) { discovery.discover() }
                 log("SSDP 返回 ${found.size} 个响应")
@@ -115,7 +115,7 @@ class ProvisioningViewModel : ViewModel() {
         if (_state.value.scanning) return
         val ip = _state.value.deviceIp
         _state.update { it.copy(scanning = true, error = null, aps = emptyList()) }
-        safeLaunch("ProvisioningViewModel") {
+        safeLaunch("scanNetworks") {
             try {
                 val list = withContext(Dispatchers.IO) { client.scanAccessPoints(ip) }
                 _state.update { it.copy(scanning = false, aps = list.sortedByDescending { it.rssi ?: -999 }) }
@@ -200,7 +200,7 @@ class ProvisioningViewModel : ViewModel() {
             )
         }
 
-        safeLaunch("ProvisioningViewModel") {
+        safeLaunch("submit") {
             val channel = s.selectedAp.channel.takeIf { it > 0 } ?: 0
             val sent = runCatching {
                 withContext(Dispatchers.IO) {
