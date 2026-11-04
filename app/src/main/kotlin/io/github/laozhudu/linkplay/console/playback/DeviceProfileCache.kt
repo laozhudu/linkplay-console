@@ -1,5 +1,6 @@
 package io.github.laozhudu.linkplay.console.playback
 
+import io.github.laozhudu.linkplay.protocol.dlna.DeviceCapabilities
 import io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile
 
 /**
@@ -21,22 +22,38 @@ import io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile
  */
 object DeviceProfileCache {
 
-    private val profiles = java.util.concurrent.ConcurrentHashMap<String, DeviceProfile>()
+    private val entries = java.util.concurrent.ConcurrentHashMap<String, Entry>()
 
-    fun put(ip: String, profile: DeviceProfile) {
+    private data class Entry(val profile: DeviceProfile, val capabilities: DeviceCapabilities)
+
+    /**
+     * 写缓存。
+     *
+     * 为什么要一起存 capabilities：起播路径问的是"能不能走设备侧 PlayQueue"，
+     * 那**是能力**不是类型。只存 profile 的话，这里又得写一遍
+     * `profile != GENERIC_DMR` 的推断 —— 同一个判据两处维护，必然漂移。
+     */
+    fun put(ip: String, profile: DeviceProfile, capabilities: DeviceCapabilities) {
         if (ip.isBlank()) return
-        profiles[ip] = profile
+        entries[ip] = Entry(profile, capabilities)
     }
 
     /**
      * 取能力档。没记录过就返回 [DeviceProfile.LINKPLAY] —— 见类注释，宁可按"功能全开"处理，
      * 也不要因为一次没探测到就把已有的设备侧队列关掉。
      */
-    fun of(ip: String): DeviceProfile = profiles[ip] ?: DeviceProfile.LINKPLAY
+    fun of(ip: String): DeviceProfile = entries[ip]?.profile ?: DeviceProfile.LINKPLAY
+
+    /**
+     * 取能力表。没记录过就返回 [DeviceCapabilities.LINKPLAY] ——
+     * 与 [of] 的默认一致：宁可按功能全开处理，也不要把已有设备的设备侧队列关掉。
+     */
+    fun capabilitiesOf(ip: String): DeviceCapabilities =
+        entries[ip]?.capabilities ?: DeviceCapabilities.LINKPLAY
 
     /** 这台设备能不能用 LinkPlay 私有的设备侧队列（PlayQueue）。 */
-    fun supportsDeviceQueue(ip: String): Boolean = of(ip) != DeviceProfile.GENERIC_DMR
+    fun supportsDeviceQueue(ip: String): Boolean = capabilitiesOf(ip).supportsPlayQueue
 
     /** 测试用：清空缓存，避免用例之间互相污染。 */
-    fun clear() = profiles.clear()
+    fun clear() = entries.clear()
 }

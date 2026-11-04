@@ -61,6 +61,14 @@ data class DeviceCapabilities(
     val supportsNextPrev: Boolean = false,
     /** 静音（RenderingControl.SetMute）。 */
     val supportsMute: Boolean = false,
+    /**
+     * 声道切换（0 立体声 / 1 仅左 / 2 仅右）。
+     *
+     * LinkPlay 走 `RenderingControl.SetChannel`（真机实测：不依赖组网，独立设备也能切）；
+     * 通用渲染器没有这个动作 → false，界面据此**不渲染声道那一格**，
+     * 而不是画一个按了没反应的 LR。
+     */
+    val supportsChannel: Boolean = false,
 ) {
     companion object {
         /** LinkPlay 系：实测全能力（含私有 PlayQueue 与 httpapi）。 */
@@ -73,6 +81,7 @@ data class DeviceCapabilities(
             supportsSeek = true,
             supportsNextPrev = true,
             supportsMute = true,
+            supportsChannel = true,
         )
 
         /** 什么都没有（不可控设备）。 */
@@ -95,6 +104,9 @@ data class DeviceCapabilities(
             supportsSeek = true,
             supportsNextPrev = false,
             supportsMute = hasRenderingControl,
+            // SetChannel 虽是标准 RenderingControl 的可选动作，实测 AirReceiver 不认；
+            // 按"能不能真的做到"给 false，不给按了没反应的按钮
+            supportsChannel = false,
         )
     }
 }

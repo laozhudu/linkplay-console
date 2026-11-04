@@ -11,6 +11,7 @@ import io.github.laozhudu.linkplay.protocol.DeviceHttpClient
 import io.github.laozhudu.linkplay.protocol.LinkPlayCommands
 import io.github.laozhudu.linkplay.protocol.LinkPlayStatus
 import io.github.laozhudu.linkplay.protocol.dlna.DescriptionEndpoints
+import io.github.laozhudu.linkplay.protocol.dlna.DeviceCapabilities
 import io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile
 import io.github.laozhudu.linkplay.protocol.dlna.detect
 import io.github.laozhudu.linkplay.protocol.identity.LinkPlayIdentity
@@ -106,6 +107,27 @@ data class DeviceCard(
      * 这是项目铁律明确禁止的。判档要拉描述，所以由探活时算一次、之后随轮询带下去。
      */
     val profile: DeviceProfile = DeviceProfile.UNKNOWN,
+    /**
+     * 这台设备**实际具备**的能力 —— 界面判断"显示哪些入口"的**唯一判据**。
+     *
+     * ## 为什么有了 profile 还要这个
+     *
+     * `profile` 是**类型标签**（"这是音箱 / 这是通用 DLNA"），用来显示文字。
+     * 但"要不要渲染屏蔽按钮"不该问"它是什么类型"，该问"它有没有 multiroom 能力"。
+     *
+     * 按类型判断的问题：加第三类设备（电视 / 未来的蓝牙）时，每个判断点都要加一个分支，
+     * 而且必然有地方漏。按能力位判断：新设备只要能力表填对，界面自动正确。
+     *
+     * 这是 HomeKit（Service）/ Matter（Cluster）的通行做法 —— 能力是"最低独立功能单元"，
+     * 设备类型只是能力的组合清单。
+     *
+     * ## 为什么默认 NONE 而不是 LINKPLAY
+     *
+     * 卡片是探活后才填的。空卡片（还没探测）本来就不该显示任何操作入口。
+     * 而界面层 `DeviceCardRow` 的默认值是 `LINKPLAY`（保持"未探测时按功能全开"的既有行为），
+     * 两者默认值不同是**有意的**：卡片缺数据 ≠ 界面要降级。
+     */
+    val capabilities: DeviceCapabilities = DeviceCapabilities.NONE,
     /**
      * 这台设备**答过**的取数通道（累积）。
      *
@@ -364,17 +386,17 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                     // 名字/固件等来自快照；touch 负责写回本地记录（名字以设备 DeviceName 为准）
                     touch(d.uuid, d.ip, snap)
                     // 能答 getStatusEx 就是 LinkPlay 的私有 httpapi —— 卡片据此显示类型标签
-                    putCardProfile(d.uuid, DeviceProfile.LINKPLAY)
+                    putCardProfile(d.uuid, DeviceProfile.LINKPLAY, DeviceCapabilities.LINKPLAY)
                     applySnapshot(d.uuid, snap)
                 } else {
                     result[d.uuid] = false
                     // ① 先看它是不是「通用 DLNA 渲染器」：这类设备**永远**答不上 httpapi，
                     //    但描述里的 AVTransport 在，一样能投流。不认这一档的话，
                     //    电视盒子会被判成"离线"，卡片上全是点不动的入口。
-                    val upnpProfile = withContext(Dispatchers.IO) { profileOfSaved(d) }
+                    val (upnpProfile, upnpCaps) = withContext(Dispatchers.IO) { profileOfSaved(d) }
                     if (upnpProfile == DeviceProfile.GENERIC_DMR) {
                         result[d.uuid] = true
-                        putCardProfile(d.uuid, DeviceProfile.GENERIC_DMR)
+                        putCardProfile(d.uuid, DeviceProfile.GENERIC_DMR, upnpCaps)
                         continue
                     }
                     // ② IP 变了：扫一次，看能不能按 uuid 找回来
@@ -550,17 +572,20 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
      * 探活时用来认「通用 DLNA 渲染器」：它答不上 httpapi 是**正常**的，不是离线。
      * 依次试保存的 LOCATION、再试 LinkPlay 的固定路径（手动填 IP 添加的没有 LOCATION）。
      */
-    private fun profileOfSaved(d: SavedDevice): DeviceProfile {
+    private fun profileOfSaved(d: SavedDevice): Pair<DeviceProfile, DeviceCapabilities> {
         val urls = buildList {
             d.location?.takeIf { it.isNotBlank() }?.let { add(it) }
             addAll(DescriptionEndpoints.candidates(d.ip, 49152))
         }.distinct()
         for (url in urls) {
             val desc = runCatching { UpnpRendererClient.describe(url) }.getOrNull() ?: continue
-            val (profile, _) = detect(desc, httpapiReachable = false)
-            if (profile != DeviceProfile.UNKNOWN) return profile
+            // 这里以前是 `val (profile, _) = detect(...)` —— 能力表被 `_` 丢掉了，
+            // 于是 app 层 0 处消费 DeviceCapabilities，界面只能按 profile 判断。
+            // 现在两个都要：profile 用于显示标签，capabilities 用于决定渲染哪些入口。
+            val detected = detect(desc, httpapiReachable = false)
+            if (detected.first != DeviceProfile.UNKNOWN) return detected
         }
-        return DeviceProfile.UNKNOWN
+        return DeviceProfile.UNKNOWN to DeviceCapabilities.NONE
     }
 
     /**
@@ -570,12 +595,19 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
      * 缓存是给起播路径看的（决定要不要走设备侧 PlayQueue）。
      * 只写一处就会出现"界面隐藏了组网、但起播还在硬推 PlayQueue"这种半截状态。
      */
-    private fun putCardProfile(uuid: String, profile: DeviceProfile) {
+    private fun putCardProfile(
+        uuid: String,
+        profile: DeviceProfile,
+        capabilities: DeviceCapabilities = DeviceCapabilities.NONE,
+    ) {
         _state.value.saved.firstOrNull { it.uuid == uuid }?.ip?.let { ip ->
-            io.github.laozhudu.linkplay.console.playback.DeviceProfileCache.put(ip, profile)
+            io.github.laozhudu.linkplay.console.playback.DeviceProfileCache.put(ip, profile, capabilities)
         }
         _state.update { st ->
-            st.copy(cards = st.cards + (uuid to (st.cards[uuid] ?: DeviceCard()).copy(profile = profile)))
+            st.copy(
+                cards = st.cards + (uuid to (st.cards[uuid] ?: DeviceCard())
+                    .copy(profile = profile, capabilities = capabilities)),
+            )
         }
     }
 
