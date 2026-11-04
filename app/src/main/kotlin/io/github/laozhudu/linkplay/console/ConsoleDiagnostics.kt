@@ -12,6 +12,7 @@ import io.github.laozhudu.linkplay.console.nas.NasSourceStatus
 import io.github.laozhudu.linkplay.console.online.SubsonicSourceStatus
 import io.github.laozhudu.linkplay.console.provisioning.ProvisionSourceStatus
 import io.github.laozhudu.linkplay.console.radio.RadioSourceStatus
+import io.github.laozhudu.linkplay.console.voice.VoiceSourceStatus
 import io.github.laozhudu.linkplay.console.playback.QueueBus
 import io.github.laozhudu.linkplay.console.session.SessionRestore
 import io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile
@@ -173,6 +174,14 @@ internal class ConsoleDiagnostics(
             "配网",
             { if (ProvisionSourceStatus.snapshot().failure != null) Severity.WARN else Severity.INFO },
         ) { ProvisionSourceStatus.render() }
+
+        // 语音 —— 第六个盲区（`docs/65` 批次 1）。
+        // 三段（识别 / 意图 / 执行）必须分开，否则"语音不管用"只能靠问用户说哪句话。
+        AppDiagnostics.sections.register(
+            "source-voice",
+            "语音",
+            { if (VoiceSourceStatus.snapshot().failure != null) Severity.WARN else Severity.INFO },
+        ) { VoiceSourceStatus.render() }
 
         // 内容源 · NAS —— 七个盲区里的第一个（`docs/61` 的施工顺序），
         // 选它打头是因为 `docs/60` 要改 NAS 的推流路径，改之前必须先能看见现在的行为。

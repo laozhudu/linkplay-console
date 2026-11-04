@@ -3,6 +3,7 @@ package io.github.laozhudu.linkplay.console.playback
 import io.github.laozhudu.linkplay.protocol.voice.VoiceIntent
 import io.github.laozhudu.linkplay.protocol.voice.IntentRouter
 import io.github.laozhudu.linkplay.console.voice.VoiceController
+import io.github.laozhudu.linkplay.console.voice.VoiceSourceStatus
 import androidx.compose.runtime.DisposableEffect
 import android.graphics.BitmapFactory
 import androidx.compose.animation.core.Spring
@@ -186,10 +187,21 @@ fun PlayerScreen(
         voice.start(
             onResult = { text ->
                 listening = false
-                voiceNote = handleVoiceIntent(IntentRouter.route(text), vm)
+                // 三段分开记：识别到了什么 → 匹配到什么意图 → 执行结果。
+                // 只记最后那句提示的话，"没匹配到意图"和"执行失败"就分不开了
+                VoiceSourceStatus.heard(text)
+                val intent = IntentRouter.route(text)
+                val note = handleVoiceIntent(intent, vm)
+                VoiceSourceStatus.routed(
+                    intent = voiceIntentName(intent),
+                    result = note,
+                    matched = intent !is VoiceIntent.Unknown,
+                )
+                voiceNote = note
             },
             onError = { msg ->
                 listening = false
+                VoiceSourceStatus.failed(msg)
                 voiceNote = msg
             },
         )
@@ -197,7 +209,14 @@ fun PlayerScreen(
     val micLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
     ) { granted ->
-        if (granted) beginListening() else voiceNote = "没有麦克风权限，语音用不了"
+        if (granted) {
+            VoiceSourceStatus.environment(available = true, micGranted = true)
+            beginListening()
+        } else {
+            VoiceSourceStatus.environment(available = true, micGranted = false)
+            voiceNote = "没有麦克风权限，语音用不了"
+            VoiceSourceStatus.failed("没有麦克风权限，语音用不了")
+        }
     }
     // 3 秒后自动消失：这是"刚才发生了什么"的即时回执，不是需要用户关掉的东西
     LaunchedEffect(voiceNote) {
@@ -305,14 +324,18 @@ fun PlayerScreen(
                             listening = false
                             voiceNote = "已取消"
                         } else if (!VoiceController.available(appContext)) {
+                            VoiceSourceStatus.environment(available = false, micGranted = false)
+                            VoiceSourceStatus.failed("本机没有可用的语音识别")
                             voiceNote = "本机没有可用的语音识别"
                         } else if (androidx.core.content.ContextCompat.checkSelfPermission(
                                 appContext, android.Manifest.permission.RECORD_AUDIO,
                             ) != android.content.pm.PackageManager.PERMISSION_GRANTED
                         ) {
                             // 先要权限；授权成功后由 launcher 回调继续 start
+                            VoiceSourceStatus.environment(available = true, micGranted = false)
                             micLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
                         } else {
+                            VoiceSourceStatus.environment(available = true, micGranted = true)
                             beginListening()
                         }
                     },
@@ -822,6 +845,23 @@ private fun CastPanel(
  *
  * @return 给用户的一句回执（3 秒后自动消失）
  */
+/** 意图的短名，只给诊断报告看（`Unknown` 这个值本身就能说明"没匹配上"）。 */
+private fun voiceIntentName(intent: VoiceIntent): String = when (intent) {
+    VoiceIntent.Next -> "Next"
+    VoiceIntent.Previous -> "Previous"
+    VoiceIntent.Play -> "Play"
+    VoiceIntent.Pause -> "Pause"
+    VoiceIntent.Stop -> "Stop"
+    VoiceIntent.TogglePlay -> "TogglePlay"
+    VoiceIntent.VolumeUp -> "VolumeUp"
+    VoiceIntent.VolumeDown -> "VolumeDown"
+    VoiceIntent.Mute -> "Mute"
+    VoiceIntent.LoopNext -> "LoopNext"
+    is VoiceIntent.Search -> "Search(「${intent.keyword}」)"
+    is VoiceIntent.Unknown -> "Unknown"
+    else -> intent.javaClass.simpleName
+}
+
 private fun handleVoiceIntent(intent: VoiceIntent, vm: PlaybackViewModel): String = when (intent) {
     VoiceIntent.Next -> { vm.next(); "下一首" }
     VoiceIntent.Previous -> { vm.previous(); "上一首" }

@@ -17,8 +17,8 @@
 - [x] **本地曲库** — PR #74（`LocalSourceStatus` + `queryWithStats`）
 - [x] **在线曲库** — PR #75（`SubsonicSourceStatus`）
 - [x] **电台** — PR #76（`RadioSourceStatus`）
-- [ ] **配网** — `provisioning/`
-- [ ] **语音** — `voice/VoiceController.kt`
+- [x] **配网** — PR #78（`ProvisionSourceStatus`）
+- [x] **语音** — PR #80（`VoiceSourceStatus`）
 - [ ] **悬浮窗** — `floating/FloatingControlService.kt`
 
 ### 每个源必须能回答的问题
