@@ -50,6 +50,7 @@ import kotlinx.coroutines.withContext
 import io.github.laozhudu.linkplay.console.crash.CrashGuard
 import io.github.laozhudu.diagnostics.Severity
 import io.github.laozhudu.linkplay.console.diagnostics.AppDiagnostics
+import io.github.laozhudu.linkplay.console.diagnostics.NavTrace
 import io.github.laozhudu.linkplay.console.diagnostics.DiagnosticsReport
 import io.github.laozhudu.linkplay.console.diagnostics.safeLaunch
 
@@ -1176,6 +1177,10 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
+        // 界面位置 —— 用户说「点了没反应」时，先要能知道他站在哪一页、有没有浮层挡着。
+        // 同样的现象在不同页面是不同的问题，没有这条我只能反问他。
+        AppDiagnostics.sections.register("ui", "界面") { NavTrace.render() }
+
         // 口令流水 —— 覆盖「点了没反应」这类最常报的问题。
         // 三种情况在界面上表现完全一样（发了没照做 / 根本没发 / 回包看不懂），
         // 只有流水账能分清。
