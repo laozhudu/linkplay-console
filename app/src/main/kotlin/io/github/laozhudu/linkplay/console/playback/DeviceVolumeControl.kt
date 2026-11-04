@@ -25,10 +25,20 @@ object DeviceVolumeControl {
     private val clients = ConcurrentHashMap<String, UpnpRendererClient>()
     private val http = DeviceHttpClient()
 
-    private fun clientOf(ip: String): UpnpRendererClient? =
-        clients[ip] ?: runCatching {
-            UpnpRendererClient.ofDevice(ip).also { clients[ip] = it }
-        }.getOrNull()
+    /**
+     * 客户端工厂。测试注入假传输层用；生产环境走 [UpnpRendererClient.ofDevice]。
+     *
+     * 做成可替换的不是为了"设计洁癖"：`readVolume` 用哪个 UPnP 动作取数是个**关键决定**
+     * （见下面的注释），没有单测锁住，下次有人顺手改回 `volume()` 也没人发现。
+     */
+    internal var clientFactory: ((String) -> UpnpRendererClient?)? = null
+
+    private fun clientOf(ip: String): UpnpRendererClient? = clients[ip] ?: run {
+        val factory = clientFactory ?: { target: String ->
+            runCatching { UpnpRendererClient.ofDevice(target) }.getOrNull()
+        }
+        factory(ip)?.also { clients[ip] = it }
+    }
 
     /** 设置音量。返回 true 表示走了 UPnP，false 表示退回 httpapi。 */
     fun setVolume(ip: String, volume: Int): Boolean {
@@ -54,10 +64,23 @@ object DeviceVolumeControl {
         return false
     }
 
-    /** 读设备真实音量；UPnP 读不到再问 httpapi。 */
+    /**
+     * 读设备真实音量；UPnP 读不到再问 httpapi。
+     *
+     * ## 为什么用 `GetControlDeviceInfo` 而不是 `RenderingControl.GetVolume`
+     *
+     * 两者都能拿到音量，但 `GetControlDeviceInfo` 是**卡片电量的同一个来源**
+     * （3112B，一次给全音量+静音+声道+电量+名字+固件）。
+     *
+     * `docs/65` 批次 2 点名的就是这个：同一个值两个来源迟早打架 ——
+     * 界面显示 60（来自控制信息）、音量键调完读回 40（来自 GetVolume），
+     * 用户看到的是"音量键不管用"。
+     *
+     * 代价是请求体大一些（实测 43-54ms vs 18-31ms），换来的是**只有一个真值来源**。
+     */
     fun readVolume(ip: String): Int? {
         clientOf(ip)?.let { c ->
-            runCatching { c.volume().volume }.getOrNull()?.let { return it }
+            runCatching { c.controlDeviceInfo().volume }.getOrNull()?.let { return it }
             clients.remove(ip)
         }
         return runCatching {
