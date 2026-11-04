@@ -93,6 +93,27 @@ object RadioSourceStatus {
         )
     }
 
+    /** 目录发现：查到了几个、花了多久。 */
+    fun discovered(query: String, count: Int, ms: Long) = mutate {
+        it.copy(
+            discoverQuery = query.ifBlank { "热门" },
+            discoverCount = count,
+            discoverMs = ms,
+            discoverAt = System.currentTimeMillis(),
+            discoverError = null,
+        )
+    }
+
+    fun discoverFailed(query: String, error: Throwable, ms: Long) = mutate {
+        it.copy(
+            discoverQuery = query.ifBlank { "热门" },
+            discoverCount = -1,
+            discoverMs = ms,
+            discoverAt = System.currentTimeMillis(),
+            discoverError = SourceFailure.of(error).describe(error.message),
+        )
+    }
+
     fun render(): String {
         val s = snapshot()
         return buildString {
@@ -109,6 +130,14 @@ object RadioSourceStatus {
                     appendLine("  最近失败=${s.lastUrl}（scheme=${s.lastScheme ?: "?"}）")
                     s.failure?.let { appendLine("    原因=$it / ${seconds(s.lastMs)}") }
                 }
+            }
+            if (s.discoverAt > 0L) {
+                appendLine(
+                    "  发现电台=「${s.discoverQuery}」" +
+                        (if (s.discoverCount >= 0) " → ${s.discoverCount} 条" else " → 失败") +
+                        " / ${seconds(s.discoverMs)}",
+                )
+                s.discoverError?.let { appendLine("    原因=$it") }
             }
         }
     }
@@ -139,6 +168,13 @@ data class RadioStatus(
     val lastMs: Long = 0L,
     val failureAt: Long = 0L,
     val failure: String? = null,
+    /** 目录发现（core-radio）：最近一次查询关键词。 */
+    val discoverQuery: String = "",
+    /** -1 = 上次发现失败；-2 = 还没查过。 */
+    val discoverCount: Int = -2,
+    val discoverMs: Long = 0L,
+    val discoverAt: Long = 0L,
+    val discoverError: String? = null,
 )
 
 /**

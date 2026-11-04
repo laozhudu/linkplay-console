@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -50,6 +51,8 @@ import io.github.laozhudu.linkplay.console.ui.theme.Spacing
 import io.github.laozhudu.linkplay.console.ui.theme.StatusColors
 import io.github.laozhudu.linkplay.protocol.radio.RadioStation
 import io.github.laozhudu.linkplay.protocol.radio.VerifiedRadioCatalog
+import io.github.laozhudu.linkplay.radio.playbackHint
+import io.github.laozhudu.radiodiscovery.model.RadioStation as DiscoveryStation
 
 /**
  * 网络电台（媒体库 → 与「手机本地音乐」同级的一个来源）。
@@ -78,6 +81,7 @@ fun RadioScreen(
 
     var showAdd by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<RadioStation?>(null) }
+    var showDiscover by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -129,6 +133,32 @@ fun RadioScreen(
                 }
             }
             VSpace(Spacing.sm)
+        }
+
+        // ---------- 发现电台（全球目录）----------
+        // 为什么要有它：库里的台只能靠自己粘地址，而"想听中国之声"的人并不知道它现在的流地址。
+        // 查到之后仍然走我们自己的入库 + 投送链路，不碰第三方投送（docs/74 硬规则 1）。
+        AppCard(onClick = { showDiscover = true }) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("发现电台", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "从全球目录搜（中英文都行）。国内台不少是 HLS，播不了的会在列表里标出来。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Text("›", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        VSpace(Spacing.sm)
+        if (showDiscover) {
+            DiscoverRadioDialog(
+                state = state,
+                onSearch = vm::discover,
+                onAdd = vm::addDiscovered,
+                onDismiss = { showDiscover = false },
+            )
         }
 
         // ---------- 我的电台 ----------
@@ -401,5 +431,107 @@ private fun AddRadioDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Uni
             TextButton(onClick = { onAdd(name, url) }) { Text("添加") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
+}
+
+/**
+ * 「发现电台」对话框。
+ *
+ * 三种状态必须分开（铁律：不给假空态）：
+ * - 正在查 → "正在查…"
+ * - 连不上 → 把错误原文给出来（网络/目录服务不可用）
+ * - 查到了但 0 条 → "没搜到「X」"
+ */
+@Composable
+private fun DiscoverRadioDialog(
+    state: RadioUiState,
+    onSearch: (String) -> Unit,
+    onAdd: (DiscoveryStation) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var query by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("发现电台") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("电台名，例如 中国之声") },
+                )
+                Row(Modifier.fillMaxWidth()) {
+                    TextButton(onClick = { onSearch(query) }) { Text("搜索") }
+                    TextButton(onClick = { onSearch("") }) { Text("看热门") }
+                }
+                when {
+                    state.discovering -> Text(
+                        "正在查…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+
+                    state.discoverError != null -> Text(
+                        "连不上目录：${state.discoverError}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = StatusColors.error,
+                    )
+
+                    state.discoverResults.isEmpty() && state.discoverQuery.isNotEmpty() -> Text(
+                        "没搜到「${state.discoverQuery}」。换个名字试试，英文或拼音也行。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+
+                    state.discoverResults.isEmpty() -> Text(
+                        "按「看热门」，或输入名字再搜索。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+
+                    else -> Column(
+                        Modifier
+                            .heightIn(max = 300.dp)
+                            .verticalScroll(rememberScrollState()),
+                    ) {
+                        state.discoverResults.forEach { st ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onAdd(st) }
+                                    .padding(vertical = Spacing.xs),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        st.name,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text(
+                                        listOfNotNull(
+                                            st.country?.takeIf { it.isNotBlank() },
+                                            st.codec?.takeIf { it.isNotBlank() },
+                                            st.playbackHint(),
+                                        ).joinToString(" · ").ifBlank { "—" },
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                Text(
+                                    "添加",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } },
     )
 }

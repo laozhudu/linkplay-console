@@ -99,4 +99,41 @@ class RadioSourceStatusTest {
         assertEquals(null, RadioSourceStatus.snapshot().failure)
         assertTrue(RadioSourceStatus.render().contains("结果=成功"))
     }
+    // ---- 目录发现（core-radio）----
+
+    @Test
+    fun `discovery reports query count and elapsed`() {
+        RadioSourceStatus.discovered("中国之声", 12, 800)
+
+        val text = RadioSourceStatus.render()
+        assertTrue(text.contains("发现电台=「中国之声」"))
+        assertTrue(text.contains("12 条"))
+        assertTrue(text.contains("800ms"))
+    }
+
+    @Test
+    fun `empty query is labelled as popular not as an empty search`() {
+        RadioSourceStatus.discovered("", 30, 400)
+        assertTrue(RadioSourceStatus.render().contains("发现电台=「热门」"))
+    }
+
+    @Test
+    fun `discovery failure is classified and keeps the reason`() {
+        RadioSourceStatus.discoverFailed("中国之声", java.net.ConnectException("refused"), 900)
+
+        val text = RadioSourceStatus.render()
+        assertTrue(text.contains("→ 失败"))
+        assertTrue(text.contains("连不上"))
+        assertTrue(text.contains("refused"))
+    }
+
+    @Test
+    fun `a successful discovery clears the previous discovery error`() {
+        RadioSourceStatus.discoverFailed("a", java.net.ConnectException("refused"), 100)
+        RadioSourceStatus.discovered("b", 3, 200)
+
+        assertEquals(null, RadioSourceStatus.snapshot().discoverError)
+        assertTrue(RadioSourceStatus.render().contains("3 条"))
+    }
+
 }
