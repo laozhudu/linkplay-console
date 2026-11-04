@@ -4,14 +4,12 @@ import android.app.Application
 import android.content.Context
 import android.net.wifi.WifiManager
 import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewModelScope
 import io.github.laozhudu.linkplay.console.session.SessionStore
 import io.github.laozhudu.linkplay.discovery.DiscoveredDevice
 import io.github.laozhudu.linkplay.discovery.SsdpDiscovery
 import io.github.laozhudu.linkplay.protocol.DeviceHttpClient
 import io.github.laozhudu.linkplay.protocol.LinkPlayCommands
 import io.github.laozhudu.linkplay.protocol.LinkPlayStatus
-import io.github.laozhudu.linkplay.protocol.SlaveDevice
 import io.github.laozhudu.linkplay.protocol.dlna.DescriptionEndpoints
 import io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile
 import io.github.laozhudu.linkplay.protocol.dlna.detect
@@ -34,7 +32,6 @@ import io.github.laozhudu.linkplay.console.library.LocalLibrary
 import io.github.laozhudu.linkplay.console.library.PlaylistStore
 import io.github.laozhudu.linkplay.protocol.mediasource.SubsonicConfig
 import io.github.laozhudu.linkplay.protocol.FirmwareUpdate
-import io.github.laozhudu.linkplay.protocol.player.PlayState
 import io.github.laozhudu.linkplay.protocol.player.PlayerStatus
 import io.github.laozhudu.linkplay.protocol.player.SleepTimer
 import io.github.laozhudu.linkplay.protocol.player.VolumeStep
@@ -132,7 +129,6 @@ data class ConsoleUiState(
     /** 设备 UUID（来自 `getStatusEx`）。会话记忆按它做键，所以换 IP 也不会丢。 */
     val selectedUuid: String? = null,
     val status: LinkPlayStatus? = null,
-    val slaves: List<SlaveDevice> = emptyList(),
     /** 打开 App 时对已保存设备的探活结果（uuid → 是否在线）。 */
     val online: Map<String, Boolean> = emptyMap(),
     val log: List<String> = emptyList(),
@@ -140,13 +136,7 @@ data class ConsoleUiState(
     val busy: Boolean = false,
     /** 扫描后有没有被过滤掉的其它 UPnP 设备（用于给用户一句解释，而不是「怎么什么都搜不到」）。 */
     val filteredOutCount: Int = 0,
-    /** 正在成组（轮询等待中）。 */
-    val multiroomBusy: Boolean = false,
-    /** 成组轮询已等待的秒数。 */
-    val multiroomTick: Long = 0,
-    /** 正在加入的音箱显示名，给进度条用。 */
-    val multiroomTarget: String? = null,
-    /**
+                /**
      * 组网结果的一句话说明。
      *
      * 为什么必须单独一个字段：命令回 `OK` 不代表成功，
@@ -167,17 +157,6 @@ data class ConsoleUiState(
     val groupMasterName: String? = null,
     /** 组成员，第一个固定是主机。没有组时为空。 */
     val groupMembers: List<GroupMember> = emptyList(),
-    /** 点了某个从机后要弹的详情框。 */
-    val slaveDialog: SlaveDevice? = null,
-    /**
-     * 成组时可手填的信道与密码。
-     *
-     * 为什么要露出来：原厂 App 用 `getNetwork` 取主机热点密码，
-     * 但这批固件的 `getNetwork` 只返回 `{"securemode":"0",}`（实测），
-     * 于是 auth 只能按 OPEN 走；万一某些机器实际是 WPA2，这里能手动补上。
-     */
-    val joinChannel: Int = 0,
-    val joinPassword: String = "",
 
     /** 首页卡片：`uuid → 实时信息`。逐台轮询出来的，见 [DeviceCard]。 */
     val cards: Map<String, DeviceCard> = emptyMap(),
@@ -259,18 +238,8 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     private val discovery = SsdpDiscovery()
     private val store = SessionStore.of(app)
     /**
-     * 组音量下发通道（合并式）。
-     *
-     * 音量条拖动一次会触发几十个回调，逐个发 HTTP 会堵住、也会让设备手忙脚乱。
-     * 合并通道只保留"最新值"，下游每 90ms 取一次 —— 手感是连续的，流量是可控的。
-     */
-    private val groupVolumeChannel = kotlinx.coroutines.channels.Channel<Pair<GroupMember, Int>>(
-        kotlinx.coroutines.channels.Channel.CONFLATED,
-    )
-    /**
      * 「直接给某台设备设音量」的合并通道（键位 ip、值 0-100）。
      *
-     * 为什么和 [groupVolumeChannel] 分开：那个通道的语义是"组内成员"，
      * 发送时要靠 groupMasterIp 中转；而手机音量键调的是**当前设备**，
      * 跟有没有组无关。两条路径混在一起就会出现"没组网时按键没反应"。
      */
@@ -362,18 +331,6 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                         .onFailure { log("调音量失败：${it.message}") }
                 }
                 delay(60)
-            }
-        }
-        safeLaunch("ConsoleViewModel") {
-            for ((member, v) in groupVolumeChannel) {
-                withContext(Dispatchers.IO) {
-                    val master = _state.value.groupMasterIp ?: return@withContext
-                    runCatching {
-                        if (member.isMaster) DeviceVolumeControl.setVolume(master, v)
-                        else client.send(master, LinkPlayCommands.slaveVolume(member.ip, v))
-                    }.onFailure { log("调音量失败：${it.message}") }
-                }
-                delay(90)
             }
         }
     }
@@ -774,7 +731,6 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                 selectedLocation = device.location,
                 selectedUuid = device.uuid,
                 status = null,
-                slaves = emptyList(),
             )
         }
         runCatching { store.saveLastDevice(device.uuid, device.ip) }
@@ -934,7 +890,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     fun select(ip: String) {
         val location = _state.value.devices.firstOrNull { it.ip == ip }?.location
         _state.update {
-            it.copy(selectedIp = ip, selectedLocation = location, status = null, slaves = emptyList())
+            it.copy(selectedIp = ip, selectedLocation = location, status = null)
         }
         refreshStatus()
     }
@@ -943,9 +899,8 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         val ip = _state.value.selectedIp ?: return
         run("getStatusEx") {
             val status = client.status(ip)
-            val slaves = runCatching { client.slaveList(ip) }.getOrDefault(emptyList())
             // UUID 在这里落定：SSDP 只给 IP/LOCATION，UUID 必须问设备要
-            _state.update { it.copy(status = status, slaves = slaves, selectedUuid = status.uuid) }
+            _state.update { it.copy(status = status, selectedUuid = status.uuid) }
             status.uuid?.let { touch(it, ip, status.toSnapshot()) }
         }
     }
@@ -1454,7 +1409,6 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                 selectedLocation = null,
                 selectedUuid = null,
                 status = null,
-                slaves = emptyList(),
                 error = null,
             )
         }
@@ -1494,7 +1448,6 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
             override fun http(): DeviceHttpClient = client
             override fun send(ip: String, command: String): String = client.send(ip, command)
             override fun status(ip: String): LinkPlayStatus = client.status(ip)
-            override fun slaveList(ip: String): List<SlaveDevice> = client.slaveList(ip)
             override suspend fun refreshAll() {
                 probeSaved()
                 refreshDevicesInGroup()
@@ -1507,15 +1460,10 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
             override fun pushDeviceVolume(ip: String, volume: Int) {
                 deviceVolumeChannel.trySend(ip to volume)
             }
-            override fun pushGroupVolume(member: GroupMember, volume: Int) {
-                groupVolumeChannel.trySend(member to volume)
-            }
         },
     )
 
-    fun setGroupVolume(member: GroupMember, volume: Int) = groups.setGroupVolume(member, volume)
     fun ungroupCard(device: SavedDevice) = groups.ungroupCard(device)
-    fun cycleCardChannel(device: SavedDevice) = groups.cycleCardChannel(device)
     fun setCardChannel(device: SavedDevice, channel: Int) = groups.setCardChannel(device, channel)
     fun openGrouping() = groups.openGrouping()
     fun closeGrouping() = groups.closeGrouping()
@@ -1523,18 +1471,6 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     fun selectEverywhere() = groups.selectEverywhere()
     fun applyGrouping() = groups.applyGrouping()
     fun toggleMask(device: SavedDevice) = groups.toggleMask(device)
-    fun removeFromGroup(member: GroupMember) = groups.removeFromGroup(member)
-    fun addToGroup(device: SavedDevice) = groups.addToGroup(device)
-    fun setSlaveVolume(slaveIp: String, volume: Int) = groups.setSlaveVolume(slaveIp, volume)
-    fun setJoinChannel(channel: Int) = groups.setJoinChannel(channel)
-    fun setJoinPassword(pwd: String) = groups.setJoinPassword(pwd)
-    fun joinSlave(device: SavedDevice) = groups.joinSlave(device)
-    fun cancelMultiroom() = groups.cancelMultiroom()
-    fun setSlaveDialog(slave: SlaveDevice) = groups.setSlaveDialog(slave)
-    fun clearSlaveDialog() = groups.clearSlaveDialog()
-    fun kickSlave(slaveIp: String) = groups.kickSlave(slaveIp)
-    fun renameSlave(slaveIp: String, name: String) = groups.renameSlave(slaveIp, name)
-    fun refreshSlaves() = groups.refreshSlaves()
 
     // ---- 诊断 ----
 
