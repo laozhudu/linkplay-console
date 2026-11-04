@@ -154,6 +154,9 @@ class SessionRestoreTest {
         override fun renderer(device: SavedDevice): UpnpRendererClient =
             throw UnsupportedOperationException("不该要渲染器")
 
+        override fun rendererForIp(ip: String): UpnpRendererClient =
+            throw UnsupportedOperationException("不该按 IP 要渲染器：$ip")
+
         override fun pushDeviceVolume(ip: String, volume: Int) =
             throw UnsupportedOperationException("不该调音量")
 

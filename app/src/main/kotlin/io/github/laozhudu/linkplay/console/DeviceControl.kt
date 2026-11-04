@@ -199,8 +199,9 @@ internal class DeviceControl(private val host: ConsoleHost) {
         host.run(if (playing) "暂停 ${device.title}" else "播放 ${device.title}") {
             val ok: Boolean = withContext(Dispatchers.IO) {
                 runCatching {
-                    if (playing) UpnpRendererClient.ofDevice(device.ip).pause()
-                    else UpnpRendererClient.ofDevice(device.ip).play()
+                    // 走宿主缓存的客户端：原来每次 ofDevice 都要重新拉一次 description.xml
+                    if (playing) host.renderer(device).pause()
+                    else host.renderer(device).play()
                     true
                 }.getOrDefault(false)
             }
@@ -252,7 +253,7 @@ internal class DeviceControl(private val host: ConsoleHost) {
             }
             val ok: Boolean = withContext(Dispatchers.IO) {
                 runCatching {
-                    UpnpRendererClient.ofDevice(masterIp).play()
+                    host.rendererForIp(masterIp).play()
                     true
                 }.getOrDefault(false)
             }
@@ -278,7 +279,7 @@ internal class DeviceControl(private val host: ConsoleHost) {
             targets.forEach { ip ->
                 val ok: Boolean = withContext(Dispatchers.IO) {
                     runCatching {
-                        UpnpRendererClient.ofDevice(ip).pause()
+                        host.rendererForIp(ip).pause()
                         true
                     }.getOrDefault(false)
                 }

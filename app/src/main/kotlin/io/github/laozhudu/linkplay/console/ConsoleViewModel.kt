@@ -996,6 +996,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                 safeLaunch("refreshCards") { refreshDevicesInGroup() }
             }
             override fun renderer(device: SavedDevice): UpnpRendererClient = rendererFor(device)
+            override fun rendererForIp(ip: String): UpnpRendererClient = rendererByIp(ip)
         override fun pushDeviceVolume(ip: String, volume: Int) {
             deviceVolumeChannel.trySend(ip to volume)
         }

@@ -63,6 +63,15 @@ internal interface ConsoleHost {
 
     fun renderer(device: SavedDevice): UpnpRendererClient
 
+    /**
+     * 按 IP 取渲染器（**带缓存**）。
+     *
+     * 为什么要单独一条：`DeviceControl` 里有些动作拿的是 IP（组主机、批量暂停的后台设备），
+     * 手边没有 [SavedDevice]。它们原来各自 `UpnpRendererClient.ofDevice(ip)` ——
+     * 每调一次就重新拉一遍 `description.xml`（~50ms 往返），而宿主这边明明已经缓存了。
+     */
+    fun rendererForIp(ip: String): UpnpRendererClient
+
     /** 把音量塞进合并通道（拖动会连续产生几十个值，逐条发 HTTP 会堵住）。 */
     fun pushDeviceVolume(ip: String, volume: Int)
 
