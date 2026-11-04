@@ -1,20 +1,14 @@
 package io.github.laozhudu.linkplay.console.lx
 
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -34,7 +28,6 @@ import io.github.laozhudu.linkplay.console.ui.components.VSpace
 import io.github.laozhudu.linkplay.console.ui.theme.Spacing
 import io.github.laozhudu.script.ScriptCandidate
 import io.github.laozhudu.script.ScriptEntry
-import io.github.laozhudu.script.ScriptOrigin
 
 /**
  * 洛雪音源脚本页：装了什么、哪支在用、导入新的。
@@ -171,74 +164,4 @@ internal fun ScriptsScreen(onBack: () -> Unit) {
             },
         )
     }
-}
-
-/**
- * 导入对话框：粘贴 or 选文件。
- *
- * 两种来源最后都变成同一段文本交给仓库 —— 仓库不关心它是怎么来的，
- * 以后加"从网址导入"也只动这一层。
- */
-@Composable
-private fun ImportScriptDialog(
-    onDismiss: () -> Unit,
-    onImport: (String, ScriptOrigin) -> Unit,
-) {
-    val context = LocalContext.current
-    var text by remember { mutableStateOf("") }
-    var picked by remember { mutableStateOf<String?>(null) }
-
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        val content = runCatching {
-            context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-        }.getOrNull()
-        if (content == null) {
-            // 读不出来要说清是"权限/文件"的问题，不能表现成"什么都没发生"
-            picked = "选中的文件读不出来（换个文件，或用粘贴）"
-        } else {
-            text = content
-            picked = uri.lastPathSegment
-        }
-    }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("导入脚本") },
-        text = {
-            Column {
-                Text(
-                    "把脚本内容粘在下面，或者从文件选一份 .js。\n脚本必须有开头的 /*! … @name … */ 注释。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                VSpace(Spacing.sm)
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = { text = it },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp, max = 220.dp),
-                    placeholder = { Text("/*!\n * @name 某音源\n * @version v1.0.0\n */") },
-                    textStyle = MaterialTheme.typography.labelSmall,
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Start,
-                ) {
-                    TextButton(onClick = { picker.launch(arrayOf("text/plain", "application/javascript", "*/*")) }) {
-                        Text("从文件选…")
-                    }
-                }
-                picked?.let {
-                    Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = { onImport(text, if (picked == null) ScriptOrigin.PASTED else ScriptOrigin.FILE) },
-                enabled = text.isNotBlank(),
-            ) { Text("导入") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-    )
 }

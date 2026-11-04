@@ -11,6 +11,15 @@ package io.github.laozhudu.linkplay.console
 internal enum class Tab(val label: String, val glyph: String) {
     Devices("设备", "◍"),
     Player("播放", "▮▮"),
+
+    /**
+     * 洛雪音乐 —— 一级页面，不藏在"媒体库 → 其它入口"里。
+     *
+     * 理由就是用户的抱怨：搜一首歌要"进媒体库 → 其它入口 → 洛雪 → 搜 → 点"，
+     * 五次操作。一级入口之后是"点洛雪 → 搜 → 点"，而且搜完还能直接切播放页。
+     */
+    Lx("洛雪", "♪"),
+
     Sources("媒体库", "≡"),
 }
 

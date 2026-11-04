@@ -28,6 +28,8 @@ data class LxSearchUiState(
     val error: String? = null,
     val busy: Boolean = false,
     val note: String? = null,
+    /** 点播放时发现没装脚本 —— 界面据此直接弹导入框，而不是让用户自己去找。 */
+    val needScript: Boolean = false,
 )
 
 /**
@@ -49,6 +51,14 @@ class LxSearchViewModel(
     private val location: String?,
     private val deviceUuid: String?,
 ) : AndroidViewModel(app) {
+
+    /**
+     * 等脚本的用户点的那一首（导完脚本自动接着放）。
+     *
+     * 必须声明在所有属性最前面：`init` 里起的协程可能先跑起来，
+     * 那时声明在 init 之后的属性还是 null —— 这是本项目踩过的坑（docs/55 陷阱表）。
+     */
+    private var pending: LxTrack? = null
 
     private val _state = MutableStateFlow(LxSearchUiState())
     val state: StateFlow<LxSearchUiState> = _state.asStateFlow()
@@ -101,15 +111,42 @@ class LxSearchViewModel(
         }
     }
 
-    /** 点一首：问脚本要直链，然后走唯一投送入口。 */
+    /** 用户取消导入：把等待清掉，不然下次点播放会莫名其妙续播旧的那首。 */
+    fun cancelPending() {
+        pending = null
+        _state.update { it.copy(needScript = false, note = null) }
+    }
+
+    /** 脚本导入成功：如果刚才是因为没脚本才卡住，现在直接把它放出来。 */
+    fun onScriptImported() {
+        val track = pending
+        pending = null
+        _state.update { it.copy(needScript = false) }
+        if (track != null) play(track)
+    }
+
+    /**
+     * 点一首：问脚本要直链，然后走唯一投送入口。
+     *
+     * **没装脚本不算错误**：直接把导入框弹出来，导完接着放这首。
+     * 让用户"点播放 → 看到报错 → 自己去别的页面找脚本 → 回来再点一次"，
+     * 那是四个步骤换一件事，而它本来可以是两次点击。
+     */
     fun play(track: LxTrack) {
         if (_state.value.busy) return
+        val app = getApplication<Application>()
+        val hasScript = runCatching { ScriptLibrary.repository(app).active() }.getOrNull() != null
+        if (!hasScript) {
+            pending = track
+            _state.update { it.copy(needScript = true, error = null, note = "先导一支脚本，导完自动播这首") }
+            return
+        }
+
         _state.update { it.copy(busy = true, note = null, error = null) }
         viewModelScope.launch {
-            val app = getApplication<Application>()
             val outcome = runCatching {
                 val repo = ScriptLibrary.repository(app)
-                val active = repo.active() ?: throw IllegalStateException("还没装脚本 —— 先去「洛雪音源脚本」导入一支")
+                val active = repo.active() ?: throw IllegalStateException("脚本刚被删掉了")
                 val text = repo.textOf(active.fileName) ?: throw IllegalStateException("脚本文件读不出来：${active.name}")
                 val info = LxScriptInfo.parse(text) ?: throw IllegalStateException("脚本头解析不出来：${active.name}")
 
