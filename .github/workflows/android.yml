@@ -71,6 +71,13 @@ jobs:
       - name: Check diagnostics labels
         run: python3 scripts/check-diagnostics-labels.py
 
+      # 动作耗时账本按"动作名"聚合。名字漂移会让同一件事在报告里变成两条，
+      # 于是"平均 240ms"和"最慢 610ms"都不再代表那个动作。名字现在是枚举，
+      # 这里查类型系统管不到的两件事：id 规范 + 每个动作是否真的接上了。
+      # 真实事故见 scripts/check-timing-names.py 的文档注释。
+      - name: 检查动作耗时账本的动作名
+        run: python3 scripts/check-timing-names.py
+
       # 三个模块都要跑：诊断能力是独立的纯 JVM 库，它的测试不该依赖 Android。
       - name: Unit tests
         run: ./gradlew --no-daemon :core-protocol:test :core-diagnostics:test :core-radio:test :core-lx:testDebugUnitTest :app:testDebugUnitTest

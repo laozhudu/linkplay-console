@@ -2,6 +2,8 @@ package io.github.laozhudu.linkplay.console
 
 import android.app.Application
 import io.github.laozhudu.diagnostics.Severity
+import io.github.laozhudu.diagnostics.TimingLedger
+import io.github.laozhudu.linkplay.console.diagnostics.ActionTiming
 import io.github.laozhudu.linkplay.console.crash.CrashGuard
 import io.github.laozhudu.linkplay.console.diagnostics.AppDiagnostics
 import io.github.laozhudu.linkplay.console.diagnostics.DiagnosticsReport
@@ -49,6 +51,19 @@ internal class ConsoleDiagnostics(
     private val host: ConsoleHost,
     private val restore: SessionRestore,
 ) {
+
+    /**
+     * 一次「刷新设备」理论最少发几条指令：**在线设备数 × 2**
+     * （每台 `GetControlDeviceInfo` + `getPlayerStatus`，这是实测的最短路径）。
+     *
+     * 实际条数多于这个数就说明有地方在旁路取数 —— 那正是"最短路径只写在注释里"的症状。
+     * 还没探活过（在线数 0）时**不核对**：拿 0 当期望会把每一条指令都判成绕路。
+     */
+    private fun timingExpectations(): Map<String, Int> {
+        val st = host.state.value
+        val online = st.saved.count { st.online[it.uuid] == true }
+        return if (online > 0) mapOf(ActionTiming.Action.REFRESH_DEVICES.id to online * 2) else emptyMap()
+    }
 
     private fun clockText(ms: Long): String =
         if (ms <= 0L) "-" else java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date(ms))
@@ -238,6 +253,26 @@ internal class ConsoleDiagnostics(
                 }
             },
         ) { CommandTrace.DEFAULT.render() }
+
+        // 响应耗时 —— 回答三个问题：跟不跟手、是不是绕路、是不是两处在刷同一件事。
+        // 判据全写在段里，不让读的人自己算：
+        //   1. 慢动作排前面（平均耗时降序）；
+        //   2. 同一动作 2 秒内多次 = 重复触发（两处代码各刷一次 / 事件绑了两遍）；
+        //   3. 指令数多于「在线设备数 × 2」= 有取数旁路，最短路径没落地。
+        AppDiagnostics.sections.register(
+            "timing",
+            "响应耗时",
+            {
+                val slowest = ActionTiming.ledger.slowest(1).firstOrNull()
+                val expect = timingExpectations()[ActionTiming.Action.REFRESH_DEVICES.id]
+                val detour = expect?.let { ActionTiming.ledger.detourOf(ActionTiming.Action.REFRESH_DEVICES.id, it) }
+                when {
+                    slowest != null && slowest.avgMs >= TimingLedger.SLOW_MS -> Severity.WARN
+                    detour != null -> Severity.WARN
+                    else -> Severity.INFO
+                }
+            },
+        ) { ActionTiming.render(expectations = timingExpectations()) }
 
         AppDiagnostics.sections.register(
             "queue",

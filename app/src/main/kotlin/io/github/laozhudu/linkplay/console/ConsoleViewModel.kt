@@ -48,6 +48,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import io.github.laozhudu.linkplay.console.crash.CrashGuard
+import io.github.laozhudu.linkplay.console.diagnostics.ActionTiming
 import io.github.laozhudu.linkplay.console.diagnostics.AppDiagnostics
 import io.github.laozhudu.linkplay.console.diagnostics.safeLaunch
 import io.github.laozhudu.linkplay.lx.LxAssets
@@ -293,10 +294,12 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
      * SSDP 只能证明「某台设备在」，不能把 uuid 和 IP 对上；`getStatusEx` 直接回 uuid，
      * 顺便能把新 IP 写回记录。
      */
-    private fun probeSaved() {
+    private fun probeSaved(actionName: ActionTiming.Action? = null) {
         val targets = _state.value.saved
         if (targets.isEmpty()) return
         safeLaunch("probeSaved") {
+            // 只有**用户主动触发**才进耗时账本：心跳 3 秒一次会把"跟手"的平均值拉平，账本就废了
+            val timing = actionName?.let { ActionTiming.begin(it) }
             val result = mutableMapOf<String, Boolean>()
             for (d in targets) {
                 // 走唯一的取数入口（最短路径：GetControlDeviceInfo + getPlayerStatus）
@@ -384,6 +387,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                     groupMembers = members,
                 )
             }
+            timing?.end(note = "${targets.size} 台")
         }
     }
 
@@ -756,8 +760,13 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 重新探活并刷新组结构（首页下拉/进入时调用）。 */
-    fun refreshGroup() = probeSaved()
+    /**
+     * 重新探活并刷新组结构（首页下拉/进入时调用）。
+     *
+     * 与 [refreshDevices] 共用同一个动作名：它们是**同一件事的两条入口**。
+     * 重复触发检测会因此报警 —— 那是真实存在的重复，不是噪音，报警是对的。
+     */
+    fun refreshGroup() = probeSaved(ActionTiming.Action.REFRESH_DEVICES)
 
     /**
      * 首页顶栏的刷新：重新探活已保存的设备（并顺带读一次卡片状态）。
@@ -770,7 +779,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
             scan()
             return
         }
-        probeSaved()
+        probeSaved(ActionTiming.Action.REFRESH_DEVICES)
     }
 
     /**
