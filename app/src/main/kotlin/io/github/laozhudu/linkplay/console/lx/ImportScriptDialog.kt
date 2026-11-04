@@ -14,6 +14,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -23,6 +24,9 @@ import androidx.compose.ui.unit.dp
 import io.github.laozhudu.linkplay.console.ui.components.VSpace
 import io.github.laozhudu.linkplay.console.ui.theme.Spacing
 import io.github.laozhudu.script.ScriptOrigin
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 导入脚本的对话框 —— **两个页面共用**（脚本管理页、洛雪搜索页的"没脚本"引导）。
@@ -32,6 +36,52 @@ import io.github.laozhudu.script.ScriptOrigin
  *
  * @param errorText 导入被拒时的原因（原样显示，不翻译成"失败"）
  */
+/** 脚本大小上限。洛雪脚本通常几十 KB，超过这个数基本是下错东西了（比如整个仓库 zip）。 */
+private const val MAX_SCRIPT_BYTES = 512 * 1024
+
+/**
+ * 按链接把脚本下下来。
+ *
+ * 三个必须处理的坑（都写在这里，不让 UI 去猜）：
+ * 1. **不是 2xx** → 直接把状态码给用户（"服务器返回 404"比"下载失败"有用）；
+ * 2. **太大** → 拒绝并说明上限（防止下载整个压缩包把内存打满）；
+ * 3. **连不上/超时** → 给原文，不翻译。
+ */
+private suspend fun fetchScript(rawUrl: String): Result<String> = withContext(Dispatchers.IO) {
+    runCatching {
+        require(rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
+            "链接要以 http:// 或 https:// 开头"
+        }
+        val conn = (java.net.URL(rawUrl).openConnection() as java.net.HttpURLConnection).apply {
+            connectTimeout = 10_000
+            readTimeout = 15_000
+            instanceFollowRedirects = true
+            requestMethod = "GET"
+            setRequestProperty("User-Agent", "LinkPlayConsole")
+        }
+        try {
+            val code = conn.responseCode
+            if (code !in 200..299) throw IllegalStateException("服务器返回 $code")
+            val bytes = conn.inputStream.use { input ->
+                val buffer = java.io.ByteArrayOutputStream()
+                val chunk = ByteArray(8 * 1024)
+                while (true) {
+                    val read = input.read(chunk)
+                    if (read <= 0) break
+                    buffer.write(chunk, 0, read)
+                    if (buffer.size() > MAX_SCRIPT_BYTES) {
+                        throw IllegalStateException("文件超过 ${MAX_SCRIPT_BYTES / 1024}KB，不像是一支脚本")
+                    }
+                }
+                buffer.toByteArray()
+            }
+            String(bytes, Charsets.UTF_8)
+        } finally {
+            runCatching { conn.disconnect() }
+        }
+    }
+}
+
 @Composable
 internal fun ImportScriptDialog(
     onDismiss: () -> Unit,
@@ -39,8 +89,12 @@ internal fun ImportScriptDialog(
     errorText: String? = null,
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var text by remember { mutableStateOf("") }
     var picked by remember { mutableStateOf<String?>(null) }
+    var url by remember { mutableStateOf("") }
+    var fetching by remember { mutableStateOf(false) }
+    var fetchNote by remember { mutableStateOf<String?>(null) }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
@@ -77,6 +131,41 @@ internal fun ImportScriptDialog(
                     TextButton(onClick = { picker.launch(arrayOf("text/plain", "application/javascript", "*/*")) }) {
                         Text("从文件选…")
                     }
+                }
+
+                // 从网址下载：装脚本从"复制几万字"变成"贴一个链接"
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    OutlinedTextField(
+                        value = url,
+                        onValueChange = { url = it },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        placeholder = { Text("或贴脚本链接 https://…") },
+                        textStyle = MaterialTheme.typography.labelSmall,
+                    )
+                    TextButton(
+                        enabled = url.isNotBlank() && !fetching,
+                        onClick = {
+                            fetching = true
+                            fetchNote = null
+                            scope.launch {
+                                val result = fetchScript(url.trim())
+                                fetching = false
+                                result.onSuccess { body ->
+                                    // 下载成功只**填进框里**，不直接导入：让用户先看一眼
+                                    // 下载到的到底是什么（粘错链接时最常见的后果就是拉了个网页）
+                                    text = body
+                                    picked = null
+                                    fetchNote = "已下载 ${body.toByteArray(Charsets.UTF_8).size / 1024}KB，检查后点「导入」"
+                                }.onFailure { error ->
+                                    fetchNote = error.message ?: "下载失败"
+                                }
+                            }
+                        },
+                    ) { Text(if (fetching) "下载中…" else "下载") }
+                }
+                fetchNote?.let {
+                    Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 picked?.let {
                     Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

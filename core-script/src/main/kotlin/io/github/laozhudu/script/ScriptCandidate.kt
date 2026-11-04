@@ -8,6 +8,9 @@ enum class ScriptOrigin {
     /** 用户从文件选。 */
     FILE,
 
+    /** 从网址下载（用户贴一个链接）。 */
+    URL,
+
     /** 剪贴板自动识别（还没有实现，先占位说明将来从哪来）。 */
     CLIPBOARD,
 
