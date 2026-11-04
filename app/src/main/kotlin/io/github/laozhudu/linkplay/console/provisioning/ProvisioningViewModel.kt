@@ -105,6 +105,7 @@ class ProvisioningViewModel : ViewModel() {
     }
 
     fun onDeviceLocated(ip: String) {
+        ProvisionSourceStatus.located(ip)
         _state.update {
             it.copy(step = ProvisionStep.PICK_NETWORK, deviceIp = ip, finding = false, error = null)
         }
@@ -118,6 +119,7 @@ class ProvisioningViewModel : ViewModel() {
         safeLaunch("scanNetworks") {
             try {
                 val list = withContext(Dispatchers.IO) { client.scanAccessPoints(ip) }
+                ProvisionSourceStatus.scanned(list.size)
                 _state.update { it.copy(scanning = false, aps = list.sortedByDescending { it.rssi ?: -999 }) }
                 if (list.isEmpty()) {
                     _state.update { current ->
@@ -202,12 +204,14 @@ class ProvisioningViewModel : ViewModel() {
 
         safeLaunch("submit") {
             val channel = s.selectedAp.channel.takeIf { it > 0 } ?: 0
+            ProvisionSourceStatus.sendStarted(ssid, channel)
             val sent = runCatching {
                 withContext(Dispatchers.IO) {
                     client.connectMasterAp(s.deviceIp, ssid, channel, password)
                 }
             }
             if (sent.isFailure) {
+                ProvisionSourceStatus.sendFailed(sent.exceptionOrNull() ?: IllegalStateException("未知错误"))
                 _state.update {
                     it.copy(
                         sending = false,
@@ -219,6 +223,7 @@ class ProvisioningViewModel : ViewModel() {
             }
 
             // 设备只回 OK，必须自己轮询确认。用真实时钟，但每轮把进度推给 UI。
+            ProvisionSourceStatus.sendAccepted()
             val result = withContext(Dispatchers.IO) {
                 val started = System.currentTimeMillis()
                 poller.poll(
@@ -235,6 +240,8 @@ class ProvisioningViewModel : ViewModel() {
                     },
                 )
             }
+            val snapshot = _state.value
+            ProvisionSourceStatus.finished(result, snapshot.probeCount, snapshot.elapsedMs)
             _state.update { it.copy(sending = false, result = result) }
         }
     }
