@@ -39,6 +39,9 @@ import io.github.laozhudu.linkplay.protocol.player.SleepTimer
 import io.github.laozhudu.linkplay.protocol.session.SavedDevice
 import io.github.laozhudu.linkplay.protocol.upnp.UpnpRendererClient
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.async
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -300,83 +303,92 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         safeLaunch("probeSaved") {
             // 只有**用户主动触发**才进耗时账本：心跳 3 秒一次会把"跟手"的平均值拉平，账本就废了
             val timing = actionName?.let { ActionTiming.begin(it) }
-            val result = mutableMapOf<String, Boolean>()
-            for (d in targets) {
-                // 走唯一的取数入口（最短路径：GetControlDeviceInfo + getPlayerStatus）
-                val snap = withContext(Dispatchers.IO) { snapshots.read(d.ip) }
-                // uuid 必须宽容比较：设备两种格式（无连字符 24 位 / 带 uuid: 前缀 32 位）永远不"相等"
-                if (snap != null && (snap.uuid == null || UuidMatch.same(snap.uuid, d.uuid))) {
-                    result[d.uuid] = true
-                    // 名字/固件等来自快照；touch 负责写回本地记录（名字以设备 DeviceName 为准）
-                    touch(d.uuid, d.ip, snap)
-                    // 能答 getStatusEx 就是 LinkPlay 的私有 httpapi —— 卡片据此显示类型标签
-                    putCardProfile(d.uuid, DeviceProfile.LINKPLAY, DeviceCapabilities.LINKPLAY)
-                    applySnapshot(d.uuid, snap)
-                } else {
-                    result[d.uuid] = false
-                    // ① 先看它是不是「通用 DLNA 渲染器」：这类设备**永远**答不上 httpapi，
-                    //    但描述里的 AVTransport 在，一样能投流。不认这一档的话，
-                    //    电视盒子会被判成"离线"，卡片上全是点不动的入口。
-                    val (upnpProfile, upnpCaps) = withContext(Dispatchers.IO) { profileOfSaved(d) }
-                    if (upnpProfile == DeviceProfile.GENERIC_DMR) {
-                        result[d.uuid] = true
-                        putCardProfile(d.uuid, DeviceProfile.GENERIC_DMR, upnpCaps)
-                        continue
+
+            // ① 三台**同时**问。实测单台约 90~110ms（CONTROL_INFO 43~54ms + PLAYER_STATUS 18~31ms），
+            //    串行三台就是 270~330ms —— 耗时账本会判"偏慢"，用户体感是"点一下要等一下"。
+            //    并发度 = 台数（家里三台），每台内部仍是**串行两条**请求，没有对单台设备加压。
+            val kinds = coroutineScope {
+                targets.map { d ->
+                    async {
+                        // 单台探活炸了不能带走其它台：并发里一个子协程抛异常会取消整个 scope，
+                        // 那就会出现"某一台抽风 → 三台全显示离线" —— 比串行还坏
+                        d to runCatching { probeOne(d) }.getOrElse { error ->
+                            log("${d.title} 探活异常：${error.message ?: error.javaClass.simpleName}")
+                            ProbeKind.UNKNOWN
+                        }
                     }
-                    // ② IP 变了：扫一次，看能不能按 uuid 找回来
-                    val found = withContext(Dispatchers.IO) {
-                        runCatching { discovery.discoverLinkPlayDevices() }.getOrDefault(emptyList())
-                    }.firstOrNull { it.uuid?.contains(d.uuid, ignoreCase = true) == true }
-                    if (found != null) {
+                }.awaitAll()
+            }
+            val result = mutableMapOf<String, Boolean>()
+            kinds.forEach { (d, kind) -> result[d.uuid] = kind != ProbeKind.UNKNOWN }
+
+            // ② 没找到的（可能换了 IP）：**整批只扫一次 SSDP**。
+            //    并发时若每台各扫一次，三个发现会互相抢端口，反而更不稳。
+            val missing = kinds.filter { it.second == ProbeKind.UNKNOWN }.map { it.first }
+            if (missing.isNotEmpty()) {
+                val found = withContext(Dispatchers.IO) {
+                    runCatching { discovery.discoverLinkPlayDevices() }.getOrDefault(emptyList())
+                }
+                for (d in missing) {
+                    val hit = found.firstOrNull { it.uuid?.contains(d.uuid, ignoreCase = true) == true }
+                    if (hit != null) {
                         result[d.uuid] = true
-                        touch(d.uuid, found.ip, null, found.location)
-                        log("${d.title} 换了地址：${d.ip} → ${found.ip}")
+                        touch(d.uuid, hit.ip, null, hit.location)
+                        log("${d.title} 换了地址：${d.ip} → ${hit.ip}")
                     }
                 }
             }
-            // 顺带把「组」读出来：从机不可直连，只能由主机转述（真机实测从机在 10.10.10.x）
+
+            // ③ 顺带把「组」读出来：从机不可直连，只能由主机转述（真机实测从机在 10.10.10.x）
+            val online = targets.filter { result[it.uuid] == true }
+            val slaveLists = coroutineScope {
+                online.map { d ->
+                    async {
+                        d to withContext(Dispatchers.IO) {
+                            runCatching { MultiroomClient(client).slaves(d.ip) }.getOrDefault(emptyList())
+                        }
+                    }
+                }.awaitAll()
+            }
             val grouped = mutableMapOf<String, String>()
             var masterIp: String? = null
             var masterName: String? = null
             var members: List<GroupMember> = emptyList()
-            for (d in targets) {
-                if (result[d.uuid] != true) continue
-                val slaves = withContext(Dispatchers.IO) {
-                    runCatching { MultiroomClient(client).slaves(d.ip) }.getOrDefault(emptyList())
-                }
+            for ((d, slaves) in slaveLists) {
                 if (slaves.isEmpty()) continue
-                if (masterIp == null) {
-                    masterIp = d.ip
-                    masterName = d.title
-                    // 主机自己的音量在 getPlayerStatus 里（getStatusEx 没有这个字段）
-                    val masterVolume = withContext(Dispatchers.IO) {
-                        runCatching {
-                            PlayerStatus.parse(client.send(d.ip, "getPlayerStatus")).let { st ->
-                                VolumeBus.publish(d.ip, st.volume, st.mute)
-                                st.volume
-                            }
-                        }.getOrNull() ?: VolumeBus.volumeOf(d.ip)?.volume
-                    }
-                    // 从机电量/声道只有主机知道（从机在 10.10.10.x，直连必超时）
-                    slaves.forEach { sl ->
-                        val saved = UuidMatch.find(sl.uuid, targets) { it.uuid } ?: return@forEach
-                        _state.update { st ->
-                            val old = st.cards[saved.uuid] ?: DeviceCard()
-                            // 只覆盖设备**真的报了值**的字段：主机有时不带 battery/channel，
-                            // 直接 `copy(battery = null)` 会把上一轮的电量抹掉 —— 这就是
-                            // 「电量有时有有时没有」的直接原因。
-                            st.copy(
-                                cards = st.cards + (saved.uuid to old.copy(
-                                    battery = sl.battery ?: old.battery,
-                                    channel = sl.channel ?: old.channel,
-                                )),
-                            )
+                // 有多台自报有从机时只认第一个当主机：多主机同时成立是不可能的，
+                // 而"以第一个为准"至少是稳定的（原逻辑也是这个语义）
+                if (masterIp != null) continue
+                masterIp = d.ip
+                masterName = d.title
+                // 主机自己的音量在 getPlayerStatus 里（getStatusEx 没有这个字段）
+                val masterVolume = withContext(Dispatchers.IO) {
+                    runCatching {
+                        PlayerStatus.parse(client.send(d.ip, "getPlayerStatus")).let { st ->
+                            VolumeBus.publish(d.ip, st.volume, st.mute)
+                            st.volume
                         }
-                    }
-                    val shape = buildGroup(d.ip, d.title, d.uuid, masterVolume, slaves, targets)
-                    grouped.putAll(shape.first)
-                    members = shape.second
+                    }.getOrNull() ?: VolumeBus.volumeOf(d.ip)?.volume
                 }
+                // 从机电量/声道只有主机知道（从机在 10.10.10.x，直连必超时）
+                slaves.forEach { sl ->
+                    val saved = UuidMatch.find(sl.uuid, targets) { it.uuid } ?: return@forEach
+                    _state.update { st ->
+                        val old = st.cards[saved.uuid] ?: DeviceCard()
+                        // 只覆盖设备**真的报了值**的字段：主机有时不带 battery/channel，
+                        // 直接 `copy(battery = null)` 会把上一轮的电量抹掉 —— 这就是
+                        // 「电量有时有有时没有」的直接原因。
+                        st.copy(
+                            cards = st.cards + (saved.uuid to old.copy(
+                                battery = sl.battery ?: old.battery,
+                                channel = sl.channel ?: old.channel,
+                            )),
+                        )
+                    }
+                }
+                val shape = buildGroup(d.ip, d.title, d.uuid, masterVolume, slaves, targets)
+                grouped.putAll(shape.first)
+                members = shape.second
             }
             _state.update {
                 it.copy(
@@ -387,8 +399,40 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                     groupMembers = members,
                 )
             }
-            timing?.end(note = "${targets.size} 台")
+            timing?.end(note = "${targets.size} 台 · 同时问")
         }
+    }
+
+    /** 单台的探活结果。三态，因为「是 LinkPlay」「是通用 DLNA 渲染器」「都不是」后续处理完全不同。 */
+    private enum class ProbeKind { LINKPLAY, DMR, UNKNOWN }
+
+    /**
+     * 探**一台**。只做这一台的事，不参与跨设备决策（谁是主机），所以可以放心并发。
+     *
+     * 拆出来还有第二个好处："一台怎么探"从此只有一份实现，不会出现某处漏探 DMR 的情况。
+     */
+    private suspend fun probeOne(d: SavedDevice): ProbeKind {
+        // 走唯一的取数入口（最短路径：GetControlDeviceInfo + getPlayerStatus）
+        val snap = withContext(Dispatchers.IO) { snapshots.read(d.ip) }
+        // uuid 必须宽容比较：设备两种格式（无连字符 24 位 / 带 uuid: 前缀 32 位）永远不"相等"
+        if (snap != null && (snap.uuid == null || UuidMatch.same(snap.uuid, d.uuid))) {
+            // 名字/固件等来自快照；touch 负责写回本地记录（名字以设备 DeviceName 为准）
+            touch(d.uuid, d.ip, snap)
+            // 能答 getStatusEx 就是 LinkPlay 的私有 httpapi —— 卡片据此显示类型标签
+            putCardProfile(d.uuid, DeviceProfile.LINKPLAY, DeviceCapabilities.LINKPLAY)
+            applySnapshot(d.uuid, snap)
+            return ProbeKind.LINKPLAY
+        }
+        // ① 先看它是不是「通用 DLNA 渲染器」：这类设备**永远**答不上 httpapi，
+        //    但描述里的 AVTransport 在，一样能投流。不认这一档的话，
+        //    电视盒子会被判成"离线"，卡片上全是点不动的入口。
+        val (upnpProfile, upnpCaps) = withContext(Dispatchers.IO) { profileOfSaved(d) }
+        if (upnpProfile == DeviceProfile.GENERIC_DMR) {
+            putCardProfile(d.uuid, DeviceProfile.GENERIC_DMR, upnpCaps)
+            return ProbeKind.DMR
+        }
+        // ② 剩下的可能是「IP 变了」：交给调用方整批扫一次 SSDP（并发时各扫会抢端口）
+        return ProbeKind.UNKNOWN
     }
 
     /**
