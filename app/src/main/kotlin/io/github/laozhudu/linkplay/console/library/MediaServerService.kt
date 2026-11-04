@@ -117,6 +117,14 @@ object LocalMediaRegistry {
 
     fun isRunning(): Boolean = server != null && port > 0
 
+    /**
+     * 当前服务器实例（没在跑返回 null）。
+     *
+     * 给诊断页读推流统计用：只告诉用户"服务在跑"没法解释"没声音"，
+     * 得知道请求有没有进来、发出去多少、是不是被断了。
+     */
+    fun mediaServer(): LocalMediaServer? = server
+
     /** 取本机在当前网络下的 IPv4 地址（音箱要能访问到，所以不能用 127.0.0.1）。 */
     /** 兼容旧调用点；实现已移到 [io.github.laozhudu.linkplay.console.util.Net]。 */
     fun localIpAddress(): String? = io.github.laozhudu.linkplay.console.util.Net.localIpv4()

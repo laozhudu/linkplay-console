@@ -403,7 +403,14 @@ class PlaybackViewModel(
         AppDiagnostics.sections.register(
             "playback",
             "播放",
-            { if (_state.value.unavailableReason != null || _state.value.notice != null) Severity.WARN else Severity.INFO },
+            {
+                val failed = relay?.stats()?.failed ?: 0
+                if (_state.value.unavailableReason != null || _state.value.notice != null || failed > 0) {
+                    Severity.WARN
+                } else {
+                    Severity.INFO
+                }
+            },
         ) {
             val s = _state.value
             buildString {
@@ -413,6 +420,17 @@ class PlaybackViewModel(
                 appendLine("  传输态=${s.state}  曲目=${s.title ?: "-"}")
                 appendLine("  位置=${s.positionSec}s/${s.durationSec}s  音量=${s.volume}  静音=${s.mute}  循环=${s.loopMode}")
                 appendLine("  设备队列=${s.deviceQueueCount} 首 · 第 ${s.deviceQueueIndex + 1} 首")
+                // 中继统计：在线电台/DLNA 投流都走它。没有这几行，
+                // 「没声音」分不清是设备没来拉、上游 502、还是拉到一半断了。
+                relay?.let { r ->
+                    val st = r.stats()
+                    appendLine(
+                        "  中继=${r.baseUrl()} 请求=${st.requests} 完成=${st.completed}" +
+                            " 中断=${st.aborted} 失败=${st.failed}",
+                    )
+                    if (st.aborted > 0) appendLine("    最近中断=${st.lastAbortNote}")
+                    if (st.failed > 0) appendLine("    最近失败=${st.lastFailedNote}")
+                } ?: appendLine("  中继=未启动")
                 appendLine("  封面=${if (s.embeddedCover != null) "${s.embeddedCover!!.size}B（内嵌）" else (s.albumArtUrl ?: "无")}")
                 appendLine("  歌词=${if (s.lyrics.isNullOrBlank()) "无" else "${s.lyrics!!.length} 字"}")
                 s.notice?.let { appendLine("  提示=$it") }

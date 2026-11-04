@@ -109,6 +109,16 @@ class RelayMediaServer(
 
     val port: Int get() = serverSocket?.localPort ?: -1
 
+    /** 转发统计。和 [LocalMediaServer.stats] 同一个形状，诊断页可以一段显示两个服务。 */
+    @Volatile
+    private var statsSnapshot = MediaServerStats()
+
+    fun stats(): MediaServerStats = statsSnapshot
+
+    private fun bump(transform: (MediaServerStats) -> MediaServerStats) {
+        synchronized(this) { statsSnapshot = transform(statsSnapshot) }
+    }
+
     fun baseUrl(host: String? = null): String =
         "http://${host ?: advertiseHost ?: "127.0.0.1"}:$port"
 
@@ -124,7 +134,7 @@ class RelayMediaServer(
                 } catch (e: IOException) {
                     if (running.get()) continue else break
                 }
-                pool.execute { handle(client) }
+                pool.execute { serve(client) }
             }
         }, "relay-media-server").apply { isDaemon = true }.start()
         return socket.localPort
@@ -173,11 +183,52 @@ class RelayMediaServer(
 
     // ---- HTTP ----
 
-    private fun handle(socket: Socket) {
+    /**
+     * 一条连接的处理入口 —— **异常绝不外抛**，理由与 `LocalMediaServer.serve` 完全相同：
+     *
+     * 音箱/播放器拉到一半断开时 `output.write` 抛 `SocketException`，
+     * 原来没有这层兜底，异常从线程池线程冒出去被 `CrashGuard` 当成崩溃，
+     * 直接杀进程。**中继这条路径（在线电台、DLNA 投流）比本地曲库更容易断**，
+     * 所以它比 LocalMediaServer 更需要这层。
+     */
+    private fun serve(client: Socket) {
+        val progress = Progress()
+        bump { it.copy(requests = it.requests + 1) }
+        try {
+            handle(client, progress)
+            bump { it.copy(completed = it.completed + 1) }
+        } catch (e: IOException) {
+            if (!running.get()) return
+            bump {
+                it.copy(
+                    aborted = it.aborted + 1,
+                    lastAbortMs = System.currentTimeMillis(),
+                    lastAbortNote = "客户端中途断开：${e.message}（已发 ${human(progress.written)}）",
+                )
+            }
+        } catch (e: Throwable) {
+            bump {
+                it.copy(
+                    failed = it.failed + 1,
+                    lastFailedNote = "${e.javaClass.simpleName}: ${e.message}（已发 ${human(progress.written)}）",
+                )
+            }
+        } finally {
+            runCatching { client.close() }
+        }
+    }
+
+    private fun human(bytes: Long): String = when {
+        bytes >= 1024L * 1024 -> String.format(java.util.Locale.US, "%.1fMB", bytes / 1024.0 / 1024.0)
+        bytes >= 1024 -> "${bytes / 1024}KB"
+        else -> "${bytes}B"
+    }
+
+    private fun handle(socket: Socket, progress: Progress) {
         socket.use { s ->
             s.soTimeout = 15_000
             val input = s.getInputStream()
-            val output = s.getOutputStream()
+            val output = CountingOutputStream(s.getOutputStream(), progress)
             val requestLine = readLine(input) ?: return
             val parts = requestLine.split(' ')
             if (parts.size < 2) return respond(output, 400, "Bad Request", "bad request")
@@ -222,6 +273,7 @@ class RelayMediaServer(
                 if (wanted == null || up.status == 206) {
                     // 上游自己就给了 206，或设备没要 Range：直接透传
                     val length = up.header("Content-Length")?.toLongOrNull()
+                    length?.let { output.expect(it) }
                     val extra = up.header("Content-Range")?.let { "Content-Range: $it\r\n" } ?: ""
                     val head = buildString {
                         append("HTTP/1.1 ").append(if (up.status == 206) "206 Partial Content" else "200 OK").append("\r\n")
