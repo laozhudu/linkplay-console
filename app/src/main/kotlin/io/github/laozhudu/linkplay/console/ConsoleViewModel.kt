@@ -339,12 +339,6 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                     runCatching { MultiroomClient(client).slaves(d.ip) }.getOrDefault(emptyList())
                 }
                 if (slaves.isEmpty()) continue
-                // 归属表用**归一化 key**（UuidMatch.key），界面查表也用同一套 key ——
-                // 设备两种 uuid 格式混着来，任何一处用原始字符串比都会漏
-                slaves.forEach { sl ->
-                    val saved = UuidMatch.find(sl.uuid, targets) { it.uuid } ?: return@forEach
-                    grouped[UuidMatch.key(saved.uuid)] = d.title
-                }
                 if (masterIp == null) {
                     masterIp = d.ip
                     masterName = d.title
@@ -373,19 +367,9 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                             )
                         }
                     }
-                    members = listOf(
-                        GroupMember(ip = d.ip, name = d.title, uuid = d.uuid, volume = masterVolume, isMaster = true),
-                    ) + slaves.map { sl ->
-                        GroupMember(
-                            ip = sl.ip,
-                            name = sl.name ?: sl.ip,
-                            uuid = sl.uuid?.removePrefix("uuid:"),
-                            volume = sl.volume,
-                            channel = sl.channel,
-                            isMaster = false,
-                            masked = sl.masked,
-                        )
-                    }
+                    val shape = buildGroup(d.ip, d.title, d.uuid, masterVolume, slaves, targets)
+                    grouped.putAll(shape.first)
+                    members = shape.second
                 }
             }
             _state.update {
@@ -849,6 +833,83 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** 立刻重读一遍组内设备（比等 3 秒心跳快）。 */
+    /**
+     * 组拓扑心跳：只读主机的 `slave_list`（几百字节），**整体替换**组模型。
+     *
+     * ## 为什么必须有它
+     *
+     * 组的认知原来只在 `probeSaved`（启动 / 操作 / 手动刷新）更新。
+     * 设备端退组之后界面还停在旧状态 —— 用户点「退出同步」，代码却认为"它不在组里"，
+     * 直接 return，一条命令都不发。这就是「加了组退不出来」。
+     *
+     * ## 判据严格分开
+     *
+     * - 有设备**成功**读到非空 → 建组（谁是主机由设备真值决定，不看我们缓存）
+     * - 所有在线设备都**成功**读到空 → 才清空（一次读失败不算"组没了"）
+     * - 全都读不到 → 什么都不改，只记诊断
+     *
+     * 这三条分开是必须的：把"读失败"当成"没人组网"，会出现组内从机集体掉出组的情况。
+     */
+    private suspend fun refreshGroupTopology() {
+        val st = _state.value
+        val saved = st.saved
+        if (saved.isEmpty()) return
+        val candidates = saved.filter { st.online[it.uuid] != false }
+        if (candidates.isEmpty()) return
+
+        var foundMaster: SavedDevice? = null
+        var foundSlaves: List<io.github.laozhudu.linkplay.protocol.multiroom.SlaveInfo> = emptyList()
+        var succeeded = 0
+        val started = System.currentTimeMillis()
+        for (d in candidates) {
+            val r = withContext(Dispatchers.IO) { runCatching { MultiroomClient(client).slaves(d.ip) } }
+            if (r.isFailure) continue
+            succeeded++
+            val list = r.getOrThrow()
+            if (list.isEmpty()) continue
+            foundMaster = d
+            foundSlaves = list
+            break
+        }
+        val ms = System.currentTimeMillis() - started
+
+        val master = foundMaster
+        when {
+            master != null -> {
+                val shape = buildGroup(
+                    masterIp = master.ip,
+                    masterName = master.title,
+                    masterUuid = master.uuid,
+                    masterVolume = st.cards[master.uuid]?.volume,
+                    slaves = foundSlaves,
+                    saved = saved,
+                )
+                val unmatched = foundSlaves.count { sl -> UuidMatch.find(sl.uuid, saved) { it.uuid } == null }
+                _state.update {
+                    it.copy(
+                        groupedUnder = shape.first,
+                        groupMasterIp = master.ip,
+                        groupMasterName = master.title,
+                        groupMembers = shape.second,
+                    )
+                }
+                GroupSourceStatus.topologyRead(master.title, foundSlaves.size, unmatched, ms)
+            }
+            succeeded > 0 -> {
+                _state.update {
+                    it.copy(
+                        groupedUnder = emptyMap(),
+                        groupMasterIp = null,
+                        groupMasterName = null,
+                        groupMembers = emptyList(),
+                    )
+                }
+                GroupSourceStatus.topologyEmpty(ms)
+            }
+            else -> GroupSourceStatus.topologyFailed("所有设备都读不到 slave_list")
+        }
+    }
+
     private suspend fun refreshDevicesInGroup() {
         val st = _state.value
         val ips = buildList {
@@ -861,6 +922,49 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
             val snap = withContext(Dispatchers.IO) { snapshots.read(ip) } ?: continue
             applySnapshot(uuid, snap)
         }
+    }
+
+    /**
+     * 由主机的 `slave_list` 算出「归属表 + 成员列表」。
+     *
+     * 抽成一个函数是因为：`probeSaved`（完整探活）和组拓扑心跳（每 3 秒）都要做这件事。
+     * 各写一份必然漂移 —— 一边用 uuid 归一化、另一边忘了，就会出现
+     * 「设备在组里但卡片上没有归属」，进而**连退出同步的入口都不显示**。
+     */
+    private fun buildGroup(
+        masterIp: String,
+        masterName: String,
+        masterUuid: String?,
+        masterVolume: Int?,
+        slaves: List<io.github.laozhudu.linkplay.protocol.multiroom.SlaveInfo>,
+        saved: List<SavedDevice>,
+    ): Pair<Map<String, String>, List<GroupMember>> {
+        val grouped = mutableMapOf<String, String>()
+        var unmatched = 0
+        val members = ArrayList<GroupMember>()
+        members += GroupMember(
+            ip = masterIp,
+            name = masterName,
+            uuid = masterUuid,
+            volume = masterVolume,
+            isMaster = true,
+        )
+        slaves.forEach { sl ->
+            val target = UuidMatch.find(sl.uuid, saved) { it.uuid }
+            if (target == null) unmatched++
+            // 归属表用**归一化 key**：设备两种 uuid 格式混着来，任何一处用原始字符串比都会漏
+            target?.let { grouped[UuidMatch.key(it.uuid)] = masterName }
+            members += GroupMember(
+                ip = sl.ip,
+                name = sl.name ?: sl.ip,
+                uuid = sl.uuid?.removePrefix("uuid:"),
+                volume = sl.volume,
+                channel = sl.channel,
+                isMaster = false,
+                masked = sl.masked,
+            )
+        }
+        return grouped to members
     }
 
     /** 刷新「我的音乐」六个入口的数量。 */
@@ -1122,6 +1226,16 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                         VolumeBus.publish(masterIp, st.volume, st.mute)
                     }
                 }
+            }
+        }
+        // 组拓扑心跳：3 秒一次，只读 slave_list（几百字节，比完整快照轻得多）。
+        // 没有它，组的认知就只在探活时更新 —— 设备退组了界面也不知道，
+        // 用户想退也点不到（卡片上"退出同步"按 inGroup 决定显示与否）。
+        safeLaunch("groupTopology") {
+            while (true) {
+                delay(3_000)
+                if (_state.value.saved.isEmpty()) continue
+                refreshGroupTopology()
             }
         }
         // 首页卡片心跳：每 3 秒逐台读 getPlayerStatus（原厂设备列表就显示每台的曲名/音量）。

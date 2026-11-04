@@ -133,6 +133,17 @@ internal class ConsoleDiagnostics(
                 appendLine("  耗时=${st.elapsedMs}ms")
             }
         }
+        // 组 —— 「加了组却退不出来」的那一层：界面认知与设备真值对不对得上。
+        AppDiagnostics.sections.register(
+            "group",
+            "组",
+            {
+                val g = GroupSourceStatus.snapshot()
+                // 命令被接受但设备仍在组里 = 明确的问题
+                if (g.actionConfirmed == false || (g.lastUnmatched > 0)) Severity.WARN else Severity.INFO
+            },
+        ) { GroupSourceStatus.render() }
+
         // 内容源 · 本地曲库 —— 第二个盲区（`docs/65` 批次 1）。
         // 它要回答的是「扫描 0 首」到底是没权限、真没歌、还是查到全被跳过。
         AppDiagnostics.sections.register(
