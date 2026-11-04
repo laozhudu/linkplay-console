@@ -43,7 +43,11 @@ class LxMusicSdkTest {
         val engine = FakeEngine()
         sdk(engine).load()
 
-        assertEquals(listOf("lx-music-sdk.bundle.js"), engine.evaluated.map { it.first })
+        // 垫片先于 bundle（bundle 顶层就用 Buffer，见 LxBufferPolyfill 的注释）
+        assertEquals(
+            listOf("lx-buffer-polyfill.js", "lx-music-sdk.bundle.js"),
+            engine.evaluated.map { it.first },
+        )
         assertTrue(engine.functions.containsKey("__lx_crypto__"))
         assertTrue(engine.functions.containsKey("__lx_native_call__"))
     }
@@ -53,8 +57,11 @@ class LxMusicSdkTest {
         val engine = FakeEngine()
         val s = sdk(engine)
         s.load()
+        val afterFirst = engine.evaluated.size
         s.load()
-        assertEquals(1, engine.evaluated.size)
+        // 第二次不该再 evaluate 任何东西（垫片 + bundle 一共两条，且不重复）
+        assertEquals(2, afterFirst)
+        assertEquals(afterFirst, engine.evaluated.size)
     }
 
     @Test
