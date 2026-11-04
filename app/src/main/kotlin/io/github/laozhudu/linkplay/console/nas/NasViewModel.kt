@@ -423,7 +423,7 @@ class NasViewModel(
             val upstream = DevicePlaylistGateway.push(rendererIp, rendererLocation, items, start)
             if (upstream.ok) {
                 log(upstream.detail + "（设备侧队列 · 原厂 PlayQueue）")
-                QueueBus.restore(items, start, items.getOrNull(start)?.title, deviceOwned = true,
+                QueueBus.restore(rendererIp, items, start, items.getOrNull(start)?.title, deviceOwned = true,
                     note = "设备列表 ${items.size} 首 · 第 ${start + 1} 首")
                 _state.update { it.copy(playing = true, nowPlaying = items.getOrNull(start)?.title) }
                 return@safeLaunch
@@ -434,7 +434,7 @@ class NasViewModel(
             val pushed = DeviceQueuePush.push(DeviceHttpClient(), rendererIp, items, start)
             if (pushed.ok) {
                 log(pushed.detail + "（设备侧队列 · m3u）")
-                QueueBus.restore(items, start, items.getOrNull(start)?.title, deviceOwned = true,
+                QueueBus.restore(rendererIp, items, start, items.getOrNull(start)?.title, deviceOwned = true,
                     offset = pushed.offset, note = "设备列表 ${items.size} 首 · 第 ${start + 1} 首（m3u）")
                 QueueBus.markDeviceOwned(pushed.offset)
                 _state.update { it.copy(playing = true, nowPlaying = items.getOrNull(start)?.title) }

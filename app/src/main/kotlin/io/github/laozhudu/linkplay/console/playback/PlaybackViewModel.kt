@@ -380,6 +380,7 @@ class PlaybackViewModel(
             engine!!.playUrl(target, null)
             // 投进来的一首也要进队列 —— 否则播放页的列表永远是空的（用户实际遇到的就是这个）
             QueueBus.begin(
+                deviceIp,
                 listOf(
                     QueueItem(
                         url = target,
@@ -388,7 +389,7 @@ class PlaybackViewModel(
                     ),
                 ),
             )
-            QueueBus.playing(raw.substringAfterLast('/').ifBlank { "投流音频" }, 0)
+            QueueBus.playing(deviceIp, raw.substringAfterLast('/').ifBlank { "投流音频" }, 0)
             log(if (needsHeaders) "已转发投流：$target" else "已投流：$target")
         }
     }
@@ -748,6 +749,7 @@ class PlaybackViewModel(
             val items = DevicePlaylistGateway.toQueueItems(deviceList)
             val idx = deviceList.currentIndex.coerceIn(0, items.lastIndex)
             QueueBus.restore(
+                deviceIp = deviceIp,
                 items = items,
                 index = idx,
                 title = items.getOrNull(idx)?.title,
@@ -768,6 +770,7 @@ class PlaybackViewModel(
         val deviceQueue = readDeviceQueue()
         QueueRestore.plan(savedSession, deviceQueue)?.let { plan ->
             QueueBus.restore(
+                deviceIp = deviceIp,
                 items = plan.items,
                 index = plan.index,
                 title = plan.items.getOrNull(plan.index)?.title,

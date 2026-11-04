@@ -64,10 +64,14 @@ object QueueBus {
     /**
      * 当前这份队列属于哪台设备。
      *
-     * 用模块级变量而不是只看 state：`begin/restore/clear` 都会新建 `QueueRunState`，
-     * 若每次都要调用方记得传 owner，漏一处的后果就是"列表又串台了"。
-     * 这里统一由 [setOwner] 维护，内部构造时自动带上。
+     * 由 [setOwner] 与各写入方法共同维护。**外部不能再直接写** ——
+     * 之前 `begin/restore` 内部读的是"当前 owner"，调用方忘了先 setOwner 就会
+     * 把新列表挂到上一台设备名下（PR #40 修过一次，但只修了 QueueStarter 一条路，
+     * NAS / Console / 服务内部那几处仍然会串台）。
+     *
+     * 现在所有写入方法**强制要求传 deviceIp**，编译期就堵死了这个漏点。
      */
+    @Volatile
     private var currentOwner: String? = null
     val state: StateFlow<QueueRunState> = _state.asStateFlow()
 
@@ -87,11 +91,20 @@ object QueueBus {
     /** 服务是否在跑（有 controller 才能真的跳转/删除）。 */
     val hasController: Boolean get() = controller != null
 
-    fun begin(items: List<QueueItem>) = _state.update {
-        QueueRunState(
-            ownerIp = currentOwner,
-            running = true, items = items, index = 0, total = items.size, playedCount = 0,
-        )
+    /**
+     * 开始一份**属于 [deviceIp]** 的新队列。
+     *
+     * @param deviceIp 队列归属，必填。之前是内部读 currentOwner，
+     *   调用方忘了 setOwner 就把列表挂到上一台设备名下 —— 编译期强制之后不可能再漏。
+     */
+    fun begin(deviceIp: String, items: List<QueueItem>) {
+        currentOwner = deviceIp
+        _state.update {
+            QueueRunState(
+                ownerIp = deviceIp,
+                running = true, items = items, index = 0, total = items.size, playedCount = 0,
+            )
+        }
     }
 
     /**
@@ -106,15 +119,27 @@ object QueueBus {
         _state.update { QueueRunState(ownerIp = deviceIp) }
     }
 
+    /**
+     * 当前队列归属哪台设备 —— 读取侧守卫用。
+     *
+     * 写入侧现在编译期强制带归属（[begin]/[restore]/[playing]/[clear]），
+     * 这个方法主要给**读**用：界面拿它决定"要不要显示这份列表"。
+     */
     fun owner(): String? = currentOwner
 
-    fun playing(title: String, index: Int, items: List<QueueItem>? = null) = _state.update {
-        it.copy(
-            nowPlaying = title,
-            index = index,
-            playedCount = index + 1,
-            items = items ?: it.items,
-        )
+    /**
+     * 上报"现在在放第几首"。带归属：别的设备的播放进度不该改这份队列的高亮。
+     */
+    fun playing(deviceIp: String, title: String, index: Int, items: List<QueueItem>? = null) {
+        if (currentOwner != deviceIp) return
+        _state.update {
+            it.copy(
+                nowPlaying = title,
+                index = index,
+                playedCount = index + 1,
+                items = items ?: it.items,
+            )
+        }
     }
 
     fun finish(controlLost: Boolean, log: List<String>) = _state.update {
@@ -135,15 +160,19 @@ object QueueBus {
      * 而不是假装有个正在运行的队列。
      */
     fun restore(
+        /** 队列归属，必填（理由见 [begin]）。 */
+        deviceIp: String,
         items: List<QueueItem>,
         index: Int,
         title: String?,
         deviceOwned: Boolean = false,
         offset: Int = 0,
         note: String? = null,
-    ) = _state.update {
+    ) {
+        currentOwner = deviceIp
+        _state.update {
         QueueRunState(
-            ownerIp = currentOwner,
+            ownerIp = deviceIp,
             running = false,
             items = items,
             index = index.coerceIn(0, (items.size - 1).coerceAtLeast(0)),
@@ -154,6 +183,7 @@ object QueueBus {
             deviceOffset = offset,
             sourceNote = note,
         )
+        }
     }
 
     /** 标记当前队列由设备持有（不启动本地循环）。 */
@@ -171,7 +201,13 @@ object QueueBus {
     /** 停止后保留 items/nowPlaying，方便 UI 显示「上次播到哪」。 */
     fun stopped() = _state.update { it.copy(running = false) }
 
-    fun clear() = _state.update { QueueRunState(ownerIp = currentOwner) }
+    /**
+     * 清空队列。带归属：只清**这台设备**的，别人的队列不该被顺手抹掉。
+     */
+    fun clear(deviceIp: String) {
+        if (currentOwner != deviceIp) return
+        _state.update { QueueRunState(ownerIp = currentOwner) }
+    }
 
     /**
      * 这台设备的队列是不是"我们手上这份"。

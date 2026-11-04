@@ -8,14 +8,21 @@ import org.junit.Test
 class DeviceListTest {
 
     private fun dev(uuid: String, ip: String, seen: Long, name: String = "doss") =
-        SavedDevice(uuid = uuid, name = name, ip = ip, location = "http://$ip:49152/description.xml", lastSeenMs = seen)
+        SavedDevice.of(
+            rawId = uuid,
+            name = name,
+            ip = ip,
+            location = "http://$ip:49152/description.xml",
+            lastSeenMs = seen,
+        )
 
     @Test
     fun `新增设备按最近使用排序`() {
         var list = emptyList<SavedDevice>()
         list = DeviceList.upsert(list, dev("A", "10.0.0.1", 100))
         list = DeviceList.upsert(list, dev("B", "10.0.0.2", 200))
-        assertEquals(listOf("B", "A"), list.map { it.uuid })
+        // uuid 归一化统一小写（SavedDevice.of 的约定）
+        assertEquals(listOf("b", "a"), list.map { it.uuid })
     }
 
     @Test
@@ -42,13 +49,13 @@ class DeviceListTest {
             listOf(dev("A", "10.0.0.1", 100), dev("B", "10.0.0.2", 200)),
             "A",
         )
-        assertEquals(listOf("B"), list.map { it.uuid })
+        assertEquals(listOf("b"), list.map { it.uuid })
     }
 
     @Test
     fun `最近使用的那台可以取到`() {
         val list = listOf(dev("A", "10.0.0.1", 100), dev("B", "10.0.0.2", 500))
-        assertEquals("B", DeviceList.mostRecent(list)?.uuid)
+        assertEquals("b", DeviceList.mostRecent(list)?.uuid)
         assertNull(DeviceList.mostRecent(emptyList()))
     }
 
@@ -57,7 +64,7 @@ class DeviceListTest {
         val list = listOf(dev("A", "10.0.0.1", 100, "客厅 DOSS"), dev("B", "10.0.0.2", 200))
         val back = DeviceList.decode(DeviceList.encode(list))
         assertEquals(2, back.size)
-        assertEquals("客厅 DOSS", back.first { it.uuid == "A" }.name)
+        assertEquals("客厅 DOSS", back.first { it.uuid == "a" }.name)
     }
 
     @Test
@@ -69,7 +76,7 @@ class DeviceListTest {
 
     @Test
     fun `名字为空时标题退回 IP`() {
-        val d = SavedDevice(uuid = "A", name = "  ", ip = "10.0.0.1")
+        val d = SavedDevice.of(rawId = "A", name = "  ", ip = "10.0.0.1")
         assertEquals("10.0.0.1", d.title)
     }
 
@@ -79,6 +86,6 @@ class DeviceListTest {
         repeat(30) { i -> list = DeviceList.upsert(list, dev("U$i", "10.0.0.$i", i.toLong())) }
         assertTrue("实际 ${list.size}", list.size <= 16)
         // 保留的应该是最近的那些
-        assertEquals("U29", list.first().uuid)
+        assertEquals("u29", list.first().uuid)
     }
 }

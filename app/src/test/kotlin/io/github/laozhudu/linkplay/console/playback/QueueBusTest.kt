@@ -18,25 +18,29 @@ import org.junit.Test
  */
 class QueueBusTest {
 
+    /** 队列归属的固定值：现在所有写入都必须带 deviceIp（编译期强制）。 */
+    private val DEV = "192.168.99.153"
+
+
     private fun items(vararg names: String) =
         names.mapIndexed { i, n -> QueueItem(url = "http://nas/$i.mp3", title = n) }
 
     @Before
     fun reset() {
         QueueBus.bind(null)
-        QueueBus.clear()
+        QueueBus.clear(DEV)
     }
 
     @After
     fun tearDown() {
         QueueBus.bind(null)
-        QueueBus.clear()
+        QueueBus.clear(DEV)
     }
 
     @Test
     fun 服务不在时也能删除并保持索引一致() {
-        QueueBus.begin(items("a", "b", "c"))
-        QueueBus.playing("b", 1)
+        QueueBus.begin(DEV, items("a", "b", "c"))
+        QueueBus.playing(DEV, "b", 1)
 
         QueueBus.removeAt(0)                       // 删掉当前曲之前的那首
 
@@ -49,8 +53,8 @@ class QueueBusTest {
 
     @Test
     fun 删掉当前曲后索引不越界() {
-        QueueBus.begin(items("a", "b", "c"))
-        QueueBus.playing("c", 2)
+        QueueBus.begin(DEV, items("a", "b", "c"))
+        QueueBus.playing(DEV, "c", 2)
 
         QueueBus.removeAt(2)                       // 删掉最后一首（正在播）
 
@@ -62,8 +66,8 @@ class QueueBusTest {
 
     @Test
     fun 删空队列后索引为负一() {
-        QueueBus.begin(items("only"))
-        QueueBus.playing("only", 0)
+        QueueBus.begin(DEV, items("only"))
+        QueueBus.playing(DEV, "only", 0)
 
         QueueBus.removeAt(0)
 
@@ -80,7 +84,7 @@ class QueueBusTest {
             override fun skipTo(index: Int) {}
             override fun removeAt(index: Int) { delegated = index }
         })
-        QueueBus.begin(items("a", "b"))
+        QueueBus.begin(DEV, items("a", "b"))
 
         QueueBus.removeAt(1)
 
@@ -96,7 +100,7 @@ class QueueBusTest {
             override fun skipTo(index: Int) { jumped = index }
             override fun removeAt(index: Int) {}
         })
-        QueueBus.begin(items("a", "b", "c"))
+        QueueBus.begin(DEV, items("a", "b", "c"))
 
         QueueBus.skipTo(2)
 
@@ -105,7 +109,7 @@ class QueueBusTest {
 
     @Test
     fun 越界索引不抛出也不改动() {
-        QueueBus.begin(items("a"))
+        QueueBus.begin(DEV, items("a"))
         QueueBus.removeAt(5)
         assertEquals(1, QueueBus.state.value.items.size)
         assertFalse(QueueBus.state.value.items.isEmpty())

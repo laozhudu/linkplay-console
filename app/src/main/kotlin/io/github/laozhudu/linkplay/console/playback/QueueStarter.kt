@@ -65,9 +65,9 @@ suspend fun startQueueOnDevice(
         withContext(Dispatchers.IO) {
             runCatching { sessions.savePlayback(PlaybackKey.of(deviceUuid, deviceIp), session) }
         }
-        QueueBus.setOwner(deviceIp)
+        // restore 自己会设 owner —— 不再需要先 setOwner（那是旧 API 的两步写法）
         QueueBus.restore(
-            items, index, items.getOrNull(index)?.title,
+            deviceIp, items, index, items.getOrNull(index)?.title,
             deviceOwned = true,
             note = "$note ${items.size} 首 · 第 ${index + 1} 首",
         )
@@ -91,8 +91,10 @@ suspend fun startQueueOnDevice(
         }
     }
     if (pushed.ok) {
-        QueueBus.setOwner(deviceIp)
-        QueueBus.restore(items, index, items.getOrNull(index)?.title, deviceOwned = true, offset = pushed.offset)
+        QueueBus.restore(
+            deviceIp, items, index, items.getOrNull(index)?.title,
+            deviceOwned = true, offset = pushed.offset,
+        )
         QueueBus.markDeviceOwned(pushed.offset)
         log(pushed.detail + "（设备侧队列）")
         io.github.laozhudu.linkplay.console.library.PlayJournal.recordCurrent(context, items, index)

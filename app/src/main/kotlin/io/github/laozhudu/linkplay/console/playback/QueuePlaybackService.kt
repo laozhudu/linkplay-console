@@ -63,7 +63,8 @@ class QueuePlaybackService : Service() {
             val next = items.toMutableList().apply { removeAt(index) }
             if (next.isEmpty()) {
                 stopQueue()
-                QueueBus.clear()
+                // 带归属清空：只清这台设备的队列
+                QueueBus.clear(curIp)
                 return
             }
             // 删掉的是当前曲或更前面的曲：从当前位置（或删后同位）继续；否则只更新列表
@@ -73,7 +74,12 @@ class QueuePlaybackService : Service() {
                 else -> -1
             }
             curItems = next
-            QueueBus.playing((next.getOrNull(QueueBus.state.value.index)?.title ?: ""), QueueBus.state.value.index.coerceAtLeast(0), next)
+            QueueBus.playing(
+                curIp,
+                next.getOrNull(QueueBus.state.value.index)?.title ?: "",
+                QueueBus.state.value.index.coerceAtLeast(0),
+                next,
+            )
             if (target >= 0) restart(next, target.coerceIn(0, next.size - 1))
         }
     }
@@ -140,7 +146,11 @@ class QueuePlaybackService : Service() {
         items: List<QueueItem>,
         baseIndex: Int = 0,
     ) {
-        if (baseIndex == 0) QueueBus.begin(items) else QueueBus.playing(items.firstOrNull()?.title ?: "", baseIndex, curItems)
+        if (baseIndex == 0) {
+            QueueBus.begin(ip, items)
+        } else {
+            QueueBus.playing(ip, items.firstOrNull()?.title ?: "", baseIndex, curItems)
+        }
         val sessions = SessionStore.of(this)
         try {
             val client = describeClient(ip, location)
@@ -150,7 +160,7 @@ class QueuePlaybackService : Service() {
                         client.setAvTransportUri(item.url, item.title, item.mimeType)
                         client.play()
                         val index = baseIndex + items.indexOfFirst { it.url == item.url }.coerceAtLeast(0)
-                        QueueBus.playing(item.title, index, curItems)
+                        QueueBus.playing(ip, item.title, index, curItems)
                         // 每切一首就更新快照：被杀进程时最多丢一首的进度
                         runCatching {
                             sessions.savePlayback(
