@@ -22,6 +22,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import io.github.laozhudu.linkplay.console.diagnostics.SourceFailure
+import io.github.laozhudu.linkplay.radio.RadioBrowserSource
+import io.github.laozhudu.linkplay.radio.playbackHint
+import io.github.laozhudu.linkplay.radio.toFavourite
+import io.github.laozhudu.radiodiscovery.model.RadioStation as DiscoveryStation
 import io.github.laozhudu.linkplay.console.diagnostics.safeLaunch
 
 data class RadioUiState(
@@ -35,6 +39,12 @@ data class RadioUiState(
     /** 播放结果说明：成功/失败都写清楚，不假装。 */
     val note: String? = null,
     val log: List<String> = emptyList(),
+    /** 「发现电台」：目录查询中。 */
+    val discovering: Boolean = false,
+    val discoverQuery: String = "",
+    val discoverResults: List<DiscoveryStation> = emptyList(),
+    /** 查不到 / 连不上 —— 与"搜到 0 条"必须分开（铁律：不给假空态）。 */
+    val discoverError: String? = null,
 ) {
     /** 还没添加过的内置电台，用来做「一键添加」。 */
     val missingVerified: List<VerifiedRadioCatalog.Entry>
@@ -269,6 +279,58 @@ class RadioViewModel(
                 }
                 log("播放失败：$url → $detail")
             }
+        }
+    }
+
+    /**
+     * 从全球目录发现电台（空关键词 = 看热门）。
+     *
+     * 为什么要有这条：库里的台只能靠用户自己粘贴地址，而"想听中国之声"的人
+     * 并不知道它现在的流地址。`core-radio` 提供的是**目录查询**，不是播放源 ——
+     * 查到的台最终仍然走我们自己的入库 + 投送链路（docs/74 硬规则 1）。
+     */
+    fun discover(query: String) {
+        if (_state.value.discovering) return
+        val q = query.trim()
+        _state.update { it.copy(discovering = true, discoverQuery = q, discoverError = null) }
+        safeLaunch("discoverRadio") {
+            val started = System.currentTimeMillis()
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    val src = RadioBrowserSource()
+                    if (q.isBlank()) src.popular(30) else src.search(q, 30)
+                }
+            }
+            val ms = System.currentTimeMillis() - started
+            result.onSuccess { list ->
+                _state.update { it.copy(discovering = false, discoverResults = list) }
+                RadioSourceStatus.discovered(q, list.size, ms)
+            }.onFailure { t ->
+                _state.update {
+                    it.copy(
+                        discovering = false,
+                        discoverResults = emptyList(),
+                        discoverError = t.message ?: "查不到（网络或目录服务不可用）",
+                    )
+                }
+                RadioSourceStatus.discoverFailed(q, t, ms)
+            }
+        }
+    }
+
+    /**
+     * 目录里的一条 → 存进收藏。
+     *
+     * 先 `resolve()` 拿真实地址（中间页存下来下次还得再解一次），失败就退回原地址。
+     * 然后走**既有的**入库路径 `add()`：同地址不重复、写完自动 reload。
+     */
+    fun addDiscovered(station: DiscoveryStation) {
+        safeLaunch("addDiscovered") {
+            val resolved = withContext(Dispatchers.IO) {
+                runCatching { RadioBrowserSource().resolve(station) }.getOrDefault(station)
+            }
+            val fav = resolved.toFavourite(deviceName)
+            add(fav.name, fav.url)
         }
     }
 
