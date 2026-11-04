@@ -88,6 +88,9 @@ class LxMusicSdk(
             null
         }
 
+        // 必须在一切之前：quickjs-wrapper 的原生 console 要宿主先设 stdout，
+        // 没设时 bundle 里任何一句 console.log 都会抛异常（真机 0.9.110 报的就是这个）
+        engine.evaluate(LxConsoleShim.SCRIPT, LxConsoleShim.FILENAME)
         // 必须在 bundle 之前：kw 的歌词解码直接用 Buffer（Node 全局），QuickJS 没有。
         // 真机报错：'Buffer' is not defined at lx-music-sdk.bundle.js:7948
         engine.evaluate(LxBufferPolyfill.SCRIPT, LxBufferPolyfill.FILENAME)

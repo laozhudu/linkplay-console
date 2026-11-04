@@ -26,8 +26,8 @@ class LxBufferPolyfillTest {
 
         val names = engine.evaluated.map { it.first }
         assertEquals(
-            "垫片必须排在 bundle 前面，否则模块顶层的 Buffer.from 照样炸",
-            listOf(LxBufferPolyfill.FILENAME, "lx-music-sdk.bundle.js"),
+            "两个垫片都必须排在 bundle 前面：console 垫片防一打日志就抛，Buffer 垫片防顶层 Buffer.from 炸",
+            listOf(LxConsoleShim.FILENAME, LxBufferPolyfill.FILENAME, "lx-music-sdk.bundle.js"),
             names,
         )
     }
@@ -66,6 +66,9 @@ class LxBufferPolyfillTest {
         }
 
         assertTrue(engine.evaluated.isNotEmpty())
-        assertEquals(LxBufferPolyfill.FILENAME, engine.evaluated.first().first)
+        // console 垫片排最前（wrapper 的原生 console 要宿主设 stdout，否则一打日志就抛），
+        // Buffer 垫片必须紧跟其后、仍然在所有业务脚本之前
+        assertEquals(LxConsoleShim.FILENAME, engine.evaluated.first().first)
+        assertEquals(LxBufferPolyfill.FILENAME, engine.evaluated[1].first)
     }
 }

@@ -49,7 +49,7 @@ class LxUserApiTest {
         assertEquals(listOf("wy"), result.sourceIds)
         // 顺序：先 preload 再脚本，不能反
         assertEquals(
-            listOf("lx-buffer-polyfill.js", "lx-preload.js", "user-api.js"),
+            listOf("lx-console-shim.js", "lx-buffer-polyfill.js", "lx-preload.js", "user-api.js"),
             engine.evaluated.map { it.first },
         )
         // 桥必须都装上了

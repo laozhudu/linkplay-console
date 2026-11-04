@@ -77,6 +77,9 @@ class LxSearchViewModel(
         }
     }
 
+    /** 用户点"知道了"：把上一次的错误清掉（否则搜到了也会一直顶着红字）。 */
+    fun clearError() = _state.update { it.copy(error = null) }
+
     fun setSource(source: String) = _state.update { it.copy(source = source, results = emptyList(), searchedKeyword = null) }
 
     fun search(keyword: String) {

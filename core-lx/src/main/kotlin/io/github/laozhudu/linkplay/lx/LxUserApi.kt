@@ -205,6 +205,9 @@ class LxUserApi(
         this.info = info
         attachBridge()
         return try {
+            // console 垫片必须最先：preload 最后一句就是 console.log('Preload finished.')，
+            // 而它之后 globalThis 会被冻结，那时再想换 console 已经来不及
+            engine.evaluate(LxConsoleShim.SCRIPT, LxConsoleShim.FILENAME)
             engine.evaluate(LxBufferPolyfill.SCRIPT, LxBufferPolyfill.FILENAME)
             engine.evaluate(preloadScript, "lx-preload.js")
             engine.callGlobal(
