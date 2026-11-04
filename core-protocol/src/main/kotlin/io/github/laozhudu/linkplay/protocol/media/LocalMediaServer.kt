@@ -56,6 +56,19 @@ class LocalMediaServer(
 
     val port: Int get() = serverSocket?.localPort ?: -1
 
+    /**
+     * 推流统计。诊断页要回答的是「音乐没声音，是根本没请求、请求了没发出去、
+     * 还是发到一半断了」—— 三种情况的修法完全不同，而界面看起来一模一样。
+     */
+    @Volatile
+    private var statsSnapshot = MediaServerStats()
+
+    fun stats(): MediaServerStats = statsSnapshot
+
+    private fun bump(transform: (MediaServerStats) -> MediaServerStats) {
+        synchronized(this) { statsSnapshot = transform(statsSnapshot) }
+    }
+
     /** 对外宣告的基地址，例如 `http://192.168.1.5:8123`。 */
     fun baseUrl(host: String? = null): String {
         val h = host ?: advertiseHost ?: "127.0.0.1"
@@ -85,7 +98,7 @@ class LocalMediaServer(
                 } catch (e: IOException) {
                     if (running.get()) continue else break
                 }
-                pool.execute { handle(client) }
+                pool.execute { serve(client) }
             }
         }, "local-media-server").apply { isDaemon = true }.start()
         return socket.localPort
@@ -100,11 +113,11 @@ class LocalMediaServer(
 
     // ---- HTTP 处理 ----
 
-    private fun handle(socket: Socket) {
+    private fun handle(socket: Socket, progress: Progress) {
         socket.use { s ->
             s.soTimeout = 10_000
             val input = s.getInputStream()
-            val output = s.getOutputStream()
+            val output = CountingOutputStream(s.getOutputStream(), progress)
             val requestLine = readLine(input) ?: return
             val parts = requestLine.split(' ')
             if (parts.size < 2) return respond(output, 400, "Bad Request", null)
@@ -137,6 +150,7 @@ class LocalMediaServer(
                     append("Accept-Ranges: none\r\n")
                     append("Connection: close\r\n\r\n")
                 }
+                output.expect(v.body.size.toLong())
                 output.write(headers.toByteArray(Charsets.ISO_8859_1))
                 if (method == "GET") output.write(v.body)
                 output.flush()
@@ -161,6 +175,7 @@ class LocalMediaServer(
                     append("Connection: close\r\n\r\n")
                 }
                 output.write(headers.toByteArray(Charsets.ISO_8859_1))
+                output.expect(total)
                 if (method == "GET") stream(file, 0, total, output)
                 output.flush()
                 return
@@ -178,6 +193,7 @@ class LocalMediaServer(
                 append("Connection: close\r\n\r\n")
             }
             output.write(headers.toByteArray(Charsets.ISO_8859_1))
+            output.expect(length)
             if (method == "GET") stream(file, start, length, output)
             output.flush()
         }
@@ -212,6 +228,56 @@ class LocalMediaServer(
             sb.append(b.toChar())
             if (sb.length > 8192) return null
         }
+    }
+
+    /**
+     * 一条连接的处理入口 —— **异常绝不外抛**。
+     *
+     * ## 为什么这层必须有（2026-11-04 的崩溃记录）
+     *
+     * 原来这里是 `pool.execute { handle(client) }`，`handle` 里没有任何 catch。
+     * 音箱拉到一半主动断开（切歌、缓冲满、换 Wi-Fi、播放器 close）时，
+     * `output.write` 抛 `SocketException: Software caused connection abort`，
+     * 从线程池线程冒出去 → `CrashGuard` 装的默认处理器接住 → **记录并杀进程**。
+     *
+     * 用户看到的是「听本地音乐，切首歌 App 就闪退了」。
+     * 这不是 App 有缺陷，是**把正常网络事件当成了未捕获异常**。
+     *
+     * 所以：IO 断开只计数（诊断页可见），其它异常也只计数不外抛。
+     * 真正的缺陷会以「失败」计数出现在诊断里，而不是把 App 打死。
+     */
+    private fun serve(client: Socket) {
+        val progress = Progress()
+        bump { it.copy(requests = it.requests + 1) }
+        try {
+            handle(client, progress)
+            bump { it.copy(completed = it.completed + 1) }
+        } catch (e: IOException) {
+            // stop() 会 shutdownNow 并关 socket，那条路径上的中断是预期的
+            if (!running.get()) return
+            bump {
+                it.copy(
+                    aborted = it.aborted + 1,
+                    lastAbortMs = System.currentTimeMillis(),
+                    lastAbortNote = "客户端中途断开：${e.message}（已发 ${human(progress.written)} / 共 ${human(progress.total)}）",
+                )
+            }
+        } catch (e: Throwable) {
+            bump {
+                it.copy(
+                    failed = it.failed + 1,
+                    lastFailedNote = "${e.javaClass.simpleName}: ${e.message}（已发 ${human(progress.written)}）",
+                )
+            }
+        } finally {
+            runCatching { client.close() }
+        }
+    }
+
+    private fun human(bytes: Long): String = when {
+        bytes >= 1024L * 1024 -> String.format(java.util.Locale.US, "%.1fMB", bytes / 1024.0 / 1024.0)
+        bytes >= 1024 -> "${bytes / 1024}KB"
+        else -> "${bytes}B"
     }
 
     private fun respond(output: OutputStream, code: Int, reason: String, body: String?) {
@@ -271,3 +337,20 @@ class LocalMediaServer(
         }
     }
 }
+
+/**
+ * 推流统计快照。诊断页直接读它，回答"声音没了是哪一段断的"。
+ *
+ * [aborted] 是**正常事件**（音箱切歌/缓冲满/换网），不是缺陷；
+ * [failed] 才可能是我们自己的问题（读文件失败等）。
+ * 两者分开计数，就是为了不再把前者当崩溃。
+ */
+data class MediaServerStats(
+    val requests: Int = 0,
+    val completed: Int = 0,
+    val aborted: Int = 0,
+    val failed: Int = 0,
+    val lastAbortMs: Long = 0L,
+    val lastAbortNote: String = "",
+    val lastFailedNote: String = "",
+)

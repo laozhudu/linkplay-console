@@ -6,6 +6,7 @@ import io.github.laozhudu.linkplay.console.crash.CrashGuard
 import io.github.laozhudu.linkplay.console.diagnostics.AppDiagnostics
 import io.github.laozhudu.linkplay.console.diagnostics.DiagnosticsReport
 import io.github.laozhudu.linkplay.console.diagnostics.NavTrace
+import io.github.laozhudu.linkplay.console.library.LocalMediaRegistry
 import io.github.laozhudu.linkplay.console.playback.QueueBus
 import io.github.laozhudu.linkplay.console.session.SessionRestore
 import io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile
@@ -41,6 +42,9 @@ internal class ConsoleDiagnostics(
     private val host: ConsoleHost,
     private val restore: SessionRestore,
 ) {
+
+    private fun clockText(ms: Long): String =
+        if (ms <= 0L) "-" else java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date(ms))
 
     /** 把各段注册进诊断页。由 ViewModel 的 init 调用，只调一次。 */
         /**
@@ -160,7 +164,11 @@ internal class ConsoleDiagnostics(
         AppDiagnostics.sections.register(
             "services",
             "后台服务",
-            { if (QueueBus.state.value.running) Severity.WARN else Severity.INFO },
+            {
+                // 推流失败（读文件出错这类）才算问题；"中断"是音箱切歌，不是缺陷
+                val failed = LocalMediaRegistry.mediaServer()?.stats()?.failed ?: 0
+                if (QueueBus.state.value.running || failed > 0) Severity.WARN else Severity.INFO
+            },
         ) {
             val app = application
             val names = listOf(
@@ -181,6 +189,20 @@ internal class ConsoleDiagnostics(
                         am.getRunningServices(Int.MAX_VALUE).any { it.service.className == "${app.packageName}.$cls" }
                     }.getOrDefault(false)
                     appendLine("  $label=${if (running) "运行中" else "未运行"}")
+                    // 只写"运行中"解释不了"本地音乐没声音"：请求到没到、发完没有、是不是断了
+                    if (cls == "library.MediaServerService" && running) {
+                        LocalMediaRegistry.mediaServer()?.let { m ->
+                            val st = m.stats()
+                            appendLine(
+                                "    推流=:${m.port} 请求=${st.requests} 完成=${st.completed}" +
+                                    " 中断=${st.aborted} 失败=${st.failed}",
+                            )
+                            if (st.aborted > 0) {
+                                appendLine("    最近中断=${clockText(st.lastAbortMs)} ${st.lastAbortNote}")
+                            }
+                            if (st.failed > 0) appendLine("    最近失败=${st.lastFailedNote}")
+                        }
+                    }
                 }
             }
         }

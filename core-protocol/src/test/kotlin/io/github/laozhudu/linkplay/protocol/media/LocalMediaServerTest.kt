@@ -9,6 +9,7 @@ import org.junit.Before
 import org.junit.Test
 import java.io.File
 import java.net.HttpURLConnection
+import java.net.Socket
 import java.net.URL
 import java.nio.file.Files
 
@@ -146,4 +147,70 @@ class LocalMediaServerTest {
         assertEquals("audio/ogg", LocalMediaServer.contentTypeOf("a.ogg"))
         assertEquals("application/octet-stream", LocalMediaServer.contentTypeOf("a.unknown"))
     }
+    // ---- 断流不再冒充崩溃（2026-11-04 真机崩溃记录）----
+
+    /**
+     * 音箱拉到一半断开时，服务端**不能**把异常抛到线程池外。
+     *
+     * 原来没有这层兜底，`SocketException` 从 `pool.execute` 里的线程冒出去，
+     * 被 `CrashGuard` 当成未捕获异常 → 记录并杀进程。
+     * 用户看到的是"听本地音乐，切首歌 App 就闪退"。
+     *
+     * 这里用真 socket：发请求头 → 读一点 → `SO_LINGER=0` 强制 RST → 关连接，
+     * 让服务端在写的时候真的撞上断开的连接。
+     */
+    @Test
+    fun `client aborting mid-stream is counted as abort and never thrown`() {
+        val big = Files.createTempFile("big", ".mp3").toFile()
+        big.writeBytes(ByteArray(8 * 1024 * 1024))
+        val srv = LocalMediaServer(MediaResolver { path -> if (path == "/t/big") big else null })
+        srv.start()
+        try {
+            val raw = Socket("127.0.0.1", srv.port)
+            raw.getOutputStream().write("GET /t/big HTTP/1.1\r\nHost: x\r\n\r\n".toByteArray())
+            raw.getOutputStream().flush()
+            // 只读一点点，确保服务端已经开始往回写
+            raw.getInputStream().read(ByteArray(64))
+            raw.setSoLinger(true, 0) // 直接 RST，不用等四次挥手
+            raw.close()
+
+            val st = waitFor(srv) { it.aborted > 0 }
+            assertEquals(1, st.requests)
+            assertEquals(0, st.completed)
+            assertEquals(1, st.aborted)
+            assertTrue("中断原因要写清楚", st.lastAbortNote.startsWith("客户端中途断开"))
+        } finally {
+            srv.stop()
+            big.delete()
+        }
+    }
+
+    /** 正常读完的请求算"完成"，不算"中断"——两个计数不能互相污染。 */
+    @Test
+    fun `completed request is counted as completed`() {
+        val conn = open("/t/1")
+        assertEquals(200, conn.responseCode)
+        conn.inputStream.readBytes()
+        conn.disconnect()
+
+        val st = waitFor(server) { it.completed > 0 }
+        assertEquals(1, st.requests)
+        assertEquals(1, st.completed)
+        assertEquals(0, st.aborted)
+    }
+
+    /** 轮询等计数落定：服务端是异步写 socket，直接断言会偶发读到旧值。 */
+    private fun waitFor(
+        srv: LocalMediaServer,
+        predicate: (MediaServerStats) -> Boolean,
+    ): MediaServerStats {
+        val deadline = System.currentTimeMillis() + 5_000
+        while (System.currentTimeMillis() < deadline) {
+            val st = srv.stats()
+            if (predicate(st)) return st
+            Thread.sleep(25)
+        }
+        return srv.stats()
+    }
+
 }
