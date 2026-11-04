@@ -4,6 +4,8 @@ import android.app.Application
 import io.github.laozhudu.diagnostics.Severity
 import io.github.laozhudu.diagnostics.TimingLedger
 import io.github.laozhudu.linkplay.console.diagnostics.ActionTiming
+import io.github.laozhudu.linkplay.console.lx.ScriptLibrary
+import io.github.laozhudu.linkplay.console.lx.ScriptSourceStatus
 import io.github.laozhudu.linkplay.console.crash.CrashGuard
 import io.github.laozhudu.linkplay.console.diagnostics.AppDiagnostics
 import io.github.laozhudu.linkplay.console.diagnostics.DiagnosticsReport
@@ -235,6 +237,20 @@ internal class ConsoleDiagnostics(
 
         // 界面位置 —— 用户说「点了没反应」时，先要能知道他站在哪一页、有没有浮层挡着。
         // 同样的现象在不同页面是不同的问题，没有这条我只能反问他。
+        // 脚本 —— 洛雪只负责搜，取直链全靠脚本。所以"没有脚本/脚本坏了"是
+        // "搜到歌却播不出来"的第一嫌疑，必须能一眼看到。
+        AppDiagnostics.sections.register(
+            "scripts",
+            "脚本",
+            { if (ScriptSourceStatus.lastFailed()) Severity.WARN else Severity.INFO },
+        ) {
+            ScriptSourceStatus.render(
+                entries = ScriptLibrary.entries(application),
+                unrecognized = ScriptLibrary.unrecognized(application),
+                activeName = ScriptLibrary.activeName(application),
+            )
+        }
+
         AppDiagnostics.sections.register("ui", "界面") { NavTrace.render() }
 
         // 口令流水 —— 覆盖「点了没反应」这类最常报的问题。
