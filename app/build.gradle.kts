@@ -127,6 +127,10 @@ dependencies {
     implementation(project(":core-protocol"))
     implementation(project(":core-discovery"))
     implementation(project(":core-diagnostics"))
+    // 两个内容源模块（docs/74）。app 是唯一允许依赖它们的地方：
+    // core-protocol 必须保持纯 JVM 零依赖，不许反向依赖（docs/74 硬规则 3）
+    implementation(project(":core-radio"))
+    implementation(project(":core-lx"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)

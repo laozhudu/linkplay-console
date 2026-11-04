@@ -133,6 +133,13 @@ internal class ConsoleDiagnostics(
                 appendLine("  耗时=${st.elapsedMs}ms")
             }
         }
+        // 洛雪脚本引擎（内容源）—— 先让它自己说出「能不能跑」，再谈界面。
+        AppDiagnostics.sections.register(
+            "source-lx",
+            "洛雪引擎",
+            { if (LxSourceStatus.snapshot().ok == false) Severity.WARN else Severity.INFO },
+        ) { LxSourceStatus.render() }
+
         // 组 —— 「加了组却退不出来」的那一层：界面认知与设备真值对不对得上。
         AppDiagnostics.sections.register(
             "group",

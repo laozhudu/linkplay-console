@@ -50,6 +50,9 @@ import kotlinx.coroutines.withContext
 import io.github.laozhudu.linkplay.console.crash.CrashGuard
 import io.github.laozhudu.linkplay.console.diagnostics.AppDiagnostics
 import io.github.laozhudu.linkplay.console.diagnostics.safeLaunch
+import io.github.laozhudu.linkplay.lx.LxAssets
+import io.github.laozhudu.linkplay.lx.LxMusicSdk
+import io.github.laozhudu.linkplay.lx.QuickJsEngine
 
 /**
  * 多房间组里的一台音箱（主机或从机）。
@@ -925,6 +928,47 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * 洛雪脚本引擎自检：加载 bundle + 搜一个固定关键词，结果写进诊断。
+     *
+     * ## 为什么这件事排在界面之前
+     *
+     * `core-lx` 的 80 个单测全跑在**假引擎**上（`FakeEngine`），
+     * 唯一没验证过的环节是「QuickJS 里那些 polyfill 真的能跑」——
+     * `pako` / `buffer` 在 QuickJS 与 Node 的行为未必一致（`docs/74` 第六节）。
+     *
+     * 所以先让 App 自己跑一次并说出结果。这一步不过，做多少界面都是白做。
+     */
+    private suspend fun runLxSelfCheck() {
+        val app = getApplication<Application>()
+        LxSourceStatus.started()
+        val result = withContext(Dispatchers.IO) {
+            runCatching {
+                val engine = QuickJsEngine()
+                try {
+                    val sdk = LxMusicSdk(engine, LxAssets.musicSdk(app))
+                    val loadStarted = System.currentTimeMillis()
+                    sdk.load()
+                    LxSourceStatus.loaded(System.currentTimeMillis() - loadStarted)
+                    val searchStarted = System.currentTimeMillis()
+                    val page = sdk.search("wy", "周杰伦", limit = 5)
+                    page to (System.currentTimeMillis() - searchStarted)
+                } finally {
+                    runCatching { engine.close() }
+                }
+            }
+        }
+        result.onSuccess { (page, ms) ->
+            if (page.value != null) {
+                LxSourceStatus.searched("wy", "周杰伦", page.value!!.tracks.size, ms)
+            } else {
+                LxSourceStatus.failed("搜索", page.error)
+            }
+        }.onFailure { t ->
+            LxSourceStatus.failed("引擎或 bundle", t.message ?: t.javaClass.simpleName)
+        }
+    }
+
+    /**
      * 由主机的 `slave_list` 算出「归属表 + 成员列表」。
      *
      * 抽成一个函数是因为：`probeSaved`（完整探活）和组拓扑心跳（每 3 秒）都要做这件事。
@@ -1228,6 +1272,8 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
+        // 洛雪引擎自检：只在启动时跑一次（docs/74 要求先验证引擎，再谈界面）。
+        safeLaunch("lxSelfCheck") { runLxSelfCheck() }
         // 组拓扑心跳：3 秒一次，只读 slave_list（几百字节，比完整快照轻得多）。
         // 没有它，组的认知就只在探活时更新 —— 设备退组了界面也不知道，
         // 用户想退也点不到（卡片上"退出同步"按 inGroup 决定显示与否）。
