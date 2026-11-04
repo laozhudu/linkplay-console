@@ -680,6 +680,8 @@ private fun HomeScreen(
                     masked = UuidMatch.find(device.uuid, state.groupMembers) { it.uuid }?.masked == true,
                     profile = state.cards[device.uuid]?.profile
                         ?: io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile.UNKNOWN,
+                    capabilities = state.cards[device.uuid]?.capabilities
+                        ?: io.github.laozhudu.linkplay.protocol.dlna.DeviceCapabilities.LINKPLAY,
                     onOpen = { onOpenDevice(device) },
                     onSettings = { onOpenSettings(device) },
                     onVolume = { vm.setCardVolume(device, it) },
@@ -1031,9 +1033,17 @@ private fun DeviceCardRow(
     isMaster: Boolean = false,
     /** 已被屏蔽（`mask=1`，不出声但留在组里）。 */
     masked: Boolean = false,
-    /** 设备能力档（默认 UNKNOWN：按 LinkPlay 显示，保持既有行为不变）。 */
+    /** 设备能力档（只用于显示"通用 DLNA"这类**类型标签**，不用于决定渲染什么按钮）。 */
     profile: io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile =
         io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile.UNKNOWN,
+    /**
+     * 这台设备具备的能力 —— **决定渲染哪些按钮的唯一判据**。
+     *
+     * 默认 [DeviceCapabilities.LINKPLAY]：卡片还没探测到能力时按功能全开显示，
+     * 与 `DeviceProfileCache` 的默认一致（宁可按全开处理，不要因为一次没探测到就藏掉按钮）。
+     */
+    capabilities: io.github.laozhudu.linkplay.protocol.dlna.DeviceCapabilities =
+        io.github.laozhudu.linkplay.protocol.dlna.DeviceCapabilities.LINKPLAY,
     onOpen: () -> Unit,
     onSettings: () -> Unit,
     onVolume: (Int) -> Unit,
@@ -1109,6 +1119,7 @@ private fun DeviceCardRow(
             }
             // 类型标签：必须让人一眼看出"这台是音箱还是电视盒子"——
             // 两类设备能做的事不同（盒子没有组网/声道/预设）
+            // 类型标签用 profile：这是"它是什么"，本来就该按类型显示
             if (profile == io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile.GENERIC_DMR) {
                 PillTag(text = "通用 DLNA", color = OnDarkPalette.muted)
                 Spacer(Modifier.width(Spacing.xs))
@@ -1210,9 +1221,10 @@ private fun DeviceCardRow(
                     )
                 }
             }
-            // 屏蔽 / 解除：只有 LinkPlay 从机才有意义。通用 DLNA 渲染器整段不渲染
+            // 屏蔽 / 解除：只有具备 multiroom 能力的设备才有意义。
+            // 判据是**能力位**不是类型 —— 加第三类设备时这里一行不用改
             // （项目铁律：不给按了没反应的按钮）
-            if (profile != io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile.GENERIC_DMR) {
+            if (capabilities.supportsMultiroom) {
                 if (inGroup && !isMaster) {
                     TextButton(onClick = onMask, contentPadding = PaddingValues(horizontal = 6.dp)) {
                         Text(
@@ -1233,8 +1245,8 @@ private fun DeviceCardRow(
                     }
                 }
             }
-            if (profile == io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile.GENERIC_DMR) {
-                // 通用渲染器没有声道概念：这一格留空，而不是画一个假的 LR
+            if (!capabilities.supportsChannel) {
+                // 没有声道能力：这一格留空，而不是画一个假的 LR
                 return@Row
             }
             // 声道：0 立体声 / 1 仅左 / 2 仅右。

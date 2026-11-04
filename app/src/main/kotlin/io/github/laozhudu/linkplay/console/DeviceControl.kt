@@ -4,6 +4,11 @@ import io.github.laozhudu.linkplay.console.playback.QueueBus
 import io.github.laozhudu.linkplay.console.playback.VolumeBus
 import io.github.laozhudu.linkplay.protocol.FirmwareUpdate
 import io.github.laozhudu.linkplay.protocol.LinkPlayCommands
+import io.github.laozhudu.linkplay.protocol.remote.DispatchResult
+import io.github.laozhudu.linkplay.protocol.remote.LinkPlayTransport
+import io.github.laozhudu.linkplay.protocol.remote.RemoteCommand
+import io.github.laozhudu.linkplay.protocol.remote.describe
+import io.github.laozhudu.linkplay.protocol.remote.describeForLog
 import io.github.laozhudu.linkplay.protocol.identity.UuidMatch
 import io.github.laozhudu.linkplay.protocol.player.SleepTimer
 import io.github.laozhudu.linkplay.protocol.player.VolumeStep
@@ -34,6 +39,29 @@ import kotlinx.coroutines.withContext
  */
 internal class DeviceControl(private val host: ConsoleHost) {
 
+    /**
+     * 语义指令的出口。
+     *
+     * 为什么在这里 new 一个：`host.http()` 返回的是同一个 [DeviceHttpClient] 实例
+     * （ConsoleViewModel 里只有一个），所以这里不会多开连接池。
+     *
+     * 为什么不让调用方直接拼字符串：见 [RemoteCommand] 的类注释 ——
+     * 调用点知道方言，加第二类设备时每个点都要加分支。
+     */
+    private val transport = LinkPlayTransport(host.http())
+
+    /**
+     * 下发一条语义指令；**失败时把原因翻译成人话写进 error**。
+     *
+     * 为什么这里要 throw：`host.run` 的 catch 就是"把异常显示成界面红字"的通道。
+     * dispatch 本身不抛（设备睡了是正常业务），但**界面上必须看得见**——
+     * 否则用户点「光纤」什么都没发生，就是铁律禁止的"按了没反应的按钮"。
+     */
+    private suspend fun dispatch(ip: String, command: RemoteCommand) {
+        val result = transport.dispatch(ip, command)
+        if (result is DispatchResult.Failed) throw java.io.IOException(result.failure.describe())
+    }
+
     fun sendCommand(command: String) {
         val ip = host.state.value.selectedIp ?: return
         if (command.isBlank()) return
@@ -56,7 +84,7 @@ internal class DeviceControl(private val host: ConsoleHost) {
 
     fun switchMode(mode: String) {
         val ip = host.state.value.selectedIp ?: return
-        host.run("switchMode($mode)") { host.send(ip, LinkPlayCommands.switchMode(mode)) }
+        host.run("switchMode($mode)") { dispatch(ip, RemoteCommand.SelectInput(mode)) }
     }
 
     // ---- 多房间组：首页直接操作 ----
@@ -85,8 +113,8 @@ internal class DeviceControl(private val host: ConsoleHost) {
         // 合并通道是为拖动设计的，按键本来就是离散事件，多一次 60ms 等待只会显得钝。
         host.launch("volumeKey") {
             withContext(Dispatchers.IO) {
-                runCatching { host.send(ip, LinkPlayCommands.playerVolume(next)) }
-                    .onFailure { host.log("音量键下发失败：${it.message}") }
+                val result = transport.dispatch(ip, RemoteCommand.SetVolume(next))
+                if (result is DispatchResult.Failed) host.log("音量键下发失败：${result.failure.describe()}")
             }
         }
         host.log("音量键 → $next")
@@ -178,9 +206,7 @@ internal class DeviceControl(private val host: ConsoleHost) {
             }
             if (!ok) {
                 withContext(Dispatchers.IO) {
-                    runCatching {
-                        host.send(device.ip, if (playing) "setPlayerCmd:pause" else "setPlayerCmd:play")
-                    }
+                    transport.dispatch(device.ip, if (playing) RemoteCommand.Pause else RemoteCommand.Play)
                 }
             }
             delay(800)
@@ -231,7 +257,7 @@ internal class DeviceControl(private val host: ConsoleHost) {
                 }.getOrDefault(false)
             }
             if (!ok) {
-                withContext(Dispatchers.IO) { runCatching { host.send(masterIp, "setPlayerCmd:play") } }
+                withContext(Dispatchers.IO) { transport.dispatch(masterIp, RemoteCommand.Play) }
             }
             host.log("全部播放 → ${st.groupMasterName ?: masterIp}（组内 ${st.groupMembers.size.coerceAtLeast(1)} 台）")
             // 让界面的"在放什么"立刻刷新，不用等 3 秒心跳
@@ -256,7 +282,7 @@ internal class DeviceControl(private val host: ConsoleHost) {
                         true
                     }.getOrDefault(false)
                 }
-                if (!ok) withContext(Dispatchers.IO) { runCatching { host.send(ip, "setPlayerCmd:pause") } }
+                if (!ok) withContext(Dispatchers.IO) { transport.dispatch(ip, RemoteCommand.Pause) }
             }
             host.log("全部暂停 → ${targets.size} 台")
         }
@@ -273,8 +299,8 @@ internal class DeviceControl(private val host: ConsoleHost) {
     fun pressPreset(uiIndex: Int) {
         val ip = host.state.value.selectedIp ?: return
         host.run("预设键 ${uiIndex + 1}") {
-            val reply = host.send(ip, LinkPlayCommands.presetKey(uiIndex))
-            host.log("MCUKeyShortClick:${uiIndex + 1} → $reply")
+            val result = transport.dispatch(ip, RemoteCommand.Preset(uiIndex))
+            host.log("预设键 ${uiIndex + 1} → ${result.describeForLog()}")
             delay(800)
             host.refreshCards()
         }
