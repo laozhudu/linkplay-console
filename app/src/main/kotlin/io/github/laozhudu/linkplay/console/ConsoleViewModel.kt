@@ -46,9 +46,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import io.github.laozhudu.linkplay.console.crash.CrashGuard
-import io.github.laozhudu.linkplay.console.diagnostics.DiagnosticsHub
+import io.github.laozhudu.diagnostics.Severity
+import io.github.laozhudu.linkplay.console.diagnostics.AppDiagnostics
 import io.github.laozhudu.linkplay.console.diagnostics.DiagnosticsReport
-import io.github.laozhudu.linkplay.console.diagnostics.IssueLog
 import io.github.laozhudu.linkplay.console.diagnostics.safeLaunch
 
 /**
@@ -1002,7 +1002,8 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     private fun run(label: String, block: suspend () -> Unit) {
         if (_state.value.busy) return
         _state.update { it.copy(busy = true, error = null) }
-        safeLaunch("run") {
+        // 用调用方给的 label 做标签：比 "run" 这种占位词能直接对上"我点了什么"
+        safeLaunch(label) {
             try {
                 withContext(Dispatchers.IO) { block() }
                 log("$label 完成")
@@ -1030,8 +1031,8 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
             override fun update(transform: (ConsoleUiState) -> ConsoleUiState) = _state.update(transform)
             override fun log(message: String) = this@ConsoleViewModel.log(message)
             override fun run(label: String, block: suspend () -> Unit) = this@ConsoleViewModel.run(label, block)
-            override fun launch(block: suspend CoroutineScope.() -> Unit) {
-                safeLaunch("log") { block() }
+            override fun launch(source: String, block: suspend CoroutineScope.() -> Unit) {
+                safeLaunch(source) { block() }
             }
             override fun http(): DeviceHttpClient = client
             override fun send(ip: String, command: String): String = client.send(ip, command)
@@ -1042,7 +1043,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
             }
             override fun refresh() {
                 probeSaved()
-                safeLaunch("log") { refreshDevicesInGroup() }
+                safeLaunch("refreshCards") { refreshDevicesInGroup() }
             }
             override fun renderer(device: SavedDevice): UpnpRendererClient = rendererFor(device)
         override fun pushDeviceVolume(ip: String, volume: Int) {
@@ -1100,7 +1101,21 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
      * 结果新增模块时总要回来改这个函数。现在谁有状态谁注册，报告只负责汇总。
      */
     private fun registerDiagnostics() {
-        DiagnosticsHub.register("devices", "设备") {
+        // 级别是**函数**：注册只发生一次，而"设备全没应答"是运行中才出现的状态
+        AppDiagnostics.sections.register(
+            "devices",
+            "设备",
+            {
+                val st = _state.value
+                when {
+                    // 全部未探测 = 探活根本没跑起来（PR #58 那个 NPE 就是这个形态）
+                    st.saved.isNotEmpty() && st.saved.all { st.online[it.uuid] == null } -> Severity.WARN
+                    // 在线但一条取数通道都没答 = 设备在、协议不通
+                    st.saved.any { d -> st.online[d.uuid] == true && st.cards[d.uuid]?.answered?.isEmpty() == true } -> Severity.WARN
+                    else -> Severity.INFO
+                }
+            },
+        ) {
             val st = _state.value
             if (st.saved.isEmpty()) "  没有已保存的设备"
             else buildString {
@@ -1128,7 +1143,11 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
-        DiagnosticsHub.register("queue", "队列") {
+        AppDiagnostics.sections.register(
+            "queue",
+            "队列",
+            { if (QueueBus.state.value.controlLost || QueueBus.state.value.error != null) Severity.WARN else Severity.INFO },
+        ) {
             val q = QueueBus.state.value
             buildString {
                 appendLine("  归属=${q.ownerIp ?: "未知"}  运行中=${q.running}  设备持有=${q.deviceOwned}")
@@ -1138,7 +1157,11 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                 q.error?.let { appendLine("  错误=$it") }
             }
         }
-        DiagnosticsHub.register("services", "后台服务") {
+        AppDiagnostics.sections.register(
+            "services",
+            "后台服务",
+            { if (QueueBus.state.value.running) Severity.WARN else Severity.INFO },
+        ) {
             val app = getApplication<Application>()
             val names = listOf(
                 "playback.QueuePlaybackService" to "队列播放",
@@ -1200,9 +1223,10 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
             now = now,
             crash = crash,
             devices = lines,
-            issues = IssueLog.recent(),
+            entries = AppDiagnostics.recent(),
             // 各模块自报（设备/播放/队列/后台服务），新增模块不用改这里
-            sections = DiagnosticsHub.render(),
+            sections = AppDiagnostics.sections.render(),
+            uptime = AppDiagnostics.uptimeText(),
         )
     }
 
@@ -1210,7 +1234,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     fun clearDiagnostics() {
         val app = getApplication<Application>()
         runCatching { CrashGuard.clear(app) }
-        IssueLog.clear(app)
+        AppDiagnostics.clear(app)
         _state.update { it.copy(lastCrashAtStart = null) }
         log("已清空诊断记录")
     }
@@ -1219,7 +1243,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     fun lastCrash(): String? = runCatching { CrashGuard.lastReport(getApplication()) }.getOrNull()
 
     /** 把运行期问题落盘，供下次启动查看。 */
-    fun flushIssues() = runCatching { IssueLog.flush(getApplication()) }
+    fun flushIssues() = runCatching { AppDiagnostics.flush(getApplication()) }
 
     private fun acquireMulticastLock(): WifiManager.MulticastLock? = runCatching {
         val wifi = getApplication<Application>().applicationContext
@@ -1258,7 +1282,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         // 否则"重开 App 列表是空的"会被当成恢复失效
         restoreLastQueue()
         // 首页多房间卡片的低频心跳：不在播放页时也能跟上设备侧/遥控器的音量变化
-        safeLaunch("acquireMulticastLock") {
+        safeLaunch("groupVolumeHeartbeat") {
             while (true) {
                 delay(2500)
                 val masterIp = _state.value.groupMasterIp ?: continue
@@ -1272,7 +1296,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         }
         // 首页卡片心跳：每 3 秒逐台读 getPlayerStatus（原厂设备列表就显示每台的曲名/音量）。
         // 为什么不用 1 秒：卡片信息变化慢，3 秒够了；设备只有 2 台，但别把老固件打爆。
-        safeLaunch("acquireMulticastLock") {
+        safeLaunch("cardHeartbeat") {
             while (true) {
                 delay(3_000)
                 val saved = _state.value.saved
@@ -1295,7 +1319,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         // 定时关闭的时钟：每秒推进一次，到点下发停止。
-        safeLaunch("acquireMulticastLock") {
+        safeLaunch("sleepTimerTick") {
             while (true) {
                 delay(1_000)
                 val now = System.currentTimeMillis()
@@ -1316,7 +1340,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
-        safeLaunch("acquireMulticastLock") {
+        safeLaunch("deviceVolumeDispatch") {
             for ((ip, v) in deviceVolumeChannel) {
                 withContext(Dispatchers.IO) {
                     // 原厂做法：UPnP RenderingControl 优先，httpapi 兜底（见 DeviceVolumeControl）

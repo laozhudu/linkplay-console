@@ -98,7 +98,7 @@ internal class GroupController(private val host: ConsoleHost) {
         host.update { st ->
             st.copy(cards = st.cards + (device.uuid to (st.cards[device.uuid] ?: DeviceCard()).copy(channel = ch)))
         }
-        host.launch {
+        host.launch("setChannel") {
             val ok = withContext(Dispatchers.IO) {
                 runCatching { host.renderer(device).setChannel(ch) }.isSuccess
             }
@@ -129,7 +129,7 @@ internal class GroupController(private val host: ConsoleHost) {
         host.update { st ->
             st.copy(groupMembers = st.groupMembers.map { if (it.ip == member.ip) it.copy(channel = ch) else it })
         }
-        host.launch {
+        host.launch("setGroupChannel") {
             val reply = withContext(Dispatchers.IO) {
                 runCatching { host.send(master, "multiroom:SlaveChannel:${member.ip}:$ch") }.getOrNull()
             }
@@ -198,7 +198,7 @@ internal class GroupController(private val host: ConsoleHost) {
             return
         }
         host.update { it.copy(groupingProgress = plan.describe()) }
-        host.launch {
+        host.launch("applyGrouping") {
             val status = withContext(Dispatchers.IO) { runCatching { host.status(masterIp) }.getOrNull() }
             val ssid = status?.ssid
             if (ssid.isNullOrBlank()) {

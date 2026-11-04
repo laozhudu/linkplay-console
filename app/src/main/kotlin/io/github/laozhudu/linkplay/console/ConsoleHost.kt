@@ -39,8 +39,14 @@ internal interface ConsoleHost {
     /** 带 busy 闸门的动作执行（与 ViewModel 的 `run` 同一套语义）。 */
     fun run(label: String, block: suspend () -> Unit)
 
+    /**
+     * 起一个协程。**必须给 [source]**：诊断报告里靠它定位"是哪条路崩的"，
+     * 用户报"点播放没反应"时，标签要能对上那句话。
+     * 写成可选参数就会有人不写，所以设计成必填。
+     */
+
     /** 启动一个协程（异常已被 `safeLaunch` 收口，不会闪退）。 */
-    fun launch(block: suspend CoroutineScope.() -> Unit)
+    fun launch(source: String, block: suspend CoroutineScope.() -> Unit)
 
     /** 原始 HTTP 客户端（`MultiroomClient` 这类协议客户端需要它）。 */
     fun http(): DeviceHttpClient
