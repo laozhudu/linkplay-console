@@ -35,6 +35,17 @@ object AppDiagnostics {
     /** 环形容量。200 条够覆盖"刚操作完就出问题"的场景，又不至于把报告撑爆。 */
     const val CAPACITY = 200
 
+    /**
+     * logcat 标签。`adb logcat -s LinkPlayDiag` 就能读到全部诊断，不用截图。
+     *
+     * 为什么用 `Log.i` 而不是 `Log.d`：部分 ROM 的 release 构建会裁掉 debug 级别，
+     * 而 Info 是唯一在真机上稳定可见的档位。
+     */
+    const val TAG = "LinkPlayDiag"
+
+    /** logcat 单条消息的字符上限，留足余量（不同 Android 版本的截断点不一样）。 */
+    private const val LOGCAT_CHUNK = 3_500
+
     /** 落盘子目录（`filesDir/diagnostics/`）。 */
     private const val DIR = "diagnostics"
     private const val ISSUE_FILE = "issue-log.txt"
@@ -47,7 +58,12 @@ object AppDiagnostics {
     val log: EntryLog = EntryLog(
         capacity = CAPACITY,
         clock = Clock.SYSTEM,
-        downstream = DiagnosticSink.NONE,
+        downstream = DiagnosticSink.tee(
+            // 每条记录同时进 logcat：出问题时插上数据线就能读，不必让用户截屏
+            DiagnosticSink { entry ->
+                android.util.Log.i(TAG, "${entry.severity.code}|${entry.source}|${entry.message}")
+            },
+        ),
     )
 
     /**
@@ -59,6 +75,42 @@ object AppDiagnostics {
     val sections: SectionRegistry = SectionRegistry(sink = log)
 
     fun recent(): List<DiagnosticEntry> = log.recent()
+
+    /**
+     * 把整份报告送进 logcat。
+     *
+     * 为什么要切块：logcat 单条消息有长度上限（各版本 4KB 上下），
+     * 一份十五段的报告远超这个数。整条丢进去只会被截断，看起来像"报告只有前半截"。
+     *
+     * 切块逻辑抽成 [splitForLog] 是为了能单测 —— `android.util.Log` 在纯 JVM 单测里不可用。
+     */
+    fun logReport(text: String) {
+        splitForLog(text, LOGCAT_CHUNK).forEachIndexed { index, chunk ->
+            android.util.Log.i(TAG, "[报告 ${index + 1}]\n$chunk")
+        }
+    }
+
+    /** 按行切块，每块不超过 [maxChars]。**不切断行**，否则读的时候对不上上下文。 */
+    fun splitForLog(text: String, maxChars: Int = LOGCAT_CHUNK): List<String> {
+        require(maxChars > 0) { "maxChars 必须大于 0" }
+        if (text.isEmpty()) return emptyList()
+        val out = ArrayList<String>()
+        val current = StringBuilder()
+        // 按 '\n' 切开；文本以换行结尾时会多出一个空尾项，去掉它，
+        // 否则拼回去会凭空多一个换行（`lineSequence()` 有同样的问题）
+        val lines = text.split('\n').let { if (it.last().isEmpty()) it.dropLast(1) else it }
+        lines.forEach { line ->
+            // 单行本身就超长时独占一块，否则永远装不下、会无限切
+            val needed = if (line.length > maxChars) line.length else line.length + 1
+            if (current.isNotEmpty() && current.length + needed > maxChars) {
+                out += current.toString()
+                current.setLength(0)
+            }
+            current.append(line).append('\n')
+        }
+        if (current.isNotEmpty()) out += current.toString()
+        return out
+    }
 
     /**
      * 进程启动时刻。报告头显示"运行时长"，用于对上用户那句"用了两个多小时才出问题"。

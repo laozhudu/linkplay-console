@@ -314,7 +314,7 @@ internal class ConsoleDiagnostics(
         }.getOrDefault("未知")
         val now = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
             .format(java.util.Date())
-        return DiagnosticsReport.build(
+        val text = DiagnosticsReport.build(
             version = version,
             now = now,
             crash = crash,
@@ -324,5 +324,9 @@ internal class ConsoleDiagnostics(
             sections = AppDiagnostics.sections.render(),
             uptime = AppDiagnostics.uptimeText(),
         )
+        // 全文进 logcat：用户一点"诊断"，插上数据线 `adb logcat -s LinkPlayDiag` 就能读到，
+        // 不用再让他截图、也不怕他截漏
+        AppDiagnostics.logReport(text)
+        return text
     }
 }
