@@ -14,7 +14,7 @@
 ### 进度
 
 - [x] **NAS** — PR #70（`SourceFailure` + `NasSourceStatus`）
-- [ ] **本地曲库** — `library/LibraryViewModel.kt`
+- [x] **本地曲库** — PR #74（`LocalSourceStatus` + `queryWithStats`）
 - [ ] **在线曲库** — `online/OnlineViewModel.kt`
 - [ ] **电台** — `radio/RadioViewModel.kt`
 - [ ] **配网** — `provisioning/`
