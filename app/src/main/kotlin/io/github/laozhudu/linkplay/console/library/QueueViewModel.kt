@@ -100,7 +100,7 @@ class QueueViewModel(
 
     fun loadTracks() {
         _state.update { it.copy(loading = true) }
-        safeLaunch("QueueViewModel") {
+        safeLaunch("loadTracks") {
             val result = runCatching {
                 withContext(Dispatchers.IO) { LocalLibrary.query(getApplication()) }
             }
@@ -166,7 +166,7 @@ class QueueViewModel(
         val s = _state.value
         if (s.busy) return
         _state.update { it.copy(busy = true, error = null) }
-        safeLaunch("QueueViewModel") {
+        safeLaunch("push") {
             try {
                 val ctx = getApplication<Application>()
                 withContext(Dispatchers.IO) { LocalMediaRegistry.ensureServer(ctx, s.tracks) }
