@@ -7,6 +7,7 @@ import io.github.laozhudu.linkplay.console.diagnostics.AppDiagnostics
 import io.github.laozhudu.linkplay.console.diagnostics.DiagnosticsReport
 import io.github.laozhudu.linkplay.console.diagnostics.NavTrace
 import io.github.laozhudu.linkplay.console.library.LocalMediaRegistry
+import io.github.laozhudu.linkplay.console.nas.NasSourceStatus
 import io.github.laozhudu.linkplay.console.playback.QueueBus
 import io.github.laozhudu.linkplay.console.session.SessionRestore
 import io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile
@@ -126,6 +127,14 @@ internal class ConsoleDiagnostics(
                 appendLine("  耗时=${st.elapsedMs}ms")
             }
         }
+        // 内容源 · NAS —— 七个盲区里的第一个（`docs/61` 的施工顺序），
+        // 选它打头是因为 `docs/60` 要改 NAS 的推流路径，改之前必须先能看见现在的行为。
+        AppDiagnostics.sections.register(
+            "source-nas",
+            "NAS",
+            { if (NasSourceStatus.snapshot().failure != null) Severity.WARN else Severity.INFO },
+        ) { NasSourceStatus.render() }
+
         // 界面位置 —— 用户说「点了没反应」时，先要能知道他站在哪一页、有没有浮层挡着。
         // 同样的现象在不同页面是不同的问题，没有这条我只能反问他。
         AppDiagnostics.sections.register("ui", "界面") { NavTrace.render() }

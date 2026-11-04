@@ -125,11 +125,23 @@ class NasViewModel(
         if (_state.value.scanning) return
         _state.update { it.copy(scanning = true, error = null) }
         safeLaunch("scan") {
-            val found = runCatching { withContext(Dispatchers.IO) { discovery.discoverMediaServers() } }
-                .getOrDefault(emptyList())
-            _state.update { it.copy(scanning = false, servers = found) }
-            log("发现 ${found.size} 个媒体服务器")
-            if (found.isEmpty()) log("没找到？确认 NAS 开了 DLNA，或手动填 IP")
+            val started = System.currentTimeMillis()
+            // 以前是 getOrDefault(emptyList())：异常被吞成"发现 0 个"，
+            // 于是"网络不通"和"没有 NAS"在界面上同形。诊断要分得开，这里必须留下失败。
+            runCatching { withContext(Dispatchers.IO) { discovery.discoverMediaServers() } }
+                .onSuccess { found ->
+                    val ms = System.currentTimeMillis() - started
+                    _state.update { it.copy(scanning = false, servers = found) }
+                    NasSourceStatus.scanFound(found.size, found.map { it.location ?: it.ip }, ms)
+                    log("发现 ${found.size} 个媒体服务器")
+                    if (found.isEmpty()) log("没找到？确认 NAS 开了 DLNA，或手动填 IP")
+                }
+                .onFailure { e ->
+                    val ms = System.currentTimeMillis() - started
+                    _state.update { it.copy(scanning = false, error = e.message) }
+                    NasSourceStatus.scanFailed(e, ms)
+                    log("扫描失败：${e.message}")
+                }
         }
     }
 
@@ -202,11 +214,17 @@ class NasViewModel(
     fun connect(location: String) {
         _state.update { it.copy(loadingDir = true, error = null) }
         safeLaunch("connect") {
+            val started = System.currentTimeMillis()
             try {
                 val desc = withContext(Dispatchers.IO) { UpnpRendererClient.describe(location) }
                 val url = ContentDirectoryClient.controlUrlOf(desc)
                     ?: throw IllegalStateException("该服务器没有 ContentDirectory 服务")
                 contentDir = ContentDirectoryClient(url)
+                NasSourceStatus.connected(
+                    server = desc.friendlyName ?: location,
+                    controlUrl = url,
+                    ms = System.currentTimeMillis() - started,
+                )
                 val server = serverRefOf(location, desc.friendlyName)
                 _state.update {
                     it.copy(
@@ -236,6 +254,7 @@ class NasViewModel(
                     remember(server, emptyList())
                 }
             } catch (t: Throwable) {
+                NasSourceStatus.connectFailed(location, t, System.currentTimeMillis() - started)
                 _state.update { it.copy(loadingDir = false, error = t.message) }
             }
         }
@@ -253,8 +272,10 @@ class NasViewModel(
     private suspend fun browseInto(objectId: String, title: String, push: Boolean): Boolean {
         val client = contentDir ?: return false
         _state.update { it.copy(loadingDir = true, error = null) }
-        return runCatching {
+        val started = System.currentTimeMillis()
+        return try {
             val r = withContext(Dispatchers.IO) { client.browse(objectId, 0, 300) }
+            NasSourceStatus.browsed(title, r.entries.size, r.totalMatches, System.currentTimeMillis() - started)
             _state.update { cur ->
                 cur.copy(
                     loadingDir = false,
@@ -270,9 +291,11 @@ class NasViewModel(
                 remember(cur.rememberedServer, cur.path)
             }
             true
-        }.onFailure { t ->
+        } catch (t: Throwable) {
+            NasSourceStatus.browseFailed(title, t, System.currentTimeMillis() - started)
             _state.update { it.copy(loadingDir = false, error = t.message) }
-        }.isSuccess
+            false
+        }
     }
 
     /** 返回上一级。 */
@@ -415,8 +438,10 @@ class NasViewModel(
             savePlayback(items, start, _state.value.loopMode)
 
             // ① 原厂机制：CreateQueue + PlayQueueWithIndex（设备握住列表，可读回、退出照播）
+            val pushStarted = System.currentTimeMillis()
             val upstream = DevicePlaylistGateway.push(rendererIp, rendererLocation, items, start)
             if (upstream.ok) {
+                NasSourceStatus.route("设备列表(PlayQueue)", upstream.detail, System.currentTimeMillis() - pushStarted)
                 log(upstream.detail + "（设备侧队列 · 原厂 PlayQueue）")
                 QueueBus.restore(rendererIp, items, start, items.getOrNull(start)?.title, deviceOwned = true,
                     note = "设备列表 ${items.size} 首 · 第 ${start + 1} 首")
@@ -428,12 +453,18 @@ class NasViewModel(
             // ② 兜底：m3u + setPlayerCmd:playlist（能在老固件上凑效，但读不回曲目清单）
             val pushed = DeviceQueuePush.push(DeviceHttpClient(), rendererIp, items, start)
             if (pushed.ok) {
+                NasSourceStatus.route("设备列表(m3u)", pushed.detail, System.currentTimeMillis() - pushStarted)
                 log(pushed.detail + "（设备侧队列 · m3u）")
                 QueueBus.restore(rendererIp, items, start, items.getOrNull(start)?.title, deviceOwned = true,
                     offset = pushed.offset, note = "设备列表 ${items.size} 首 · 第 ${start + 1} 首（m3u）")
                 QueueBus.markDeviceOwned(pushed.offset)
                 _state.update { it.copy(playing = true, nowPlaying = items.getOrNull(start)?.title) }
             } else {
+                NasSourceStatus.route(
+                    "客户端逐首（本次未走设备队列）",
+                    pushed.detail,
+                    System.currentTimeMillis() - pushStarted,
+                )
                 log("设备未接收整列表：${pushed.detail} —— 退回客户端逐首投流")
                 QueuePlaybackService.start(getApplication(), rendererLocation, session)
             }
@@ -452,6 +483,7 @@ class NasViewModel(
                         controlLost = run.controlLost,
                     )
                 }
+                NasSourceStatus.controlLost(run.controlLost)
                 if (!run.running && run.nowPlaying != null) {
                     // 结束后重读快照：正常播完服务会清掉，被中断则保留供「继续上次」
                     val saved = runCatching { sessions.loadPlayback(memoryKey) }.getOrNull()
