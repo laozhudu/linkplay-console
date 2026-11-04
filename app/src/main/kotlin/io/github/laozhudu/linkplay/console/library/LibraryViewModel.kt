@@ -89,6 +89,20 @@ class LibraryViewModel(
         safeLaunch("detectCapabilities") { detectCapabilities() }
     }
 
+    /** 当前平台该用哪个媒体权限，以及授没授予。 */
+    private fun localPermission(): Pair<String, Boolean> {
+        val ctx = getApplication<Application>()
+        val name = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            android.Manifest.permission.READ_MEDIA_AUDIO
+        } else {
+            android.Manifest.permission.READ_EXTERNAL_STORAGE
+        }
+        val granted = runCatching {
+            ctx.checkSelfPermission(name) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        }.getOrDefault(false)
+        return name to granted
+    }
+
     private suspend fun detectCapabilities() {
         val caps = withContext(Dispatchers.IO) {
             LinkPlayDevice.probe(deviceIp, location)
@@ -100,9 +114,17 @@ class LibraryViewModel(
     fun refreshAll() {
         _state.update { it.copy(loading = true) }
         safeLaunch("refreshAll") {
+            val started = System.currentTimeMillis()
+            // 先自己查权限：被拒时 MediaStore 可能只回空游标而不抛异常，
+            // 等它抛就晚了 —— 报告里会变成"0 首"，看不出是没权限。
+            val (permName, permGranted) = localPermission()
+            LocalSourceStatus.permission(permName, permGranted)
+            var skipped = 0
             val result = runCatching {
                 withContext(Dispatchers.IO) {
-                    localTracks = LocalLibrary.query(getApplication())
+                    val local = LocalLibrary.queryWithStats(getApplication())
+                    localTracks = local.tracks
+                    skipped = local.skipped
                     PlaylistBundle(
                         store.favorites.all(),
                         store.recents.recent(),
@@ -112,6 +134,7 @@ class LibraryViewModel(
                 }
             }
             result.onSuccess { bundle ->
+                LocalSourceStatus.scanned(localTracks.size, skipped, System.currentTimeMillis() - started)
                 val favs = bundle.a
                 val recents = bundle.b
                 val radios = bundle.c
@@ -128,6 +151,7 @@ class LibraryViewModel(
                 }
                 log("本地 ${localTracks.size} 首 / 收藏 ${favs.size} / 最近 ${recents.size} / 电台 ${radios.size}")
             }.onFailure { t ->
+                LocalSourceStatus.scanFailed(t, System.currentTimeMillis() - started)
                 _state.update { it.copy(loading = false, error = t.message) }
             }
             runSearch(_state.value.query)
