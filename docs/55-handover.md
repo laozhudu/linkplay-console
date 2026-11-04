@@ -1,6 +1,6 @@
 # 交接卡（HANDOVER）
 
-> 最后更新：2026-11-04 · 提交 `1ce630d` · APK 0.9.64 · **705 单测 0 失败**
+> 最后更新：2026-11-04 · 提交 66 · APK 0.9.66 · **710 单测 0 失败**
 > 新对话接手请**从头读完这一页**，再去看 `docs/52-dev-conventions.md`（硬规则）。
 
 ---
@@ -25,10 +25,10 @@ DOSS DS-1831 音箱（LinkPlay / WiiMu 方案）。
 
 | 项 | 数值 |
 |---|---|
-| 提交数 | 64 |
-| 单元测试 | **705 个，0 失败** |
-| 文档 | 54 篇（`docs/01`～`docs/54`） |
-| APK | 0.9.64（versionCode 64） |
+| 提交数 | 66 |
+| 单元测试 | **710 个，0 失败** |
+| 文档 | 56 篇（`docs/01`～`docs/56`） |
+| APK | 0.9.66（versionCode 66，自动 = 提交数） |
 | 模块 | 4 个（见下） |
 
 ---
@@ -87,7 +87,7 @@ FF31009611F6457672B5250D → ff31009611f6457672b5250dff310096   ✓
 | `core-protocol` | 73 | 8637 | 所有"怎么指挥音箱"的门道（协议、UPnP、多房间、播放队列、媒体服务） |
 | `core-discovery` | 1 | 252 | 在局域网里把音箱找出来（SSDP） |
 | `core-diagnostics` | 10 | 605 | 诊断（**零依赖纯 JVM，可独立发布**） |
-| `app` | 61 | 15224 | 界面 + 状态 + 各功能页 |
+| `app` | 63 | 15451 | 界面 + 状态 + 各功能页 |
 
 ### app 内部已拆开的结构
 
@@ -99,18 +99,20 @@ SourcesScreen.kt       40   媒体库页
 home/HomeScreen.kt    607   首页（还能再拆）
 home/DeviceCardRow.kt 384   设备卡片
 home/MiniPlayerBar.kt  99   迷你播放条
+ConsoleDiagnostics.kt 232   诊断五段注册 + 报告拼装
+session/SessionRestore.kt 213 重开 App 恢复上次设备 + 播放列表
 ```
 
 ### 还大的文件（按优先级）
 
 | 文件 | 行数 |
 |---|---|
-| `ConsoleViewModel.kt` | **1409** ← 最大的 |
-| `PlaybackViewModel.kt` | 851 |
-| `PlayerScreen.kt` | 842 |
-| `home/HomeScreen.kt` | 607 |
-| `library/LibraryScreen.kt` | 599 |
-| `nas/NasViewModel.kt` | 551 |
+| `ConsoleViewModel.kt` | **1183** ← 最大的 |
+| `PlaybackViewModel.kt` | 852 |
+| `PlayerScreen.kt` | 843 |
+| `home/HomeScreen.kt` | 608 |
+| `library/LibraryScreen.kt` | 600 |
+| `nas/NasViewModel.kt` | 552 |
 
 ---
 
@@ -197,6 +199,7 @@ APK 核对三件事：包名/版本号、签名指纹 `dc3f1f24…2e9507`、应�
 ```
 [崩溃记录]      上次崩溃的堆栈（只留前 16 行）
 [设备]          三台的在线状态、能力档、音量/声道/电量、**取数通道**（哪条没答）
+[启动恢复]      上次那台设备找回没有、队列从哪来（设备列表/本地快照）、耗时（← 最新加）
 [界面]          当前在哪一页、有没有浮层挡着（← 最新加，覆盖"点了没反应"最常见误报）
 [指令]          最近发出去的口令、成没成、为什么失败、耗时（← 最新加）
 [队列]          归属哪台、运行中、设备持有、偏移、控制丢失
@@ -211,14 +214,18 @@ APK 核对三件事：包名/版本号、签名指纹 `dc3f1f24…2e9507`、应�
 
 ## 九、待办（按优先级）
 
-### P1 · 拆 `ConsoleViewModel`（1409 行，最大的一个）
+### ✅ P1 · 拆 `ConsoleViewModel` —— 本轮做完了（1409 → 1183）
 
-原计划拆 `DeviceRegistry`，**但先停**——因为"设备"这个概念可能要变
-（见第十节）。先拆**不涉及设备模型**的部分：
-- 会话恢复（`restoreLastQueue` 等，~100 行）
-- 诊断注册（`registerDiagnostics`，~120 行）
+搬走两块，详见 `docs/56`：
+- 会话恢复 → `session/SessionRestore.kt`（213 行，**含恢复结果状态**）
+- 诊断注册 + 报告拼装 → `ConsoleDiagnostics.kt`（232 行）
 
-### P2 · 拆 `home/HomeScreen.kt`（607 行）
+剩下的部分（`scan` / `addManual` / `identify` / 音乐计数 / `probeSaved`）
+**全都和"设备是什么"绑在一起**，仍然先停：`DeviceRegistry` 要等
+"设备"从 `SavedDevice(ip)` 变成多地址模型（见第十节）再动。
+现在拆等于给即将变形的模型先装箱，将来要拆两次。
+
+### P2 · 拆 `home/HomeScreen.kt`（608 行）
 
 还能分三块：崩溃横幅（45）、聚合播放条（50）、4 个对话框（200）。
 **需要状态提升**（对话框用到的 `menuTarget`/`sleepMenu` 等要传参），
@@ -264,7 +271,7 @@ APK 核对三件事：包名/版本号、签名指纹 `dc3f1f24…2e9507`、应�
 
 1. 先读 `docs/52-dev-conventions.md`（硬规则 + 动手前自检清单）
 2. 看最新三篇 `docs/52` `docs/53` `docs/54`（这轮做了什么、为什么）
-3. 跑一遍全量验证，确认 705 单测全绿
+3. 跑一遍全量验证，确认 710 单测全绿
 4. 问用户：这轮是想**补功能**还是**继续拆结构**？
 
 **不要**在没有真机验证的情况下宣称"功能可用"——`.153` 之前离线过好几天，
