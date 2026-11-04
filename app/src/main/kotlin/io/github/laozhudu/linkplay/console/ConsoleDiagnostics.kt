@@ -9,6 +9,7 @@ import io.github.laozhudu.linkplay.console.diagnostics.NavTrace
 import io.github.laozhudu.linkplay.console.library.LocalMediaRegistry
 import io.github.laozhudu.linkplay.console.library.LocalSourceStatus
 import io.github.laozhudu.linkplay.console.nas.NasSourceStatus
+import io.github.laozhudu.linkplay.console.online.SubsonicSourceStatus
 import io.github.laozhudu.linkplay.console.playback.QueueBus
 import io.github.laozhudu.linkplay.console.session.SessionRestore
 import io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile
@@ -138,6 +139,22 @@ internal class ConsoleDiagnostics(
                 if (st.granted == false || st.failure != null) Severity.WARN else Severity.INFO
             },
         ) { LocalSourceStatus.render() }
+
+        // 内容源 · 在线曲库（Subsonic / tt-music）—— 第三个盲区（`docs/65` 批次 1）。
+        // 要回答的是：搜不到是这个词没命中，还是服务端曲库本来就是空的。
+        AppDiagnostics.sections.register(
+            "source-subsonic",
+            "在线曲库",
+            {
+                val st = SubsonicSourceStatus.snapshot()
+                when {
+                    st.verified == false -> Severity.WARN
+                    st.failure != null -> Severity.WARN
+                    st.zeroStreak >= SubsonicSourceStatus.ZERO_STREAK_HINT -> Severity.WARN
+                    else -> Severity.INFO
+                }
+            },
+        ) { SubsonicSourceStatus.render() }
 
         // 内容源 · NAS —— 七个盲区里的第一个（`docs/61` 的施工顺序），
         // 选它打头是因为 `docs/60` 要改 NAS 的推流路径，改之前必须先能看见现在的行为。

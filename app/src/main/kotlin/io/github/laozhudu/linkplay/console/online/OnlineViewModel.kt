@@ -101,10 +101,14 @@ class OnlineViewModel(
         )
         _state.update { it.copy(config = cfg, busy = true, note = null) }
         safeLaunch("saveConfig") {
+            val started = System.currentTimeMillis()
+            SubsonicSourceStatus.configured(cfg.baseUrl, cfg.user)
             val result = withContext(Dispatchers.IO) {
                 runCatching { client(cfg).ping() }
             }
+            val elapsed = System.currentTimeMillis() - started
             result.onSuccess { ok ->
+                SubsonicSourceStatus.pinged(ok, elapsed)
                 if (ok) {
                     withContext(Dispatchers.IO) { runCatching { store.saveSubsonic(cfg.encode()) } }
                     _state.update {
@@ -115,6 +119,7 @@ class OnlineViewModel(
                     _state.update { it.copy(busy = false, verified = false, note = "连上了但账号不对（ping 返回失败）") }
                 }
             }.onFailure { t ->
+                SubsonicSourceStatus.pingFailed(t, elapsed)
                 _state.update { it.copy(busy = false, verified = false, note = "连不上：${t.message}") }
             }
         }
@@ -130,10 +135,13 @@ class OnlineViewModel(
         if (_state.value.searching) return
         _state.update { it.copy(searching = true, note = null) }
         safeLaunch("search") {
+            val started = System.currentTimeMillis()
             val result = withContext(Dispatchers.IO) {
                 runCatching { client().search(q, limit = 50) }
             }
+            val elapsed = System.currentTimeMillis() - started
             result.onSuccess { list ->
+                SubsonicSourceStatus.searched(q, list.size, elapsed)
                 _state.update {
                     it.copy(
                         searching = false,
@@ -144,6 +152,7 @@ class OnlineViewModel(
                 }
                 log("搜索「$q」→ ${list.size} 首")
             }.onFailure { t ->
+                SubsonicSourceStatus.searchFailed(q, t, elapsed)
                 _state.update { it.copy(searching = false, results = emptyList(), note = t.message) }
                 log("搜索失败：${t.message}")
             }
@@ -200,8 +209,10 @@ class OnlineViewModel(
                     note = "在线曲库",
                     log = ::log,
                 )
+                SubsonicSourceStatus.played(track.title, true, null)
                 _state.update { it.copy(busy = false, note = "已投给音箱：${track.title}") }
             } catch (t: Throwable) {
+                SubsonicSourceStatus.played(track.title, false, t.message)
                 _state.update { it.copy(busy = false, note = "投送失败：${t.message}") }
                 log("投送失败：${t.message}")
             }
