@@ -429,6 +429,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 val idx = deviceList.currentIndex.coerceIn(0, items.lastIndex)
                 QueueBus.restore(
+                    deviceIp = ip,
                     items = items,
                     index = idx,
                     title = items.getOrNull(idx)?.title,
@@ -452,6 +453,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
             }
             val plan = QueueRestore.plan(snapshot, device) ?: return@safeLaunch
             QueueBus.restore(
+                deviceIp = ip,
                 items = plan.items,
                 index = plan.index,
                 title = plan.items.getOrNull(plan.index)?.title,
@@ -869,13 +871,13 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         val status = runCatching { client.status(ip) }.getOrNull()
         if (status != null && !status.uuid.isNullOrBlank()) {
             // getStatusEx 能答上来，基本就是 LinkPlay 系（这套 httpapi 是它家专有的）
-            return SavedDevice(
-                uuid = status.uuid!!,
+            // 唯一构造入口：uuid 归一化在 SavedDevice.of 里做（三处各写一遍曾导致设备重影）
+            return SavedDevice.of(
+                rawId = status.uuid,
                 name = status.ssid?.takeIf { it.isNotBlank() } ?: ip,
                 ip = ip,
-                location = status.uuid?.let { null }, // 描述地址探测见下
+                location = null, // 描述地址探测见下
                 modelName = status.hardware,
-                lastSeenMs = System.currentTimeMillis(),
             )
         }
         // 没有 httpapi 时退回 UPnP 描述判断。
@@ -898,13 +900,12 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         if (profile == DeviceProfile.UNKNOWN) {
             throw IllegalStateException("$ip:$port 不是可播放设备（${LinkPlayIdentity.reasonFor(found)} 不成立）")
         }
-        return SavedDevice(
-            uuid = found.udn?.removePrefix("uuid:") ?: ip,
+        return SavedDevice.of(
+            rawId = found.udn,
             name = found.friendlyName ?: ip,
             ip = ip,
             location = usedUrl,
             modelName = found.modelName,
-            lastSeenMs = System.currentTimeMillis(),
         )
     }
 
@@ -915,12 +916,11 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 扫描结果里点「添加」：保存并直接进入。 */
     fun add(device: DiscoveredDevice) {
-        val saved = SavedDevice(
-            uuid = device.uuid?.substringAfterLast(':')?.removePrefix("uuid:") ?: device.ip,
+        val saved = SavedDevice.of(
+            rawId = device.uuid,
             name = device.friendlyName ?: device.friendlySsid ?: device.ip,
             ip = device.ip,
             location = device.location,
-            lastSeenMs = System.currentTimeMillis(),
         )
         save(saved)
         _state.update { it.copy(devices = it.devices.filterNot { d -> d.ip == device.ip }) }
@@ -1468,6 +1468,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                     return@run
                 }
                 QueueBus.restore(
+                    deviceIp = masterIp,
                     items = restored.items,
                     index = restored.index.coerceIn(0, restored.items.lastIndex),
                     title = restored.items.getOrNull(restored.index)?.title,

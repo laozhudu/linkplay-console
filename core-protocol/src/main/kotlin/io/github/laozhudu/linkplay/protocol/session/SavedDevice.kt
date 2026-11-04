@@ -3,6 +3,7 @@ package io.github.laozhudu.linkplay.protocol.session
 import io.github.laozhudu.linkplay.protocol.Json
 import io.github.laozhudu.linkplay.protocol.JsonValue
 import io.github.laozhudu.linkplay.protocol.JsonWriter
+import io.github.laozhudu.linkplay.protocol.identity.UuidMatch
 
 /**
  * 一台被记住的音箱。
@@ -13,8 +14,25 @@ import io.github.laozhudu.linkplay.protocol.JsonWriter
  *
  * 键用 **uuid** 而不是 ip：真机从 `.164` 漂到 `.153` 是实测过的（DHCP 续租），
  * 用 IP 当键会让记录直接失效。
+ *
+ * ## 为什么构造函数是 private（这条改动的全部理由）
+ *
+ * 同一台音箱曾在三处被"造"过，各自归一化一遍：
+ * ```
+ * 手动填 IP    → found.udn?.removePrefix("uuid:")                       → 32 位带连字符
+ * 扫描点添加   → device.uuid?.substringAfterLast(':')?.removePrefix(…)  → 32 位带连字符
+ * 组内从机     → sl.uuid?.removePrefix("uuid:")                         → 同上
+ * 而 getStatusEx 给的是 FF31F0174FE5C9B2A2ACEAE3                        → 24 位无连字符
+ * ```
+ * 于是**同一台音箱会被存成两条记录**：`DeviceList.upsert` 按 uuid 去重，两条都留下；
+ * `SessionStore` 用 deviceUuid 当 subject，播放快照/NAS 记忆也各存一份。
+ * 首页出现两台同名设备就是这么来的。
+ *
+ * 之前只在**查询**侧加了 [UuidMatch]（所以电量/声道能对上），**存储**侧没动 ——
+ * 典型的"只修症状没修源头"。现在把构造函数收起来，只有 [of] 能造，
+ * 归一化只在那一个地方做，**编译期**就堵死了三套写法。
  */
-data class SavedDevice(
+data class SavedDevice private constructor(
     val uuid: String,
     val name: String,
     /** 最近一次成功通信时的 IP。可能是旧的，用前要探活。 */
@@ -41,16 +59,51 @@ data class SavedDevice(
     )
 
     companion object {
+        /**
+         * **全项目唯一的构造入口**。
+         *
+         * @param rawId 设备给的原始标识（`getStatusEx.uuid` / UDN / `slave_list[].uuid` 都行），
+         *   格式千奇百怪，这里统一过 [UuidMatch.key]。
+         *   为空时退回 IP —— 少数通用渲染器没有 uuid，只能这样；
+         *   但这至少是一条**确定的**降级规则，不是各处各写一遍。
+         */
+        fun of(
+            rawId: String?,
+            ip: String,
+            name: String,
+            location: String? = null,
+            modelName: String? = null,
+            lastSeenMs: Long = System.currentTimeMillis(),
+        ): SavedDevice {
+            // canonical 而不是 key：LinkPlay 的 UDN 是 <uuid24><前8位重复>，
+            // 只去连字符会得到 32 位，与 getStatusEx 的 24 位仍是两个字符串（见 UuidMatch）
+            val normalized = UuidMatch.canonical(rawId).ifBlank { ip.trim() }
+            return SavedDevice(
+                uuid = normalized,
+                // 名字是用户设的，只去首尾空白，不动中间
+                name = name.trim(),
+                ip = ip.trim(),
+                location = location,
+                modelName = modelName,
+                lastSeenMs = lastSeenMs,
+            )
+        }
+
+        /**
+         * 从持久化 JSON 还原。
+         *
+         * 走 [of] 而不是直接构造：**老版本存下来的脏数据也要被归一化** ——
+         * 用户不该因为升级了一次 App 就得手动删掉重加设备。
+         */
         fun decode(text: String?): SavedDevice? {
             if (text.isNullOrBlank()) return null
             return runCatching {
                 val o = Json.parse(text) as? JsonValue.Obj ?: return null
-                val uuid = o.string("uuid")?.takeIf { it.isNotBlank() } ?: return null
                 val ip = o.string("ip")?.takeIf { it.isNotBlank() } ?: return null
-                SavedDevice(
-                    uuid = uuid,
-                    name = o.string("name").orEmpty(),
+                of(
+                    rawId = o.string("uuid"),
                     ip = ip,
+                    name = o.string("name").orEmpty(),
                     location = o.string("location"),
                     modelName = o.string("model"),
                     lastSeenMs = (o["seen"] as? JsonValue.Num)?.value?.toLong() ?: 0L,
