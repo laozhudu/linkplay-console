@@ -1,7 +1,11 @@
 # 交接卡（HANDOVER）
 
-> 最后更新：2026-11-04 · **779 单测 0 失败** · 版本号见下方表格（**APK 版本 = 提交数**，所以这里不写死）
+> 最后更新：2026-11-04 · **913 单测 0 失败** · 版本号见下方表格（**APK 版本 = 提交数**，所以这里不写死）
 > 新对话接手请**从头读完这一页**，再去看 `docs/52-dev-conventions.md`（硬规则）。
+
+> ⚠️ **新增两个内容源模块（`core-radio` / `core-lx`），`app` 还没接。**
+> 接手前请先读 **`docs/74-handoff-core-modules.md`** —— 里面写了它们能干什么、
+> 三条不能碰的硬规则、以及**真机还没验过**这个缺口。
 
 ---
 
@@ -26,10 +30,10 @@ DOSS DS-1831 音箱（LinkPlay / WiiMu 方案）。
 | 项 | 数值 |
 |---|---|
 | 提交数 | `git rev-list --count HEAD` |
-| 单元测试 | **779 个，0 失败** |
-| 文档 | 71 篇（`docs/01`～`docs/71`） |
+| 单元测试 | **913 个，0 失败** |
+| 文档 | 74 篇（`docs/01`～`docs/74`） |
 | APK | `0.9.<提交数>`，versionCode 同值 |
-| 模块 | 4 个（见下） |
+| 模块 | 6 个（见下） |
 
 ---
 
@@ -80,13 +84,15 @@ FF31009611F6457672B5250D → ff31009611f6457672b5250dff310096   ✓
 
 ---
 
-## 四、模块结构（4 个箱子）
+## 四、模块结构（6 个箱子）
 
 | 模块 | 文件 | 行数 | 里面装什么 |
 |---|---|---|---|
 | `core-protocol` | 74 | 8825 | 所有"怎么指挥音箱"的门道（协议、UPnP、多房间、播放队列、媒体服务） |
 | `core-discovery` | 1 | 252 | 在局域网里把音箱找出来（SSDP） |
 | `core-diagnostics` | 10 | 605 | 诊断（**零依赖纯 JVM，可独立发布**） |
+| `core-radio` ★新 | 9 | 657 | 网络电台目录（Radio Browser）。**带 serialization + coroutines，所以单独成模块** |
+| `core-lx` ★新 | 9 | 1354 | 洛雪脚本引擎 + 音乐搜索（QuickJS）。**`app` 还没依赖它** |
 | `app` | 71 | 16941 | 界面 + 状态 + 各功能页 |
 
 ### app 内部已拆开的结构
@@ -174,6 +180,7 @@ cd /root/.hermes/workspace/linkplay-console
 
 # 全量验证
 ./gradlew --no-daemon :core-protocol:test :core-diagnostics:test \
+    :core-radio:test :core-lx:testDebugUnitTest \
     :app:testDebugUnitTest :app:assembleDebug
 python3 scripts/check-init-order.py
 python3 scripts/check-diagnostics-labels.py
@@ -292,7 +299,7 @@ APK 核对三件事：包名/版本号、签名指纹 `dc3f1f24…2e9507`、应�
 
 1. 先读 `docs/52-dev-conventions.md`（硬规则 + 动手前自检清单）
 2. 看最新三篇 `docs/52` `docs/53` `docs/54`（这轮做了什么、为什么）
-3. 跑一遍全量验证，确认 779 单测全绿
+3. 跑一遍全量验证，确认 913 单测全绿
 4. 问用户：这轮是想**补功能**还是**继续拆结构**？
 
 **不要**在没有真机验证的情况下宣称"功能可用"——`.153` 之前离线过好几天，

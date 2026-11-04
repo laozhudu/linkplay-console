@@ -1,0 +1,19 @@
+linkplay-console（声控台）
+Copyright (c) laozhudu
+
+本产品包含第三方开源组件：
+
+1. lx-music-mobile（https://github.com/lyswhut/lx-music-mobile）
+   许可：Apache License 2.0
+   用途：core-lx 模块的 JS 运行时载荷
+   已修改：
+     - core-lx/src/main/assets/lx-preload.js       官方原文，未修改
+     - core-lx/src/main/assets/lx-music-sdk.bundle.js
+          由 scripts/build-lx-bundle.sh 从上游 src/ 打包生成，其中
+          src/utils/request.js、src/utils/nativeModules/crypto.ts、
+          src/store/setting/state.ts 被替换为走原生桥的实现
+   原许可全文见 https://www.apache.org/licenses/LICENSE-2.0
+
+2. QuickJS Wrapper（https://github.com/HarlonWang/quickjs-wrapper）
+   许可：Apache License 2.0
+   用途：core-lx 的 JS 引擎（wang.harlon.quickjs:wrapper-android）
