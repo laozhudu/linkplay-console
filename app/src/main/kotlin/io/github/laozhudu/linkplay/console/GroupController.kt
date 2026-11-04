@@ -57,12 +57,35 @@ internal class GroupController(private val host: ConsoleHost) {
             targets.forEach { ip ->
                 host.log("SlaveKickout($ip) → " + runCatching { host.send(masterIp, "multiroom:SlaveKickout:$ip") }.getOrDefault("ERR"))
             }
+
+            // **命令回 OK ≠ 退组成功**（这个项目踩过四次）。
+            // 原来这里是 `delay(3500)` 然后盲刷两次，从来没验证过它真的退出了 ——
+            // 所以才会出现"点了解除、声音还在同步"。
+            // 现在以主机 `slave_list` 里消失为唯一判据，最多等 15 秒。
+            val targetIps = targets.toSet()
+            var gone = false
+            var waited = 0
+            while (waited < 15_000) {
+                delay(1_000)
+                waited += 1_000
+                val left = runCatching { MultiroomClient(host.http()).slaves(masterIp) }.getOrNull() ?: continue
+                if (left.none { it.ip in targetIps }) {
+                    gone = true
+                    break
+                }
+            }
+            GroupSourceStatus.ungroup("解除 ${device.title}", gone)
             // 等从机回到原 Wi-Fi 再刷，否则界面会先显示"离线"
-            delay(3_500)
-            host.refreshAll()
+            delay(if (gone) 1_500 else 500)
             host.refreshAll()
             host.update {
-                it.copy(multiroomNote = if (targets.isEmpty()) "组里没有从机" else "已解除 ${targets.size} 台从机")
+                it.copy(
+                    multiroomNote = when {
+                        targets.isEmpty() -> "组里没有从机"
+                        gone -> "已解除 ${targets.size} 台从机"
+                        else -> "命令已被接受，但 15 秒内设备仍在组里 —— 看诊断「组」段"
+                    },
+                )
             }
             host.log("解除组网完成")
         }

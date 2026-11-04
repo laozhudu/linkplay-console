@@ -281,7 +281,7 @@ internal fun DeviceCardRow(
                         onClick = { confirmUngroup = true },
                         contentPadding = PaddingValues(horizontal = 6.dp),
                     ) {
-                        Text("解除", style = MaterialTheme.typography.labelSmall, color = OnDarkPalette.muted)
+                        Text("退出同步", style = MaterialTheme.typography.labelSmall, color = OnDarkPalette.muted)
                     }
                 }
             }

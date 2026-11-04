@@ -220,6 +220,22 @@ internal fun HomeScreen(
                         maxLines = 1,
                     )
                 }
+                // 组级别的退出入口：以前只有一个藏在每张卡片里的小字「解除」，
+                // 而且它的显示条件是"界面认为这台在组里"——认知一错位，入口就彻底消失。
+                // 组的信息条本身就该能操作，Sonos/Cast 的组行都是这么做的。
+                if (state.groupSize > 1) {
+                    val master = state.saved.firstOrNull { it.ip == state.groupMasterIp }
+                    TextButton(
+                        onClick = { master?.let { vm.ungroupCard(it) } },
+                        contentPadding = PaddingValues(horizontal = 8.dp),
+                    ) {
+                        Text(
+                            "退出同步",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
                 // 播放/暂停：与底部大按钮共用同一个判定（state.anyPlaying），
                 // 两处各自算一次必然出现"条上说暂停、按钮说播放"
                 CircleIcon(onClick = { vm.togglePlayAll() }, size = 44.dp) {
