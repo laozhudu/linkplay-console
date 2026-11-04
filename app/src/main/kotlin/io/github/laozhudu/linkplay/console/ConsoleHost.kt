@@ -81,4 +81,12 @@ internal interface ConsoleHost {
      * "三处存盘键不一致"的教训），所以这一步收在宿主里。
      */
     fun loadPlayback(uuid: String?, ip: String): io.github.laozhudu.linkplay.protocol.session.PlaybackSession?
+
+    /**
+     * 上次选中的设备键（`uuid` 或 `ip:…`，键怎么拼由 `PlaybackKey.of` 决定）。
+     *
+     * 与 [loadPlayback] 同理：键的拼法是存储层的规则，恢复逻辑不该自己拼 ——
+     * 拼错的表现是「重开 App 回不到上次那台」，而且不会报错。
+     */
+    fun lastDeviceKey(): String?
 }

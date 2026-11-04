@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import android.net.wifi.WifiManager
 import androidx.lifecycle.AndroidViewModel
+import io.github.laozhudu.linkplay.console.session.SessionRestore
 import io.github.laozhudu.linkplay.console.session.SessionStore
 import io.github.laozhudu.linkplay.discovery.DiscoveredDevice
 import io.github.laozhudu.linkplay.discovery.SsdpDiscovery
@@ -12,7 +13,6 @@ import io.github.laozhudu.linkplay.protocol.LinkPlayCommands
 import io.github.laozhudu.linkplay.protocol.LinkPlayStatus
 import io.github.laozhudu.linkplay.protocol.dlna.DescriptionEndpoints
 import io.github.laozhudu.linkplay.protocol.dlna.DeviceCapabilities
-import io.github.laozhudu.linkplay.protocol.remote.CommandTrace
 import io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile
 import io.github.laozhudu.linkplay.protocol.dlna.detect
 import io.github.laozhudu.linkplay.protocol.identity.LinkPlayIdentity
@@ -48,10 +48,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import io.github.laozhudu.linkplay.console.crash.CrashGuard
-import io.github.laozhudu.diagnostics.Severity
 import io.github.laozhudu.linkplay.console.diagnostics.AppDiagnostics
-import io.github.laozhudu.linkplay.console.diagnostics.NavTrace
-import io.github.laozhudu.linkplay.console.diagnostics.DiagnosticsReport
 import io.github.laozhudu.linkplay.console.diagnostics.safeLaunch
 
 /**
@@ -272,93 +269,12 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     private val _state = MutableStateFlow(ConsoleUiState())
     val state: StateFlow<ConsoleUiState> = _state.asStateFlow()
 
-    /**
-     * 重开 App 时自动回到上次那台设备。
-     *
-     * 用户要求「原厂退出后重开能读到原来的状态」。光恢复队列不够 ——
-     * 没有"当前设备"，播放页是空的、列表也无处可挂。所以这里按 uuid（其次 IP）找回，
-     * 找到了就静默选中，不跳 Tab（用户可能只想看设备列表）。
-     */
-    private fun restoreLastDevice() {
-        val key = runCatching { store.loadLastDevice() }.getOrNull() ?: return
-        val target = _state.value.saved.firstOrNull {
-            it.uuid == key || "ip:${it.ip}" == key
-        } ?: return
-        _state.update {
-            it.copy(
-                selectedIp = target.ip,
-                selectedLocation = target.location,
-                selectedUuid = target.uuid,
-            )
-        }
-        log("恢复上次设备：${target.title}（${target.ip}）")
-    }
-
-    /**
-     * 重开 App 时恢复播放列表。
-     *
-     * 判定逻辑全在 [QueueRestore]（纯函数、有单测）。这里只负责三件事：
-     * 1. 读**设备真值**（`plicount`/`plicurr`）—— 列表本来就在设备上，这是权威；
-     * 2. 读本地快照（提供曲目标题，设备不回填元数据）；
-     * 3. 两者交给 [QueueRestore.plan] 合成，结果写进 [QueueBus]。
-     *
-     * 为什么先等一小会儿：`restoreLastDevice()` 里才拿到 selectedIp/uuid，
-     * 而两者都在同一个 init 里，这里按"当前已选设备"读，拿不到就退回上次的记录。
-     */
-    private fun restoreLastQueue() {
-        safeLaunch("restoreLastQueue") {
-            delay(150)
-            val uuid = _state.value.selectedUuid
-            val ip = _state.value.selectedIp ?: return@safeLaunch
-
-            // ① 原厂做法：BrowseQueue 把设备上的整份列表（含曲名）读回来 —— 这才是"同步设备列表"
-            val deviceList = DevicePlaylistGateway.read(ip, _state.value.selectedLocation)
-            if (deviceList != null && !deviceList.isEmpty) {
-                val items = DevicePlaylistGateway.toQueueItems(deviceList)
-                // 设备说"有列表"但一条曲目都没解析出来时直接跳过。
-                // 不跳的话 `coerceIn(0, -1)` 会抛 IllegalArgumentException ——
-                // 这是一类真会闪退的写法（范围反了），不是理论风险。
-                if (items.isEmpty()) {
-                    log("设备报了列表但读不到曲目，跳过恢复")
-                    return@safeLaunch
-                }
-                val idx = deviceList.currentIndex.coerceIn(0, items.lastIndex)
-                QueueBus.restore(
-                    deviceIp = ip,
-                    items = items,
-                    index = idx,
-                    title = items.getOrNull(idx)?.title,
-                    deviceOwned = true,
-                    note = "设备列表 ${items.size} 首 · 第 ${idx + 1} 首",
-                )
-                log("从设备读回播放列表：${items.size} 首（队列名 ${deviceList.name}）")
-                return@safeLaunch
-            }
-
-            // ② 设备没有队列 → 用本地快照兜底（并说明设备当前是空的）
-            val device = withContext(Dispatchers.IO) {
-                runCatching {
-                    DeviceQueueState.from(PlayerStatus.parse(client.send(ip, "getPlayerStatus")))
-                }.getOrNull()
-            }
-            val snapshot = withContext(Dispatchers.IO) {
-                PlaybackKey.candidates(uuid, ip).firstNotNullOfOrNull { key ->
-                    runCatching { store.loadPlayback(key) }.getOrNull()
-                }
-            }
-            val plan = QueueRestore.plan(snapshot, device) ?: return@safeLaunch
-            QueueBus.restore(
-                deviceIp = ip,
-                items = plan.items,
-                index = plan.index,
-                title = plan.items.getOrNull(plan.index)?.title,
-                deviceOwned = plan.fromDevice,
-                offset = snapshot?.deviceOffset ?: 0,
-                note = plan.note,
-            )
-            log("恢复播放列表：${plan.items.size} 首 · ${plan.note}")
-        }
-    }
+    // ---- 会话恢复 ----
+    //
+    // 「回到上次那台设备 + 把播放列表也找回来」已经搬到 `SessionRestore`。
+    // 为什么整块搬：这两件事必须**按顺序**做，留在两个 private 函数里，
+    // 将来谁只调一个都不会报错，只是列表空了 —— 那是最难查的一类问题。
+    // 恢复结果（成功 / 为什么没恢复 / 耗时）也留在那边，由诊断页「启动恢复」段读。
 
     // ---- 已保存设备 ----
 
@@ -1091,7 +1007,15 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
             PlaybackKey.candidates(uuid, ip).firstNotNullOfOrNull { key ->
                 runCatching { store.loadPlayback(key) }.getOrNull()
             }
+
+        override fun lastDeviceKey(): String? = runCatching { store.loadLastDevice() }.getOrNull()
     }
+
+    /** 会话恢复（重开 App 回到上次那台设备 + 播放列表）。见 [SessionRestore]。 */
+    private val sessionRestore = SessionRestore(consoleHost)
+
+    /** 诊断页的段注册与报告拼装。见 [ConsoleDiagnostics]。 */
+    private val diagnostics = ConsoleDiagnostics(app, consoleHost, sessionRestore)
 
     private val groups = GroupController(consoleHost)
 
@@ -1127,163 +1051,13 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     fun leaveDevice() = control.leaveDevice()
 
     // ---- 诊断 ----
+    //
+    // 段注册与报告拼装已经搬到 `ConsoleDiagnostics`（它只读状态，不改状态）。
+    // ViewModel 这边只留"清记录 / 读上次崩溃 / 落盘"三条写操作 —— 它们要改状态。
 
-    /**
-     * 把「设备 / 队列 / 后台服务」三段注册进诊断页。
-     *
-     * 为什么设备段也走注册表：第一版是 `diagnosticsReport()` 里硬编码拼的，
-     * 结果新增模块时总要回来改这个函数。现在谁有状态谁注册，报告只负责汇总。
-     */
-    private fun registerDiagnostics() {
-        // 级别是**函数**：注册只发生一次，而"设备全没应答"是运行中才出现的状态
-        AppDiagnostics.sections.register(
-            "devices",
-            "设备",
-            {
-                val st = _state.value
-                when {
-                    // 全部未探测 = 探活根本没跑起来（PR #58 那个 NPE 就是这个形态）
-                    st.saved.isNotEmpty() && st.saved.all { st.online[it.uuid] == null } -> Severity.WARN
-                    // 在线但一条取数通道都没答 = 设备在、协议不通
-                    st.saved.any { d -> st.online[d.uuid] == true && st.cards[d.uuid]?.answered?.isEmpty() == true } -> Severity.WARN
-                    else -> Severity.INFO
-                }
-            },
-        ) {
-            val st = _state.value
-            if (st.saved.isEmpty()) "  没有已保存的设备"
-            else buildString {
-                st.saved.forEach { d ->
-                    val c = st.cards[d.uuid]
-                    appendLine("  ${d.title}  ${d.ip}")
-                    appendLine(
-                        "    状态=" + when (st.online[d.uuid]) {
-                            true -> "在线"; false -> "离线"; null -> "未探测"
-                        } +
-                            (st.groupedUnder[UuidMatch.key(d.uuid)]?.let { "  属=$it" } ?: "") +
-                            "  能力=${(c?.profile ?: DeviceProfile.UNKNOWN).name}",
-                    )
-                    appendLine(
-                        "    音量=${c?.volume ?: 0}  声道=${DiagnosticsReport.channelText(c?.channel)}" +
-                            "  电量=${c?.battery?.let { "$it%" } ?: "无"}" +
-                            (if (c?.battery != null && c.charging) "（充电）" else "") +
-                            "  播放=${if (c?.playing == true) "是" else "否"}",
-                    )
-                    appendLine(
-                        "    取数通道=" +
-                            (c?.answered?.takeIf { it.isNotEmpty() }?.map { it.name }?.sorted()?.joinToString("+")
-                                ?: "全部未应答"),
-                    )
-                }
-            }
-        }
-        // 界面位置 —— 用户说「点了没反应」时，先要能知道他站在哪一页、有没有浮层挡着。
-        // 同样的现象在不同页面是不同的问题，没有这条我只能反问他。
-        AppDiagnostics.sections.register("ui", "界面") { NavTrace.render() }
+    /** 诊断页要的那份文本报告（界面只负责显示和复制）。 */
+    fun diagnosticsReport(): String = diagnostics.report()
 
-        // 口令流水 —— 覆盖「点了没反应」这类最常报的问题。
-        // 三种情况在界面上表现完全一样（发了没照做 / 根本没发 / 回包看不懂），
-        // 只有流水账能分清。
-        AppDiagnostics.sections.register(
-            "commands",
-            "指令",
-            {
-                val trace = CommandTrace.DEFAULT
-                when {
-                    // 连续失败 3 次以上 = 整条链路断了，和偶发一条失败是两回事
-                    trace.consecutiveFailures() >= 3 -> Severity.ERROR
-                    trace.failedCount > 0 -> Severity.WARN
-                    else -> Severity.INFO
-                }
-            },
-        ) { CommandTrace.DEFAULT.render() }
-
-        AppDiagnostics.sections.register(
-            "queue",
-            "队列",
-            { if (QueueBus.state.value.controlLost || QueueBus.state.value.error != null) Severity.WARN else Severity.INFO },
-        ) {
-            val q = QueueBus.state.value
-            buildString {
-                appendLine("  归属=${q.ownerIp ?: "未知"}  运行中=${q.running}  设备持有=${q.deviceOwned}")
-                appendLine("  共 ${q.total} 首 · 当前第 ${q.index + 1} 首 · ${q.nowPlaying ?: "无"}")
-
-                appendLine("  来源=${q.sourceNote ?: "-"}  偏移=${q.deviceOffset}  控制丢失=${q.controlLost}")
-                q.error?.let { appendLine("  错误=$it") }
-            }
-        }
-        AppDiagnostics.sections.register(
-            "services",
-            "后台服务",
-            { if (QueueBus.state.value.running) Severity.WARN else Severity.INFO },
-        ) {
-            val app = getApplication<Application>()
-            val names = listOf(
-                "playback.QueuePlaybackService" to "队列播放",
-                "library.MediaServerService" to "本地媒体服务",
-                "floating.FloatingControlService" to "悬浮控制",
-            )
-            buildString {
-                names.forEach { (cls, label) ->
-                    // 直接问 ActivityManager：比"我们以为启动了"可靠
-                    val running = runCatching {
-                        val info = app.packageManager.getPackageInfo(app.packageName, android.content.pm.PackageManager.GET_SERVICES)
-                        @Suppress("UNCHECKED_CAST")
-                        val am = app.getSystemService(android.content.Context.ACTIVITY_SERVICE)
-                            as android.app.ActivityManager
-                        // Android 没有公开 API 查"某服务是否在跑"，用 getRunningServices 在本 App 内可用
-                        @Suppress("DEPRECATION")
-                        am.getRunningServices(Int.MAX_VALUE).any { it.service.className == "${app.packageName}.$cls" }
-                    }.getOrDefault(false)
-                    appendLine("  $label=${if (running) "运行中" else "未运行"}")
-                }
-            }
-        }
-    }
-
-    /**
-     * 生成一份可截图/可复制的诊断报告。
-     *
-     * 为什么放在 ViewModel 而不是界面里拼：报告要读设备卡片、在线状态、组归属、
-     * 协程问题记录、上次崩溃 —— 这些都是状态层的数据。界面只负责显示和复制。
-     */
-    fun diagnosticsReport(): String {
-        val st = _state.value
-        val app = getApplication<Application>()
-        val crash = runCatching { CrashGuard.lastReport(app) }.getOrNull()
-        val lines = st.saved.map { d ->
-            val card = st.cards[d.uuid]
-            DiagnosticsReport.DeviceLine(
-                name = d.title,
-                ip = d.ip,
-                online = st.online[d.uuid],
-                groupedUnder = st.groupedUnder[UuidMatch.key(d.uuid)],
-                battery = card?.battery,
-                charging = card?.charging == true,
-                channel = card?.channel,
-                volume = card?.volume ?: 0,
-                playing = card?.playing == true,
-                answered = card?.answered?.map { it.name }?.toSet() ?: emptySet(),
-                profile = (card?.profile ?: DeviceProfile.UNKNOWN).name,
-            )
-        }
-        val version = runCatching {
-            val info = app.packageManager.getPackageInfo(app.packageName, 0)
-            "${info.versionName}（${info.longVersionCode}）"
-        }.getOrDefault("未知")
-        val now = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
-            .format(java.util.Date())
-        return DiagnosticsReport.build(
-            version = version,
-            now = now,
-            crash = crash,
-            devices = lines,
-            entries = AppDiagnostics.recent(),
-            // 各模块自报（设备/播放/队列/后台服务），新增模块不用改这里
-            sections = AppDiagnostics.sections.render(),
-            uptime = AppDiagnostics.uptimeText(),
-        )
-    }
 
     /** 清掉崩溃记录与问题记录（用户确认"看过了/已解决"时用）。 */
     fun clearDiagnostics() {
@@ -1322,7 +1096,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     // ============================================================
 
     init {
-        registerDiagnostics()
+        diagnostics.register()
         // 上一次运行是否崩过：有就在首页顶部给一条可点开的横幅。
         // 这是"用户能截图给我"的入口 —— 系统弹窗只给模板文案，我们给堆栈。
         runCatching {
@@ -1332,10 +1106,10 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         // 首页一进来就有内容：读已保存设备，并后台探活（不清空界面、不阻塞）
         reloadSaved()
         probeSaved()
-        restoreLastDevice()
-        // 队列恢复必须在**启动时**做，而不是等用户点开播放页：
-        // 否则"重开 App 列表是空的"会被当成恢复失效
-        restoreLastQueue()
+        // 恢复必须在**启动时**做，而不是等用户点开播放页：
+        // 否则"重开 App 列表是空的"会被当成恢复失效。
+        // device 先、queue 后是这个顺序唯一正确的排法，已在 SessionRestore.restore() 里写死。
+        sessionRestore.restore()
         // 首页多房间卡片的低频心跳：不在播放页时也能跟上设备侧/遥控器的音量变化
         safeLaunch("groupVolumeHeartbeat") {
             while (true) {
