@@ -20,4 +20,7 @@ internal enum class SubPage {
 
     /** 洛雪音源脚本（装了什么 / 哪支在用 / 导入新的）。 */
     Scripts,
+
+    /** 洛雪音乐搜索（搜一首 → 取直链 → 投到音箱）。 */
+    LxSearch,
 }

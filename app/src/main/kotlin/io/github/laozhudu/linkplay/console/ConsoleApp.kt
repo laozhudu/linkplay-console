@@ -171,6 +171,14 @@ internal fun ConsoleBody(vm: ConsoleViewModel) {
                 onBack = { sub = null },
             )
 
+            SubPage.LxSearch -> io.github.laozhudu.linkplay.console.lx.LxSearchScreen(
+                deviceIp = state.selectedIp.orEmpty(),
+                location = state.selectedLocation,
+                deviceUuid = state.selectedUuid,
+                onBack = { sub = null },
+                onOpenScripts = { sub = SubPage.Scripts },
+            )
+
             SubPage.Settings -> DeviceSettingsScreen(
                 state = state,
                 vm = vm,
@@ -275,6 +283,7 @@ internal fun ConsoleBody(vm: ConsoleViewModel) {
                     onOpenRadio = { sub = SubPage.Radio },
                     onOpenSettings = { sub = SubPage.Settings },
                     onOpenScripts = { sub = SubPage.Scripts },
+                    onOpenLxSearch = { sub = SubPage.LxSearch },
                     onGoDevices = { tab = Tab.Devices },
                 )
             }

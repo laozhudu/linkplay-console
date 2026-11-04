@@ -59,6 +59,43 @@ object LxSourceStatus {
         )
     }
 
+    /**
+     * 取到了直链（问用户脚本要地址那一步）。
+     *
+     * 为什么要单独记：搜索成功 ≠ 能播。搜索走 SDK，取流走**用户脚本**，
+     * 是两条完全不同的链路。只有把它记下来，"搜到了点不动"才能定位到脚本这一环。
+     */
+    fun resolveOk(source: String, title: String, ms: Long) = mutate {
+        it.copy(
+            phase = "可用",
+            resolvedTitle = title,
+            resolvedSource = source,
+            resolveMs = ms,
+            resolveError = null,
+            atMs = System.currentTimeMillis(),
+        )
+    }
+
+    /** 取流失败（脚本没装 / 脚本坏了 / 平台拿不到版权）。 */
+    fun resolveFailed(title: String, message: String?) = mutate {
+        it.copy(
+            phase = "不可用",
+            ok = false,
+            resolvedTitle = title,
+            resolveError = message ?: "脚本没给地址",
+            atMs = System.currentTimeMillis(),
+        )
+    }
+
+    /** 投送结果（`startQueueOnDevice` 的返回值）。拿到了地址但设备不播，是另一种问题。 */
+    fun cast(ok: Boolean, title: String) = mutate {
+        it.copy(
+            castNote = if (ok) "已投送「$title」" else "地址拿到了，但设备没起播「$title」",
+            castOk = ok,
+            atMs = System.currentTimeMillis(),
+        )
+    }
+
     /** 任何一步失败：引擎加载不出来、bundle 解析不了、搜索抛异常。 */
     fun failed(stage: String, message: String?) = mutate {
         it.copy(
@@ -74,8 +111,7 @@ object LxSourceStatus {
         return buildString {
             if (s.phase == null) {
                 appendLine("  还没跑过自检（启动时会自动跑一次）")
-                return@buildString
-            }
+            } else {
             appendLine("  引擎=${s.phase}" + if (s.loadMs > 0) "（加载 ${s.loadMs}ms）" else "")
             if (s.count >= 0) {
                 appendLine(
@@ -83,6 +119,15 @@ object LxSourceStatus {
                         if (s.count == 0) "  ← 引擎活了但没结果，可能是网络或平台接口变了" else "",
                 )
             }
+            }
+            s.resolvedTitle?.let { title ->
+                if (s.resolveError != null) {
+                    appendLine("  取流=失败「$title」—— ${s.resolveError}")
+                } else {
+                    appendLine("  取流=「$title」@${s.resolvedSource} → 拿到地址 / ${s.resolveMs}ms")
+                }
+            }
+            s.castNote?.let { appendLine("  投送=$it" + if (s.castOk == false) "  ← 设备侧问题，不是脚本" else "") }
             s.error?.let { appendLine("  自检失败=$it") }
             if (s.atMs > 0L) {
                 appendLine(
@@ -106,4 +151,12 @@ data class LxStatus(
     val ok: Boolean? = null,
     val error: String? = null,
     val atMs: Long = 0L,
+    /** 最近一次取流：曲名 / 平台 / 耗时 / 失败原因。 */
+    val resolvedTitle: String? = null,
+    val resolvedSource: String = "",
+    val resolveMs: Long = 0L,
+    val resolveError: String? = null,
+    /** 最近一次投送结果（null = 还没投过）。 */
+    val castNote: String? = null,
+    val castOk: Boolean? = null,
 )
