@@ -15,4 +15,12 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "linkplay-console"
-include(":app", ":core-protocol", ":core-discovery", ":core-diagnostics", ":core-radio", ":core-lx")
+include(
+    ":app",
+    ":core-protocol",
+    ":core-discovery",
+    ":core-diagnostics",
+    ":core-radio",
+    ":core-lx",
+    ":core-script",
+)
