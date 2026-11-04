@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
+import io.github.laozhudu.linkplay.console.diagnostics.SourceFailure
 import io.github.laozhudu.linkplay.console.diagnostics.safeLaunch
 
 data class RadioUiState(
@@ -95,6 +96,7 @@ class RadioViewModel(
                 runCatching { store.forDevice(deviceName) }.getOrDefault(emptyList())
             }
             _state.update { it.copy(stations = list, loading = false) }
+            RadioSourceStatus.library(list.size)
         }
     }
 
@@ -107,6 +109,7 @@ class RadioViewModel(
     fun add(name: String, rawUrl: String) {
         val url = RadioStation.normalizeUrl(rawUrl)
         if (url == null) {
+            RadioSourceStatus.invalid(rawUrl)
             _state.update { it.copy(error = "这个地址不像 http/https 链接，检查一下有没有打错") }
             return
         }
@@ -180,7 +183,8 @@ class RadioViewModel(
         if (_state.value.busy) return
         _state.update { it.copy(busy = true, note = null, error = null) }
         safeLaunch("playUrl") {
-            val (started, detail) = withContext(Dispatchers.IO) {
+            val startedAt = System.currentTimeMillis()
+            val outcome = withContext(Dispatchers.IO) {
                 try {
                     // 第一步必须先切输入源，否则旧固件只把地址存进 uri 不会真的播
                     client.send(deviceIp, LinkPlayCommands.switchMode("wifi"))
@@ -200,13 +204,23 @@ class RadioViewModel(
                             return@repeat
                         }
                     }
-                    playing to "status=$label"
+                    // 命令全回了 OK，但状态没变成 PLAY —— https 在老固件上就是这个表现。
+                    // 所以这里不能只看"命令成功"，必须看 status。
+                    when {
+                        playing -> RadioOutcome(true, "status=$label", null)
+                        label == "?" -> RadioOutcome(false, "6 秒内取不到播放状态", SourceFailure.TIMEOUT)
+                        else -> RadioOutcome(false, "status=$label", SourceFailure.UNSUPPORTED)
+                    }
                 } catch (t: Throwable) {
-                    false to (t.message ?: t.javaClass.simpleName)
+                    RadioOutcome(false, t.message ?: t.javaClass.simpleName, SourceFailure.of(t))
                 }
             }
+            val started = outcome.ok
+            val detail = outcome.detail
+            val elapsed = System.currentTimeMillis() - startedAt
 
             if (started) {
+                RadioSourceStatus.played(url, detail, elapsed)
                 // 电台也是"在设备上播"，重开 App 要让播放页有东西可显示
                 withContext(Dispatchers.IO) {
                     runCatching {
@@ -238,6 +252,12 @@ class RadioViewModel(
                 }
                 log("播放成功：$url")
             } else {
+                RadioSourceStatus.failed(
+                    url,
+                    outcome.kind ?: SourceFailure.UNSUPPORTED,
+                    detail,
+                    elapsed,
+                )
                 if (storeId != 0L) withContext(Dispatchers.IO) { runCatching { store.markInvalid(storeId, true) } }
                 _state.update {
                     it.copy(
