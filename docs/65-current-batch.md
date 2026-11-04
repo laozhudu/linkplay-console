@@ -19,7 +19,7 @@
 - [x] **电台** — PR #76（`RadioSourceStatus`）
 - [x] **配网** — PR #78（`ProvisionSourceStatus`）
 - [x] **语音** — PR #80（`VoiceSourceStatus`）
-- [ ] **悬浮窗** — `floating/FloatingControlService.kt`
+- [x] **悬浮窗** — PR #81（`FloatingSourceStatus`）
 
 ### 每个源必须能回答的问题
 

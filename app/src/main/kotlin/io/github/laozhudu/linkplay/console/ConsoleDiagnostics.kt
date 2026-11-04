@@ -6,6 +6,7 @@ import io.github.laozhudu.linkplay.console.crash.CrashGuard
 import io.github.laozhudu.linkplay.console.diagnostics.AppDiagnostics
 import io.github.laozhudu.linkplay.console.diagnostics.DiagnosticsReport
 import io.github.laozhudu.linkplay.console.diagnostics.NavTrace
+import io.github.laozhudu.linkplay.console.floating.FloatingSourceStatus
 import io.github.laozhudu.linkplay.console.library.LocalMediaRegistry
 import io.github.laozhudu.linkplay.console.library.LocalSourceStatus
 import io.github.laozhudu.linkplay.console.nas.NasSourceStatus
@@ -182,6 +183,14 @@ internal class ConsoleDiagnostics(
             "语音",
             { if (VoiceSourceStatus.snapshot().failure != null) Severity.WARN else Severity.INFO },
         ) { VoiceSourceStatus.render() }
+
+        // 悬浮窗 —— 第七个盲区（`docs/65` 批次 1，最后一个）。
+        // 权限、服务、窗口几何三件事分开记：界面上它们都表现为"没有那个条"。
+        AppDiagnostics.sections.register(
+            "source-floating",
+            "悬浮窗",
+            { if (FloatingSourceStatus.snapshot().failure != null) Severity.WARN else Severity.INFO },
+        ) { FloatingSourceStatus.render() }
 
         // 内容源 · NAS —— 七个盲区里的第一个（`docs/61` 的施工顺序），
         // 选它打头是因为 `docs/60` 要改 NAS 的推流路径，改之前必须先能看见现在的行为。

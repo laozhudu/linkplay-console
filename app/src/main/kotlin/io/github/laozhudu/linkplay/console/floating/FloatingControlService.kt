@@ -87,6 +87,7 @@ class FloatingControlService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            FloatingSourceStatus.stopped("用户关闭")
             stopSelf()
             return START_NOT_STICKY
         }
@@ -95,6 +96,7 @@ class FloatingControlService : Service() {
         // startForeground 必须在 5 秒内调用，否则系统直接 ANR/杀进程 —— 放在最前面
         startForeground(NOTIFICATION_ID, buildNotification())
 
+        FloatingSourceStatus.started(targetIp())
         if (root == null) addOverlay()
         observeQueue()
         return START_STICKY
@@ -112,9 +114,15 @@ class FloatingControlService : Service() {
         // 没有权限时加窗会抛 BadTokenException。这里直接放弃并把自己停掉：
         // 让设置页的开关回到「关」，用户看到的就是「没开」，而不是一个假装开着却什么都没出现的开关。
         if (!canDrawOverlays(this)) {
+            FloatingSourceStatus.permission(false)
+            FloatingSourceStatus.failed(
+                io.github.laozhudu.linkplay.console.diagnostics.SourceFailure.PERMISSION_DENIED,
+                "没有 SYSTEM_ALERT_WINDOW 权限，加窗会被系统拒（BadTokenException）",
+            )
             stopSelf()
             return
         }
+        FloatingSourceStatus.permission(true)
 
         val metrics = resources.displayMetrics
         val width = dp(200)
@@ -148,12 +156,15 @@ class FloatingControlService : Service() {
         }
         params = lp
 
-        runCatching { wm.addView(bar, lp) }.onFailure {
+        runCatching { wm.addView(bar, lp) }.onFailure { error ->
             // 有的 ROM 即使 canDrawOverlays 为 true 也会拒绝，绝不因此崩溃
+            FloatingSourceStatus.addFailed(error)
             stopSelf()
             return
         }
         root = bar
+        // 记下真实几何：宽高为 0 时窗口加了也看不见，这是"有条但没显示"的唯一证据
+        FloatingSourceStatus.added(spec.width, spec.height, spec.x, spec.y, targetIp())
         render()
     }
 
