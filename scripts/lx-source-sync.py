@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 用途：从 pdone/lx-music-source 拉全套洛雪音源，实测哪支真能取到可播链接，输出推荐清单。
-来源：docs/78-lx-source-integration.md
+来源：docs/80-lx-source-integration.md
 调度：手动（音源天天变，建议每周跑一次；也可挂 cron）
 影响范围：只写 ./lx-sources/（下载的脚本）和 ./lx-sources.recommended.json，不动仓库其它文件。
 依赖：python3 标准库 + node（/opt/node-26.13.0）+ scripts/lx-source-probe.js
