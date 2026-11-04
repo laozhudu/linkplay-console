@@ -80,7 +80,7 @@ jobs:
 
       # 三个模块都要跑：诊断能力是独立的纯 JVM 库，它的测试不该依赖 Android。
       - name: Unit tests
-        run: ./gradlew --no-daemon :core-protocol:test :core-diagnostics:test :core-radio:test :core-lx:testDebugUnitTest :app:testDebugUnitTest
+        run: ./gradlew --no-daemon :core-protocol:test :core-diagnostics:test :core-script:test :core-radio:test :core-lx:testDebugUnitTest :app:testDebugUnitTest
 
       - name: Assemble debug APK
         run: ./gradlew --no-daemon :app:assembleDebug

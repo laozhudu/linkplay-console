@@ -50,6 +50,9 @@ android {
 dependencies {
     api(project(":core-protocol"))
     implementation(project(":core-diagnostics"))
+    // 脚本仓库在 core-script（纯 JVM）；这里只提供"洛雪脚本长什么样"的校验实现。
+    // 用 api 而不是 implementation：app 组装时要同时看到仓库和校验器，别让它漏依赖。
+    api(project(":core-script"))
 
     implementation(libs.quickjs.wrapper.android)
     implementation(libs.kotlinx.coroutines.core)
