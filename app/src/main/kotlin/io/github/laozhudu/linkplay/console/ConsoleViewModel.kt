@@ -12,6 +12,7 @@ import io.github.laozhudu.linkplay.protocol.LinkPlayCommands
 import io.github.laozhudu.linkplay.protocol.LinkPlayStatus
 import io.github.laozhudu.linkplay.protocol.dlna.DescriptionEndpoints
 import io.github.laozhudu.linkplay.protocol.dlna.DeviceCapabilities
+import io.github.laozhudu.linkplay.protocol.remote.CommandTrace
 import io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile
 import io.github.laozhudu.linkplay.protocol.dlna.detect
 import io.github.laozhudu.linkplay.protocol.identity.LinkPlayIdentity
@@ -1175,6 +1176,23 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
+        // 口令流水 —— 覆盖「点了没反应」这类最常报的问题。
+        // 三种情况在界面上表现完全一样（发了没照做 / 根本没发 / 回包看不懂），
+        // 只有流水账能分清。
+        AppDiagnostics.sections.register(
+            "commands",
+            "指令",
+            {
+                val trace = CommandTrace.DEFAULT
+                when {
+                    // 连续失败 3 次以上 = 整条链路断了，和偶发一条失败是两回事
+                    trace.consecutiveFailures() >= 3 -> Severity.ERROR
+                    trace.failedCount > 0 -> Severity.WARN
+                    else -> Severity.INFO
+                }
+            },
+        ) { CommandTrace.DEFAULT.render() }
+
         AppDiagnostics.sections.register(
             "queue",
             "队列",

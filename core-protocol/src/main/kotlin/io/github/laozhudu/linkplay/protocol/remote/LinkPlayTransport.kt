@@ -29,6 +29,15 @@ import java.io.IOException
  */
 class LinkPlayTransport(
     private val client: DeviceHttpClient,
+    /**
+     * 流水账。默认记到全局那份（App 用）；测试可以传自己的，避免互相污染。
+     *
+     * 为什么放在传输层而不是调用方：**每一次下发都要记**，
+     * 放在调用方就必然有人漏（本项目已有 16 个调用点）。收在一处才是单一入口。
+     */
+    private val trace: CommandTrace = CommandTrace.DEFAULT,
+    /** 时间来源，测试可固定。 */
+    private val clock: () -> Long = { System.currentTimeMillis() },
 ) : RemoteTransport {
 
     override fun supports(command: RemoteCommand): Boolean = when (command) {
@@ -48,16 +57,28 @@ class LinkPlayTransport(
     }
 
     override suspend fun dispatch(deviceIp: String, command: RemoteCommand): DispatchResult {
-        val raw = try {
-            client.send(deviceIp, encode(command))
+        val started = clock()
+        val result = try {
+            judge(client.send(deviceIp, encode(command)))
         } catch (io: IOException) {
             // 超时/拒绝连接/DNS：设备可能只是睡了，不是"故障"
-            return DispatchResult.Failed(DispatchFailure.Unreachable)
+            DispatchResult.Failed(DispatchFailure.Unreachable)
         } catch (t: Throwable) {
             // 解析层意外：仍然不抛，交给调用方按 Failed 处理
-            return DispatchResult.Failed(DispatchFailure.Unparsable(t.message ?: t.javaClass.simpleName))
+            DispatchResult.Failed(DispatchFailure.Unparsable(t.message ?: t.javaClass.simpleName))
         }
-        return judge(raw)
+        // 记流水：成功也记 —— 只记失败的话「没反应」和「根本没触发」分不开
+        trace.record(
+            CommandTrace.Entry(
+                atMs = started,
+                command = CommandTrace.labelOf(command),
+                deviceIp = deviceIp,
+                acked = result.isAcked,
+                failureText = (result as? DispatchResult.Failed)?.failure?.describe(),
+                elapsedMs = clock() - started,
+            ),
+        )
+        return result
     }
 
     /** 语义 → 方言。**单测逐条锁死这张表**，它是唯一会漂移的地方。 */
