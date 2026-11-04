@@ -48,7 +48,10 @@ class LxUserApiTest {
         assertTrue(result.ok)
         assertEquals(listOf("wy"), result.sourceIds)
         // 顺序：先 preload 再脚本，不能反
-        assertEquals(listOf("lx-preload.js", "user-api.js"), engine.evaluated.map { it.first })
+        assertEquals(
+            listOf("lx-buffer-polyfill.js", "lx-preload.js", "user-api.js"),
+            engine.evaluated.map { it.first },
+        )
         // 桥必须都装上了
         assertNotNull(engine.functions["__lx_native_call__"])
         assertNotNull(engine.functions["__lx_native_call__utils_str2md5"])

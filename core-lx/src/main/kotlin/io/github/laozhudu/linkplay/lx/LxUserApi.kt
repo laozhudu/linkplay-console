@@ -205,6 +205,7 @@ class LxUserApi(
         this.info = info
         attachBridge()
         return try {
+            engine.evaluate(LxBufferPolyfill.SCRIPT, LxBufferPolyfill.FILENAME)
             engine.evaluate(preloadScript, "lx-preload.js")
             engine.callGlobal(
                 "lx_setup",

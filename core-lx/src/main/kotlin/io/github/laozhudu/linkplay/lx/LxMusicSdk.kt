@@ -88,6 +88,9 @@ class LxMusicSdk(
             null
         }
 
+        // 必须在 bundle 之前：kw 的歌词解码直接用 Buffer（Node 全局），QuickJS 没有。
+        // 真机报错：'Buffer' is not defined at lx-music-sdk.bundle.js:7948
+        engine.evaluate(LxBufferPolyfill.SCRIPT, LxBufferPolyfill.FILENAME)
         engine.evaluate(bundleScript, "lx-music-sdk.bundle.js")
         loaded = true
     }
