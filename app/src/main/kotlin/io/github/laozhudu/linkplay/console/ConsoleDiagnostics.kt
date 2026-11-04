@@ -10,6 +10,7 @@ import io.github.laozhudu.linkplay.console.library.LocalMediaRegistry
 import io.github.laozhudu.linkplay.console.library.LocalSourceStatus
 import io.github.laozhudu.linkplay.console.nas.NasSourceStatus
 import io.github.laozhudu.linkplay.console.online.SubsonicSourceStatus
+import io.github.laozhudu.linkplay.console.provisioning.ProvisionSourceStatus
 import io.github.laozhudu.linkplay.console.radio.RadioSourceStatus
 import io.github.laozhudu.linkplay.console.playback.QueueBus
 import io.github.laozhudu.linkplay.console.session.SessionRestore
@@ -164,6 +165,14 @@ internal class ConsoleDiagnostics(
             "电台",
             { if (RadioSourceStatus.snapshot().failure != null) Severity.WARN else Severity.INFO },
         ) { RadioSourceStatus.render() }
+
+        // 配网 —— 第五个盲区（`docs/65` 批次 1）。
+        // 这里最典型的误判是「命令回 OK」被当成「配好了」，实际要等设备在新网络里应答。
+        AppDiagnostics.sections.register(
+            "source-provision",
+            "配网",
+            { if (ProvisionSourceStatus.snapshot().failure != null) Severity.WARN else Severity.INFO },
+        ) { ProvisionSourceStatus.render() }
 
         // 内容源 · NAS —— 七个盲区里的第一个（`docs/61` 的施工顺序），
         // 选它打头是因为 `docs/60` 要改 NAS 的推流路径，改之前必须先能看见现在的行为。
