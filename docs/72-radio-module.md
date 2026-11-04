@@ -1,7 +1,7 @@
 # 72 · 网络电台也做成独立模块：能，而且比洛雪简单
 
 > 2026-11-04 · 依据 `laozhudu/radiostation-discovery` v1.0.0 源码 + 实测
-> 本文是**模块方案 + 两个实测缺陷**，不含代码改动
+> 本文是**模块方案 + 三个实测缺陷**；模块已在 `core-radio` 落地（见文末「已实施」）
 
 ---
 
@@ -252,3 +252,65 @@ app                                   ← 界面
 2. `JdkHttpClient` 读直播流会阻塞 8 秒（只读 header 别读 body）
 
 修完这两条，两三天就能接上。
+
+
+---
+
+## 十一、已实施（`core-radio` 模块）
+
+方案已按本文落地为 `core-radio` 模块，**43 个单测 + 5 个真实联调用例全绿**。
+
+### 落地时又撞到第三个缺陷
+
+联调（真打 Radio Browser API）时发现：
+
+```json
+{"name":"...","hls":1,"lastcheckok":1,...}
+```
+
+`hls` 返回的是**数字** `1` / `0`，而模型声明的是 `Boolean?`。kotlinx.serialization 遇到 `1` 抛
+
+```
+JsonDecodingException: Expected valid boolean literal prefix, but had '1'
+```
+
+**后果不是"这个台被跳过"，而是整批搜索结果解析失败** —— 只要列表里有一个 `hls:1` 的台，
+用户就看到"搜不到任何电台"。
+
+单测没抓到，因为 fixture 写的是 `true`（照文档猜的，没照真实响应抄）。**教训：fixture 必须从真实响应里抄。**
+
+修法：
+- `FlexibleBooleanSerializer` 接受 `true`/`false`/`1`/`0`/`"1"`/`"0"`
+- `RadioBrowserRaw` **所有字段都给默认值** —— kotlinx 里"可空"不等于"可选"，缺 key 照样抛
+  `MissingFieldException`，而公益众包 API 的字段并不保证齐全
+
+### 真实联调证据（`LIVE_RADIOBROWSER=1`）
+
+```
+china → 20 条，China → 20 条          ← 缺陷 1 修复前：china 是 0 条
+countrycode=CN 返回 20 条
+name=中国之声 → 6 条
+china/guangdong → 6 条
+解析 https://vip1.fhbf9.com/.../index.m3u8 耗时 1288ms   ← 缺陷 2 修复前：8000ms 超时抛异常
+```
+
+### 模块结构（实际）
+
+```
+core-radio  纯 JVM，43 单测
+├── io/github/laozhudu/radiodiscovery/        库源码（包名不动）
+│   ├── client/{HttpClient, RadioBrowserClient, RadioBrowserRaw, FlexibleBooleanSerializer}
+│   ├── resolver/{StreamResolver, ResolvedStream}
+│   └── model/RadioStation
+└── io/github/laozhudu/linkplay/radio/
+    ├── RadioBrowserSource.kt                  门面（可注入 HttpClient 便于测试）
+    └── RadioStationMapping.kt                 toFavourite / streamKindOf / playbackHint
+```
+
+### 三个缺陷的回归测试都在
+
+| 缺陷 | 回归测试 |
+|---|---|
+| 1 国家名大小写 | `RadioBrowserClientTest` 4 个 + `RadioBrowserLiveIT` 2 个 |
+| 2 读直播流阻塞 | `StreamResolverTest.解析时不读 body` + `JdkHttpClientTest` 3 个（本地假直播流服务器） |
+| 3 `hls` 是数字 | `FlexibleBooleanTest` 6 个 |
