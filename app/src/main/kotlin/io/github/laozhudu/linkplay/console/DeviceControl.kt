@@ -7,6 +7,7 @@ import io.github.laozhudu.linkplay.protocol.LinkPlayCommands
 import io.github.laozhudu.linkplay.protocol.remote.DispatchResult
 import io.github.laozhudu.linkplay.protocol.remote.LinkPlayTransport
 import io.github.laozhudu.linkplay.protocol.remote.RemoteCommand
+import io.github.laozhudu.linkplay.protocol.remote.RemoteTransport
 import io.github.laozhudu.linkplay.protocol.remote.describe
 import io.github.laozhudu.linkplay.protocol.remote.describeForLog
 import io.github.laozhudu.linkplay.protocol.identity.UuidMatch
@@ -48,7 +49,10 @@ internal class DeviceControl(private val host: ConsoleHost) {
      * 为什么不让调用方直接拼字符串：见 [RemoteCommand] 的类注释 ——
      * 调用点知道方言，加第二类设备时每个点都要加分支。
      */
-    private val transport = LinkPlayTransport(host.http())
+    // 类型显式声明为接口：RemoteTransport 的注释写着「调用方只能通过 dispatch 发指令，
+    // 拿不到拼字符串的能力」—— 声明成具体类时那句约束就落不了地。
+    // 将来接蓝牙/红外只是多一个实现，这里一行不用改（docs/49、docs/60）。
+    private val transport: RemoteTransport = LinkPlayTransport(host.http())
 
     /**
      * 下发一条语义指令；**失败时把原因翻译成人话写进 error**。

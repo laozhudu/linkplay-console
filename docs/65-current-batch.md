@@ -64,10 +64,37 @@
 
 ### 进度
 
-- [ ] 取数旁路收口（4 处）
-- [ ] UPnP 客户端收口（3 处）
-- [ ] 重复组件合并（2 处）
-- [ ] `RemoteTransport` 类型声明
+- [x] **`DeviceVolumeControl.readVolume` 改用 `GetControlDeviceInfo`** — PR #86
+      音量读取与卡片同源（原来一个值两个来源，界面 60、读回 40）。
+- [x] **UPnP 客户端收口** — PR #87
+      `DeviceControl` 四处改走宿主缓存（`host.renderer` / 新增 `host.rendererForIp`），
+      不再每次 `ofDevice` 重新拉 `description.xml`。
+- [x] **`RemoteTransport` 类型声明** — 与 #87 同批
+      `private val transport: RemoteTransport = LinkPlayTransport(...)`。
+      声明成具体类时，接口注释里那句"调用方只能通过 dispatch"就是空话。
+- [ ] **取数旁路收口（4 处）** — 待做，**需要逐处判断，不是机械替换**
+
+  扫描结果（直接 `client.send("getPlayerStatus")` 的点）：
+
+  | 位置 | 语境 | 该不该收口 |
+  |---|---|---|
+  | `SessionRestore.kt:155` | 恢复队列时读一次 | 可以收（一次性的） |
+  | `DeviceQueuePush.kt:95` | 推流后确认 `plicount/plicurr` | **先别动**：推流路径上，改坏要真机才看得出来 |
+  | `RadioViewModel.kt:199` | 电台起播后 6 秒轮询 | **不该收**：轮询要轻，3112B 太重 |
+  | `PlaybackViewModel.kt:291` | 播放页状态 | 可以收，但要与它自己的刷新节奏对齐 |
+
+  结论：**四个里只有两个真该收**，另两个是"按用途选了更轻的请求"，收口反而更差。
+  而 `docs/65` 硬规则写着"不动 `core-protocol`"，也不该为此新增接口。
+
+- [x] ~~**重复组件合并（2 处）**~~ — **调研后不做**，理由见下
+
+  | 看着重复的 | 实际 |
+  |---|---|
+  | `TrackRow`（LibraryScreen / QueueScreen） | 前者带收藏按钮、吃 `TrackRecord`；后者带选中态+长按、吃字符串。职责不同，合并会变成一个参数爆炸的组件 |
+  | `nextLoop`（NasScreen / QueueScreen） | 操作**两套常量**：`ClientSideQueue.LOOP_*`（3 档）vs `QueueLoopMode`（4 档，多一个 SHUFFLE） |
+
+  名字一样 ≠ 重复。硬合并只会把"两个领域"塞进一个函数，然后靠参数区分 ——
+  那正是 `docs/50` 说的"唯一的实现者会悄悄污染抽象"。
 
 ---
 
