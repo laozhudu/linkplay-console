@@ -85,8 +85,8 @@ downstream = DiagnosticSink { entry ->
 
 **收益**：用户打开诊断页 → 全文进 logcat → 我用 `adb logcat` 直接读，不用截图。
 
-- [ ] logcat sink
-- [ ] 报告生成时打完整文本
+- [x] logcat sink（PR #84）
+- [x] 报告生成时打完整文本（PR #84）
 
 ---
 
