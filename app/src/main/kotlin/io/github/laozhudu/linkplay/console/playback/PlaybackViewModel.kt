@@ -35,7 +35,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import io.github.laozhudu.linkplay.console.diagnostics.DiagnosticsHub
+import io.github.laozhudu.diagnostics.Severity
+import io.github.laozhudu.linkplay.console.diagnostics.AppDiagnostics
 import io.github.laozhudu.linkplay.console.diagnostics.safeLaunch
 
 data class PlaybackUiState(
@@ -396,10 +397,14 @@ class PlaybackViewModel(
      * 界面读得到的是"渲染后"的样子；诊断要的是引擎通道、设备队列位置、
      * 起播失败原因这些原始值 —— 它们只在 ViewModel 里。
      *
-     * 注销在 [onCleared] 里做，见 [DiagnosticsHub] 的类注释（切设备会重建实例）。
+     * 注销在 [onCleared] 里做，见 [AppDiagnostics.sections] 的类注释（切设备会重建实例）。
      */
     private fun registerDiagnostics() {
-        DiagnosticsHub.register("playback", "播放") {
+        AppDiagnostics.sections.register(
+            "playback",
+            "播放",
+            { if (_state.value.unavailableReason != null || _state.value.notice != null) Severity.WARN else Severity.INFO },
+        ) {
             val s = _state.value
             buildString {
                 appendLine("  通道=${s.channel ?: "未建立"}  就绪=${s.ready}  准备中=${s.preparing}")
@@ -418,7 +423,7 @@ class PlaybackViewModel(
     /** 转发服务占着端口，页面销毁时要还回去。 */
     override fun onCleared() {
         // 必须注销：切设备会重建本 VM，旧实例留在注册表里会显示上一台的状态
-        DiagnosticsHub.unregister("playback")
+        AppDiagnostics.sections.unregister("playback")
         relay?.stop()
         relay = null
         super.onCleared()
@@ -549,7 +554,7 @@ class PlaybackViewModel(
     private fun httpAct(label: String, command: String) {
         if (engine == null) return
         _state.update { it.copy(busy = true, error = null) }
-        safeLaunch("httpAct") {
+        safeLaunch("http:$label") {
             val failure = runCatching {
                 withContext(Dispatchers.IO) { http.send(deviceIp, command) }
             }.exceptionOrNull()
@@ -675,7 +680,7 @@ class PlaybackViewModel(
     private fun act(label: String, block: () -> Unit) {
         if (_state.value.busy || engine == null) return
         _state.update { it.copy(busy = true, error = null) }
-        safeLaunch("act") {
+        safeLaunch(label) {
             val failure = runCatching { withContext(Dispatchers.IO) { block() } }.exceptionOrNull()
             if (failure != null) {
                 // 界面只显示翻译过的一句话；原始 SOAP 报文只进日志（用户看不懂也不该看懂）

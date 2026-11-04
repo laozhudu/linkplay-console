@@ -65,8 +65,15 @@ jobs:
       - name: Check init block ordering
         run: python3 scripts/check-init-order.py
 
-      - name: Protocol unit tests
-        run: ./gradlew --no-daemon :core-protocol:test :app:testDebugUnitTest
+      # 诊断标签必须能对上"用户点了什么"。类名式标签（ConsoleViewModel）和占位词（log/run/act）
+      # 等于把行号换了个地方写，看报告时定位不到具体动作。
+      # 真实事故：一次批量替换把 4 个心跳协程全写成 acquireMulticastLock。
+      - name: Check diagnostics labels
+        run: python3 scripts/check-diagnostics-labels.py
+
+      # 三个模块都要跑：诊断能力是独立的纯 JVM 库，它的测试不该依赖 Android。
+      - name: Unit tests
+        run: ./gradlew --no-daemon :core-protocol:test :core-diagnostics:test :app:testDebugUnitTest
 
       - name: Assemble debug APK
         run: ./gradlew --no-daemon :app:assembleDebug
@@ -95,6 +102,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: core-protocol-test-report
-          path: core-protocol/build/reports/tests/test
+          name: test-report
+          path: |
+            core-protocol/build/reports/tests/test
+            core-diagnostics/build/reports/tests/test
           if-no-files-found: warn

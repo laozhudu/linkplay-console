@@ -126,6 +126,7 @@ if (!hasFixedKeystore) {
 dependencies {
     implementation(project(":core-protocol"))
     implementation(project(":core-discovery"))
+    implementation(project(":core-diagnostics"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)

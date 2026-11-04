@@ -98,6 +98,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // 崩溃记录必须最早装：晚于 ViewModel 初始化就可能漏掉启动期的崩溃。
         // 它只记录不吞异常（闪退行为不变），但下次启动首页会显示堆栈摘要。
+        // 记启动时刻：诊断报告的"运行时长"靠它，用于对上"用了两个多小时才出问题"这种描述
+        io.github.laozhudu.linkplay.console.diagnostics.AppDiagnostics.markStart()
         io.github.laozhudu.linkplay.console.crash.CrashGuard.install(this) {
             val st = consoleVm.state.value
             "已保存设备=${st.saved.size} 在线=${st.online.count { it.value }} " +

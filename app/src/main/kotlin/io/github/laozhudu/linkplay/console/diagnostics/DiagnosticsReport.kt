@@ -1,18 +1,22 @@
 package io.github.laozhudu.linkplay.console.diagnostics
 
+import io.github.laozhudu.diagnostics.DiagnosticEntry
+import io.github.laozhudu.diagnostics.DiagnosticReport as CoreReport
+
 /**
- * 诊断报告（**纯函数**，可在单测里锁死格式）。
+ * 本 App 的诊断报告 —— **只负责组装**，排版交给 `core-diagnostics` 的 [CoreReport]。
  *
- * ## 为什么要"报告"而不是"日志列表"
+ * ## 为什么还要这一层
  *
- * 用户手机上看不到 adb，只能截图。截图要能一眼回答四个问题：
- * 1. 崩在哪（异常类 + 消息 + 最上面几行堆栈）
- * 2. 崩的时候 App 是什么状态（设备几台、谁在线、谁在组里）
- * 3. 每台设备的取数通道通不通（哪条通道没答 → 功能为什么没反应）
- * 4. 后台有没有静默失败（协程异常被记下来但没崩）
+ * 报告骨架（头部 / 崩溃段 / 条目段 / 级别统计）是通用的，已经搬进模块。
+ * 但"一台设备该显示哪些字段"是这个项目独有的知识：
+ * 电量、声道、取数通道、能力档 —— 换一个项目就没有这些概念。
  *
- * 所以输出是一段**定宽纯文本**：手机上能完整滚动、可整段复制、截图不丢信息。
- * 不用富文本卡片：截图时排版越简单越不会漏。
+ * 所以这里只留两样东西：
+ * 1. [DeviceLine]（设备一行的字段）与 [channelText]（声道数字 → 人话）；
+ * 2. [build]：把 App 的参数翻译成模块的输入。
+ *
+ * 这样模块能整份复用，而项目语义留在项目里。
  */
 object DiagnosticsReport {
 
@@ -39,59 +43,47 @@ object DiagnosticsReport {
     /**
      * 生成整份报告。
      *
-     * @param version 版本号（versionName + versionCode）
-     * @param now 时间字符串（由调用方给，便于测试固定）
-     * @param crash 上次崩溃记录（原始堆栈文本），没有传 null
-     * @param devices 设备快照
-     * @param issues 运行期问题（新→旧）
+     * @param entries 运行期问题（新→旧，结构化）
+     * @param sections 各模块自报的状态（[AppDiagnostics.sections] 的渲染结果）。
+     *   给了它就**不再渲染 [devices] 段** —— 注册表里已经有一段「设备」，
+     *   两边都画就是同一份信息出现两次，截图时白白占掉半屏。
      */
     fun build(
         version: String,
         now: String,
         crash: String?,
         devices: List<DeviceLine>,
-        issues: List<String>,
-        /**
-         * 各模块自报的状态（[DiagnosticsHub.render] 的输出）。
-         *
-         * 给了它就**不再渲染 [devices] 段** —— 因为 Hub 里已经有一段「设备」，
-         * 两边都画就是同一份信息出现两次，截图时白白占掉半屏。
-         * 传 null 时保持老行为（只有设备段），这样单测与"没有 Hub 的调用方"都不受影响。
-         */
+        entries: List<DiagnosticEntry>,
         sections: String? = null,
-    ): String = buildString {
-        appendLine("=== 声控台 诊断报告 ===")
-        appendLine("版本：$version")
-        appendLine("时间：$now")
-        appendLine()
+        /** 运行时长（`2h13m`）。null → 不显示这一行。 */
+        uptime: String? = null,
+    ): String = CoreReport.build(
+        header = CoreReport.Header(
+            appName = "声控台",
+            version = version,
+            atText = now,
+            // 头部多一行级别汇总：不用往下翻就知道"这次有没有硬错误"
+            extra = buildList {
+                add("问题汇总：${severitySummary(entries)}")
+                if (uptime != null) add("运行时长：$uptime")
+            },
+        ),
+        crashText = crash,
+        body = sections ?: deviceSection(devices),
+        entries = entries,
+    )
 
-        // ---- 1. 崩溃 ----
-        appendLine("[崩溃记录]")
-        if (crash.isNullOrBlank()) {
-            appendLine("无（本次启动未捕获到崩溃）")
-        } else {
-            // 只留前 12 行堆栈：截图能截全，且前几行就是真凶
-            crash.lineSequence()
-                .filter { it.isNotBlank() }
-                .take(16)
-                .forEach { appendLine("  $it") }
-        }
-        appendLine()
-
-        // ---- 2. 模块状态（Hub 已注册的段）或设备表 ----
-        if (sections != null) {
-            append(sections)
-            appendLine()
-        } else {
-            appendDeviceSection(devices)
-        }
-
-        // ---- 3. 运行期问题 ----
-        appendIssues(issues)
+    /** `E1 W2 I5` 形式的一行统计（FATAL 只有真崩过才出现）。 */
+    fun severitySummary(entries: List<DiagnosticEntry>): String {
+        val e = entries.count { it.severity == io.github.laozhudu.diagnostics.Severity.ERROR }
+        val w = entries.count { it.severity == io.github.laozhudu.diagnostics.Severity.WARN }
+        val i = entries.count { it.severity == io.github.laozhudu.diagnostics.Severity.INFO }
+        val f = entries.count { it.severity == io.github.laozhudu.diagnostics.Severity.FATAL }
+        return "E$e W$w I$i" + if (f > 0) " F$f" else ""
     }
 
-    /** 老路径：只画设备表（单测与没有 Hub 的调用方用）。 */
-    private fun StringBuilder.appendDeviceSection(devices: List<DeviceLine>) {
+    /** 老路径：只画设备表（没有注册表的调用方用）。 */
+    private fun deviceSection(devices: List<DeviceLine>): String = buildString {
         appendLine("[设备 ${devices.size} 台]")
         if (devices.isEmpty()) {
             appendLine("  没有已保存的设备")
@@ -99,7 +91,9 @@ object DiagnosticsReport {
             devices.forEach { d ->
                 appendLine("  ${d.name}  ${d.ip}")
                 appendLine(
-                    "    状态=${when (d.online) { true -> "在线"; false -> "离线"; null -> "未探测" }}" +
+                    "    状态=" + when (d.online) {
+                        true -> "在线"; false -> "离线"; null -> "未探测"
+                    } +
                         (d.groupedUnder?.let { "  属=$it" } ?: "") +
                         "  能力=${d.profile}",
                 )
@@ -110,20 +104,13 @@ object DiagnosticsReport {
                         "  播放=${if (d.playing) "是" else "否"}",
                 )
                 // 通道是排障关键：哪条没答，对应的功能就一定是"没反应"
-                appendLine("    取数通道=${if (d.answered.isEmpty()) "全部未应答" else d.answered.joinToString("+")}")
+                appendLine(
+                    "    取数通道=" +
+                        (if (d.answered.isEmpty()) "全部未应答" else d.answered.sorted().joinToString("+")),
+                )
             }
         }
         appendLine()
-    }
-
-    private fun StringBuilder.appendIssues(issues: List<String>) {
-        appendLine("[运行期问题 ${issues.size} 条（新→旧）]")
-        if (issues.isEmpty()) {
-            appendLine("  无")
-        } else {
-            issues.take(30).forEach { appendLine("  $it") }
-            if (issues.size > 30) appendLine("  … 另有 ${issues.size - 30} 条")
-        }
     }
 
     /** 声道数字 → 人话。null 表示设备没报（不是"立体声"）。 */

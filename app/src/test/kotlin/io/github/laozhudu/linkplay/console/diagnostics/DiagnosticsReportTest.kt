@@ -2,6 +2,8 @@ package io.github.laozhudu.linkplay.console.diagnostics
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import io.github.laozhudu.diagnostics.DiagnosticEntry
+import io.github.laozhudu.diagnostics.Severity
 import org.junit.Test
 
 /**
@@ -27,6 +29,13 @@ class DiagnosticsReportTest {
     ) = DiagnosticsReport.DeviceLine(
         name, ip, online, groupedUnder, battery, charging, channel, volume, playing, answered, profile,
     )
+
+    private fun entry(
+        atMs: Long = 1_000L,
+        source: String = "playQueueItem",
+        severity: Severity = Severity.ERROR,
+        message: String = "IOException: HTTP 500",
+    ) = DiagnosticEntry(atMs, source, severity, message)
 
     @Test
     fun `no crash says so instead of printing null`() {
@@ -84,10 +93,10 @@ class DiagnosticsReportTest {
     }
 
     @Test
-    fun `issues are newest first and capped with a remainder note`() {
-        val issues = (1..35).map { "issue-$it" }
+    fun `issues are capped with a remainder note`() {
+        val issues = (1..35).map { entry(message = "issue-$it") }
         val text = DiagnosticsReport.build("v", "t", null, emptyList(), issues)
-        assertTrue(text.contains("[运行期问题 35 条（新→旧）]"))
+        assertTrue(text.contains("[运行期问题 35 条（新→旧）｜E35 W0 I0]"))
         assertTrue(text.contains("issue-1"))
         assertTrue(text.contains("… 另有 5 条"))
     }
@@ -115,9 +124,10 @@ class DiagnosticsReportTest {
                 ),
                 line(name = "E900V22C-175[DLNA]", ip = "192.168.99.175", battery = null, channel = null, profile = "GENERIC_DMR", answered = emptySet()),
             ),
-            issues = listOf(
-                "00:09:12 [ConsoleViewModel] IOException: HTTP 500 from 192.168.99.153: 401 invalid action",
-                "00:09:40 [PlaybackViewModel] IllegalStateException: 设备没有 RenderingControl 服务，无法调音量",
+            entries = listOf(
+                entry(1L, "playQueueItem", Severity.ERROR, "IOException: HTTP 500 from 192.168.99.153: 401 invalid action"),
+                entry(2L, "probeSaved", Severity.WARN, "设备未应答，保留上次状态"),
+                entry(3L, "getStatusEx", Severity.INFO, "完成 69ms"),
             ),
         )
         println("\n----- 样例报告 -----\n$text----- 样例结束 -----\n")

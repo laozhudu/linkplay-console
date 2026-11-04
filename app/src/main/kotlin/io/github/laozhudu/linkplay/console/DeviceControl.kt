@@ -83,7 +83,7 @@ internal class DeviceControl(private val host: ConsoleHost) {
         VolumeBus.publishVolume(ip, next)
         // 音量键这条路**不走去抖通道**：用户按一下就要立刻听到变化，
         // 合并通道是为拖动设计的，按键本来就是离散事件，多一次 60ms 等待只会显得钝。
-        host.launch {
+        host.launch("volumeKey") {
             withContext(Dispatchers.IO) {
                 runCatching { host.send(ip, LinkPlayCommands.playerVolume(next)) }
                     .onFailure { host.log("音量键下发失败：${it.message}") }

@@ -65,7 +65,7 @@ class QueueViewModel(
     private val deviceHost: String? = location?.let { runCatching { java.net.URI(it).host }.getOrNull() }
 
     init {
-        safeLaunch("QueueViewModel") { initDevice() }
+        safeLaunch("initDevice") { initDevice() }
         // 不在构造时扫描：扫描需要读媒体权限，一进页面就弹权限框很粗暴。
         // 改为用户点「扫描本机音乐」时才请求（见 QueueScreen）。
     }

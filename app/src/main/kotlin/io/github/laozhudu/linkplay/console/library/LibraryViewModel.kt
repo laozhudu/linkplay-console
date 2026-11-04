@@ -86,7 +86,7 @@ class LibraryViewModel(
 
     init {
         refreshAll()
-        safeLaunch("LibraryViewModel") { detectCapabilities() }
+        safeLaunch("detectCapabilities") { detectCapabilities() }
     }
 
     private suspend fun detectCapabilities() {
