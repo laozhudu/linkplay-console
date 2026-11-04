@@ -37,6 +37,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import io.github.laozhudu.diagnostics.Severity
 import io.github.laozhudu.linkplay.console.diagnostics.AppDiagnostics
+import io.github.laozhudu.linkplay.console.diagnostics.ActionTiming
 import io.github.laozhudu.linkplay.console.diagnostics.safeLaunch
 
 data class PlaybackUiState(
@@ -353,7 +354,7 @@ class PlaybackViewModel(
         }
         val needsHeaders = _state.value.castNeedsHeaders
         val referer = _state.value.castReferer.trim()
-        act("投流") {
+        act("投流", ActionTiming.Action.CAST_STREAM) {
             val target = if (needsHeaders) {
                 val host = localIpAddress() ?: error("拿不到本机局域网 IP，无法转发")
                 val server = relay ?: RelayMediaServer(advertiseHost = host).also {
@@ -549,14 +550,14 @@ class PlaybackViewModel(
     fun next() {
         val e = engine
         if (e == null) { httpAct("下一首", "setPlayerCmd:next"); return }
-        act("下一首") { e.next() }
+        act("下一首", ActionTiming.Action.NEXT_TRACK) { e.next() }
     }
 
     /** 上一首：同上，走 AVTransport.Previous。 */
     fun previous() {
         val e = engine
         if (e == null) { httpAct("上一首", "setPlayerCmd:prev"); return }
-        act("上一首") { e.previous() }
+        act("上一首", ActionTiming.Action.PREV_TRACK) { e.previous() }
     }
 
     /**
@@ -586,10 +587,10 @@ class PlaybackViewModel(
             }
         }
     }
-    fun pause() = act("暂停") { engine!!.pause() }
-    fun stop() = act("停止") { engine!!.stop() }
-    fun seekTo(seconds: Long) = act("跳转") { engine!!.seek(seconds) }
-    fun setVolume(value: Int) = act("音量 ${value.coerceIn(0, 100)}") { engine!!.setVolume(value) }
+    fun pause() = act("暂停", ActionTiming.Action.PAUSE) { engine!!.pause() }
+    fun stop() = act("停止", ActionTiming.Action.STOP_PLAYBACK) { engine!!.stop() }
+    fun seekTo(seconds: Long) = act("跳转", ActionTiming.Action.SEEK) { engine!!.seek(seconds) }
+    fun setVolume(value: Int) = act("音量 ${value.coerceIn(0, 100)}", ActionTiming.Action.SET_VOLUME) { engine!!.setVolume(value) }
 
     /**
      * 拖动音量条时用的「跟手」版本。
@@ -653,7 +654,7 @@ class PlaybackViewModel(
             QueueBus.skipTo(index)
             return
         }
-        act("播放第 ${index + 1} 首") { engine!!.playUrl(item.url, item.title) }
+        act("播放第 ${index + 1} 首", ActionTiming.Action.PLAY_ITEM) { engine!!.playUrl(item.url, item.title) }
     }
 
     /**
@@ -692,21 +693,27 @@ class PlaybackViewModel(
         val next = !_state.value.mute
         _state.update { it.copy(mute = next) }
         VolumeBus.publish(deviceIp, _state.value.volume, next)
-        act("静音切换") { engine!!.setMute(next) }
+        act("静音切换", ActionTiming.Action.MUTE_TOGGLE) { engine!!.setMute(next) }
     }
 
-    private fun act(label: String, block: () -> Unit) {
+    private fun act(label: String, actionName: ActionTiming.Action? = null, block: () -> Unit) {
         if (_state.value.busy || engine == null) return
         _state.update { it.copy(busy = true, error = null) }
         safeLaunch(label) {
+            // 计时从这条协程真正开始跑算起（而不是用户点下去那一刻）：
+            // 前者是"我们多久办完"，后者还要算上排队，两者混在一起就分不清是卡在排队还是卡在网络。
+            val timing = actionName?.let { ActionTiming.begin(it) }
             val failure = runCatching { withContext(Dispatchers.IO) { block() } }.exceptionOrNull()
             if (failure != null) {
                 // 界面只显示翻译过的一句话；原始 SOAP 报文只进日志（用户看不懂也不该看懂）
                 _state.update { it.copy(busy = false, error = UpnpFault.friendlyOf(failure)) }
                 log("$label 失败：${failure.message}")
+                timing?.end(note = label, ok = false)
             } else {
                 _state.update { it.copy(busy = false) }
                 log("$label ok")
+                // 先收计时：后面的静默刷新是异步的，算进去会把"多久办完"污染成"多久刷完"
+                timing?.end(note = label)
                 refreshOnce(silent = true)
             }
         }

@@ -1,5 +1,6 @@
 package io.github.laozhudu.linkplay.console.radio
 
+import io.github.laozhudu.linkplay.console.diagnostics.ActionTiming
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -193,6 +194,7 @@ class RadioViewModel(
         if (_state.value.busy) return
         _state.update { it.copy(busy = true, note = null, error = null) }
         safeLaunch("playUrl") {
+            val timing = ActionTiming.begin(ActionTiming.Action.RADIO_PLAY)
             val startedAt = System.currentTimeMillis()
             val outcome = withContext(Dispatchers.IO) {
                 try {
@@ -279,6 +281,7 @@ class RadioViewModel(
                 }
                 log("播放失败：$url → $detail")
             }
+            timing.end(note = "电台「${name ?: RadioStation.suggestName(url)}」", ok = started)
         }
     }
 
@@ -294,6 +297,7 @@ class RadioViewModel(
         val q = query.trim()
         _state.update { it.copy(discovering = true, discoverQuery = q, discoverError = null) }
         safeLaunch("discoverRadio") {
+            val timing = ActionTiming.begin(ActionTiming.Action.RADIO_DISCOVER)
             val started = System.currentTimeMillis()
             val result = runCatching {
                 withContext(Dispatchers.IO) {
@@ -315,6 +319,7 @@ class RadioViewModel(
                 }
                 RadioSourceStatus.discoverFailed(q, t, ms)
             }
+            timing.end(note = if (q.isBlank()) "热门" else "「$q」", ok = result.isSuccess)
         }
     }
 
@@ -326,11 +331,13 @@ class RadioViewModel(
      */
     fun addDiscovered(station: DiscoveryStation) {
         safeLaunch("addDiscovered") {
-            val resolved = withContext(Dispatchers.IO) {
-                runCatching { RadioBrowserSource().resolve(station) }.getOrDefault(station)
+            ActionTiming.measure(ActionTiming.Action.RADIO_ADD, note = station.name) {
+                val resolved = withContext(Dispatchers.IO) {
+                    runCatching { RadioBrowserSource().resolve(station) }.getOrDefault(station)
+                }
+                val fav = resolved.toFavourite(deviceName)
+                add(fav.name, fav.url)
             }
-            val fav = resolved.toFavourite(deviceName)
-            add(fav.name, fav.url)
         }
     }
 

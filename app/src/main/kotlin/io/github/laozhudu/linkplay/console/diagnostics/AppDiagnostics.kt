@@ -155,11 +155,12 @@ object AppDiagnostics {
     /**
      * 清空内存与落盘。
      *
-     * **指令流水也要清**：用户点「清空记录」的意图是"从现在开始重新看"，
+     * **指令流水与耗时账本也要清**：用户点「清空记录」的意图是"从现在开始重新看"，
      * 留着旧的指令会让下一次诊断报告里出现"上辈子的失败"，误导判断。
      */
     fun clear(context: Context) {
         log.clear()
+        ActionTiming.clear()
         io.github.laozhudu.linkplay.protocol.remote.CommandTrace.DEFAULT.clear()
         store(context).delete(ISSUE_FILE)
     }
