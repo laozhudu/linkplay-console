@@ -16,7 +16,7 @@
 - [x] **NAS** — PR #70（`SourceFailure` + `NasSourceStatus`）
 - [x] **本地曲库** — PR #74（`LocalSourceStatus` + `queryWithStats`）
 - [x] **在线曲库** — PR #75（`SubsonicSourceStatus`）
-- [ ] **电台** — `radio/RadioViewModel.kt`
+- [x] **电台** — PR #76（`RadioSourceStatus`）
 - [ ] **配网** — `provisioning/`
 - [ ] **语音** — `voice/VoiceController.kt`
 - [ ] **悬浮窗** — `floating/FloatingControlService.kt`
