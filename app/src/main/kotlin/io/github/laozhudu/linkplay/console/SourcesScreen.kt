@@ -22,6 +22,7 @@ internal fun SourcesScreen(
     onOpenSettings: () -> Unit,
     onOpenScripts: () -> Unit,
     onOpenLxSearch: () -> Unit,
+    onOpenSearchHub: () -> Unit,
     onGoDevices: () -> Unit,
 ) {
     MyMusicScreen(
@@ -37,6 +38,7 @@ internal fun SourcesScreen(
         onOpenRadio = onOpenRadio,
         onOpenScripts = onOpenScripts,
         onOpenLxSearch = onOpenLxSearch,
+        onOpenSearchHub = onOpenSearchHub,
         onOpenLibrary = onOpenLibrary,
         onOpenDeviceSettings = onOpenSettings,
         onGoDevices = onGoDevices,

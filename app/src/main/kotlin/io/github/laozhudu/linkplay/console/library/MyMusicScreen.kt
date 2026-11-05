@@ -63,6 +63,7 @@ fun MyMusicScreen(
     onOpenDeviceSettings: () -> Unit,
     onOpenScripts: () -> Unit,
     onOpenLxSearch: () -> Unit,
+    onOpenSearchHub: () -> Unit,
     onGoDevices: () -> Unit = {},
 ) {
     // 进页面刷一次：数量会随"刚导入的歌 / 刚连的 NAS / 刚建的歌单"变化，
@@ -177,6 +178,11 @@ fun MyMusicScreen(
             }
         }
         item {
+            // 统一入口：一个词同时问四个源。放在其它入口第一位，因为它是"找东西听"的起点
+            AppCard(onClick = onOpenSearchHub) {
+                SectionTitle("找点东西听", "一个输入框，洛雪 / 电台 / 本地 / NAS 一起问")
+            }
+
             // 洛雪音乐：搜一首 → 取直链 → 投到音箱（取直链要靠下面那页装的脚本）
             AppCard(onClick = onOpenLxSearch) {
                 SectionTitle("洛雪音乐", "搜一首歌，点一下就从音箱放出来")

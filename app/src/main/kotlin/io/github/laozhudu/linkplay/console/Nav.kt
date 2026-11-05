@@ -32,4 +32,7 @@ internal enum class SubPage {
 
     /** 洛雪音乐搜索（搜一首 → 取直链 → 投到音箱）。 */
     LxSearch,
+
+    /** 统一入口：一个输入框同时问四个源。 */
+    SearchHub,
 }
