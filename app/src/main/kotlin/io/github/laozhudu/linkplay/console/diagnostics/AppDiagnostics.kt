@@ -162,6 +162,7 @@ object AppDiagnostics {
         log.clear()
         ActionTiming.clear()
         io.github.laozhudu.linkplay.console.lx.ScriptSourceStatus.clear()
+        io.github.laozhudu.linkplay.console.ir.IrStatus.clear()
         io.github.laozhudu.linkplay.protocol.remote.CommandTrace.DEFAULT.clear()
         store(context).delete(ISSUE_FILE)
     }
