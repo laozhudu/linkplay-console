@@ -265,6 +265,13 @@ internal class ConsoleDiagnostics(
             }.trimEnd()
         }
 
+        // 备份 —— 低频且不可验证的动作（导完不会立刻发现少了什么），至少留个时间与结果
+        AppDiagnostics.sections.register(
+            "backup",
+            "备份",
+            { if (io.github.laozhudu.linkplay.console.backup.BackupStatus.lastFailed()) Severity.WARN else Severity.INFO },
+        ) { io.github.laozhudu.linkplay.console.backup.BackupStatus.render() }
+
         // 红外 —— 第一条要确认的信息是"这台手机有没有发射器"，
         // 没有的话整个功能不成立（手机也不能学码，docs/81）。
         AppDiagnostics.sections.register(
