@@ -21,7 +21,7 @@ import io.github.laozhudu.linkplay.console.playback.DevicePlaylistGateway
 import io.github.laozhudu.linkplay.console.playback.DeviceQueuePush
 import io.github.laozhudu.linkplay.console.playback.QueueBus
 import io.github.laozhudu.linkplay.console.playback.QueuePlaybackService
-import io.github.laozhudu.linkplay.console.playback.startQueueOnDevice
+import io.github.laozhudu.linkplay.console.playback.PlaybackRouter
 import io.github.laozhudu.linkplay.console.library.PlayJournal
 import io.github.laozhudu.linkplay.console.session.SessionStore
 import io.github.laozhudu.linkplay.protocol.queue.QueueItem
@@ -434,13 +434,12 @@ class NasViewModel(
         // docs/86 把它列为最大的一处 I1 违反：一个动作三条实现。
         safeLaunch("pushQueue") {
             val started = System.currentTimeMillis()
-            startQueueOnDevice(
-                context = getApplication(),
+            PlaybackRouter.of(getApplication()).playQueue(
+                items = items,
+                startAt = start,
                 deviceIp = rendererIp,
                 location = rendererLocation,
                 deviceUuid = deviceUuid,
-                items = items,
-                startAt = start,
                 note = "NAS ${items.size} 首 · 第 ${start + 1} 首",
                 log = { line ->
                     log(line)

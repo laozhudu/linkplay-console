@@ -8,7 +8,7 @@ import io.github.laozhudu.linkplay.protocol.LinkPlayDevice
 import io.github.laozhudu.linkplay.protocol.library.LibrarySearch
 import io.github.laozhudu.linkplay.protocol.library.SearchHit
 import io.github.laozhudu.linkplay.console.playback.QueueBus
-import io.github.laozhudu.linkplay.console.playback.startQueueOnDevice
+import io.github.laozhudu.linkplay.console.playback.PlaybackRouter
 import io.github.laozhudu.linkplay.console.playback.DeviceQueuePush
 import io.github.laozhudu.linkplay.protocol.DeviceHttpClient
 import io.github.laozhudu.linkplay.console.playback.QueuePlaybackService
@@ -375,14 +375,14 @@ class LibraryViewModel(
      * 会出现设备侧行为不一致（历史上就是不同入口各写一遍才漂移的）。
      */
     /**
-     * 整单下发 —— 委托给全 App 唯一入口 [startQueueOnDevice]。
+     * 整单下发 —— 委托给 [PlaybackRouter]（再落到全 App 唯一的 startQueueOnDevice）。
      *
      * 这里不保留任何自己的一套降级逻辑：以前音乐库 / 歌单 / NAS 各写一遍，
      * 设备侧行为就不一致（有的入口有设备队列、有的没有）。
      */
     private suspend fun startQueue(items: List<QueueItem>, startAt: Int, note: String) {
-        startQueueOnDevice(
-            context = getApplication(),
+        // 走 PlaybackRouter：输出选择（本机/音箱）由它决定，不由音乐库自己判断
+        PlaybackRouter.of(getApplication()).playQueue(
             deviceIp = deviceIp,
             location = location,
             deviceUuid = deviceUuid,
