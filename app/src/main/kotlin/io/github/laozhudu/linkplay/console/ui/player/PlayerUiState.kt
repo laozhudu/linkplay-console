@@ -32,6 +32,28 @@ data class PlayerUiState(
     val controlLost: Boolean = false,
     /** 内容是投到设备还是本机播。 */
     val source: Source = Source.Remote,
+
+    /** 播放进度（毫秒）。 */
+    val positionMs: Long = 0,
+
+    /** 总时长（毫秒）。直播流为 0。 */
+    val durationMs: Long = 0,
+
+    /**
+     * 直播流：没有总时长。
+     *
+     * 为什么要单独一个字段：`durationMs == 0` 也可能是"还没加载完"，
+     * 界面据此画进度条会一直显示 0:00 — 看起来像卡住了。
+     */
+    val isLive: Boolean = false,
+
+    /**
+     * 音量 **0..100**。
+     *
+     * 刻度统一在这一层：ExoPlayer 内部是 0f..1f，设备侧协议是 0..100。
+     * 让界面记两套刻度会出现"显示 60 实际 0.6"这种看不出来的错。
+     */
+    val volume: Int = 0,
 ) {
 
     enum class Source {
@@ -58,12 +80,19 @@ data class PlayerUiState(
             running: Boolean,
             playing: Boolean,
             controlLost: Boolean = false,
+            positionMs: Long = 0,
+            durationMs: Long = 0,
+            volume: Int = 0,
         ): PlayerUiState = PlayerUiState(
             title = nowPlaying?.trim()?.takeIf { it.isNotEmpty() },
             playing = playing,
             hasQueue = running,
             controlLost = controlLost,
             source = Source.Remote,
+            positionMs = positionMs,
+            durationMs = durationMs,
+            isLive = durationMs <= 0,
+            volume = volume,
         )
     }
 }
