@@ -341,6 +341,24 @@ class RadioViewModel(
         }
     }
 
+    /**
+     * 目录里点一行：**存进收藏并立即播**。
+     *
+     * 为什么不复用 [addDiscovered]（只入库）+ 再点一次播：
+     * 电台页的列表就是"点一行就听"，中间夹一个"已加入收藏，请再点一次"是多余的一步。
+     */
+    fun playDiscovered(station: DiscoveryStation) {
+        if (_state.value.busy) return
+        safeLaunch("playDiscovered") {
+            val resolved = withContext(Dispatchers.IO) {
+                runCatching { RadioBrowserSource().resolve(station) }.getOrDefault(station)
+            }
+            val fav = resolved.toFavourite(deviceName)
+            val id = autoSave(fav.url, fav.name)
+            playUrl(fav.url, fav.name, storeId = id)
+        }
+    }
+
     /** 使用过的地址自动入库：同 URL 已在库里就复用它的 id。 */
     private suspend fun autoSave(url: String, name: String?): Long = withContext(Dispatchers.IO) {
         val existing = runCatching { store.forDevice(deviceName).firstOrNull { it.url == url } }.getOrNull()
