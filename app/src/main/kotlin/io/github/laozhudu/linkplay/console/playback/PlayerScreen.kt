@@ -244,9 +244,29 @@ fun PlayerScreen(
     }
 
     val playing = state.state == TransportState.PLAYING || state.state == TransportState.TRANSITIONING
-    val duration = state.durationSec.coerceAtLeast(0)
-    val progress = scrubDraft ?: state.progress
-    val shownVolume = volDraft ?: (state.volume.toFloat() / 100f)
+    // ---- 播放状态按输出选源（S2.1）----
+    //
+    // 本机播放读 ExoPlayer 的实时位置，投音箱读设备快照。界面只用同一组字段，
+    // 不关心底下是谁 —— 这就是 PlayerUiState 存在的意义。
+    //
+    // 之前的问题：切到本机后进度条和音量条是空的，因为界面只读设备状态，
+    // 而手机上放的时候没有人往那里填值。
+    val routerRef = remember { PlaybackRouter.of(appContext) }
+    val localUi by routerRef.localState.collectAsState()
+    val isLocalOutput = routerRef.output() is PlaybackOutput.Local
+    val duration = if (isLocalOutput) {
+        localUi.durationMs / 1000L
+    } else {
+        state.durationSec.coerceAtLeast(0L)
+    }
+    val positionSecNow = if (isLocalOutput) localUi.positionMs / 1000.0 else state.positionSec.toDouble()
+    val progress = scrubDraft ?: if (isLocalOutput) {
+        if (duration <= 0L) 0f else (positionSecNow / duration).toFloat().coerceIn(0f, 1f)
+    } else {
+        state.progress
+    }
+    val volumeNow = if (isLocalOutput) localUi.volume else state.volume
+    val shownVolume = volDraft ?: (volumeNow.toFloat() / 100f)
     val art = state.albumArtUrl?.takeIf { it.isNotBlank() }
         ?: queue.current?.albumArtUrl?.takeIf { it.isNotBlank() }
     val embeddedCover = remember(state.embeddedCover) {
@@ -611,7 +631,7 @@ fun PlayerScreen(
                 )
                 Spacer(Modifier.width(Spacing.xs))
                 Text(
-                    if (state.mute) "静音" else state.volume.toString(),
+                    if (!isLocalOutput && state.mute) "静音" else volumeNow.toString(),
                     style = MaterialTheme.typography.labelSmall,
                     color = OnDarkPalette.muted,
                     textAlign = TextAlign.End,

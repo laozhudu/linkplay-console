@@ -5,6 +5,9 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import io.github.laozhudu.linkplay.console.ui.player.PlayerUiState
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -42,8 +45,26 @@ class LocalPlayer(context: Context) {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) = publish()
     }
 
+    /**
+     * 进度 ticker（500ms）。
+     *
+     * 为什么必须有：Media3 **不会**每次位置变化都回调 —— 只在状态变化时给一次。
+     * 不自己轮询，进度条就停在开始那一秒不动，看起来像"卡住了"。
+     *
+     * 只在真的在放时才 publish，暂停时不空转。
+     */
+    private val ticker = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.Dispatchers.Main.immediate + kotlinx.coroutines.SupervisorJob(),
+    )
+
     init {
         player.addListener(listener)
+        ticker.launch {
+            while (true) {
+                delay(500)
+                if (player.isPlaying) publish()
+            }
+        }
     }
 
     fun play(url: String, title: String?) {
@@ -77,6 +98,7 @@ class LocalPlayer(context: Context) {
     /** 页面销毁时**不要**调 —— 播放要能继续。只在 App 退出/切换输出时调。 */
     fun release() {
         runCatching {
+            ticker.cancel()
             player.removeListener(listener)
             player.release()
         }
@@ -86,11 +108,17 @@ class LocalPlayer(context: Context) {
     fun raw(): ExoPlayer = player
 
     private fun publish() {
+        val duration = player.duration
         _state.value = PlayerUiState(
             title = currentTitle,
             playing = player.isPlaying,
             hasQueue = player.mediaItemCount > 0,
             source = PlayerUiState.Source.Local,
+            positionMs = player.currentPosition.coerceAtLeast(0L),
+            // Media3 用 C.TIME_UNSET（负数）表示"还不知道"，不能直接当 0 用
+            durationMs = if (duration > 0) duration else 0L,
+            isLive = player.isCurrentMediaItemLive || duration <= 0,
+            volume = (player.volume * 100f).toInt().coerceIn(0, 100),
         )
     }
 }
