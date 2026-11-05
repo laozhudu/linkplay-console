@@ -77,6 +77,39 @@ class LxProtocolTest {
     }
 
     @Test
+    fun `官方信封里取 data_url`() {
+        // 这条 fixture 是**真实抓的**：用 core-lx 的官方 lx-preload.js 驱动 huibq 音源、
+        // 向 tx 要 320k，把 preload 发给原生的 response 原文整条抄下来。
+        // 之前这里用的是裸字符串（`"result":"https://…"`），所以没抓到
+        // 「把整个信封当 URL」那个 bug —— 真机上表现就是
+        // 「脚本返回的不是有效地址：{"source":"tx","action":"musicUrl",…}」。
+        val r = LxProtocol.parseScriptResult(
+            """{"requestKey":"r1","status":true,"result":{"source":"tx","action":"musicUrl","data":{"type":"320k","url":"http://ws.stream.qqmusic.qq.com/M800003Qui1q2u1Zho.mp3?guid=ffffffffc81e6f5affffffffedffeb7f&vkey=1F1A3CF34E9EB86E8D4DB210F9F60C3275A8323DA81EDB61C132E17B93E21FB39F958A5AFDABB5A2E6CE820E974D956EC2B017018CB3D294__v2b9abb9c&uin=2274735704&fromtag=120093"}}}""",
+        )
+        assertTrue(r.ok)
+        assertTrue(r.resultUrl.startsWith("http://ws.stream.qqmusic.qq.com/"))
+        assertTrue(r.resultUrl.contains("M800003Qui1q2u1Zho.mp3"))
+        // resultText 拿到的是整包 —— 踩过的坑就长这样，固定住它，防止有人又改回去
+        assertTrue(r.resultText.contains("\"source\":\"tx\""))
+    }
+
+    @Test
+    fun `裸字符串也能取到地址`() {
+        val r = LxProtocol.parseScriptResult(
+            """{"requestKey":"k6","status":true,"result":"https://cdn.example/a.flac"}""",
+        )
+        assertEquals("https://cdn.example/a.flac", r.resultUrl)
+    }
+
+    @Test
+    fun `信封里没有 url 时是空串而不是崩`() {
+        val r = LxProtocol.parseScriptResult(
+            """{"requestKey":"k7","status":true,"result":{"source":"wy","action":"musicUrl","data":{"type":"320k"}}}""",
+        )
+        assertEquals("", r.resultUrl)
+    }
+
+    @Test
     fun `解析脚本失败答复`() {
         val r = LxProtocol.parseScriptResult(
             """{"requestKey":"k2","status":false,"errorMessage":"Network request failed"}""",

@@ -261,7 +261,8 @@ class LxUserApi(
             } else if (!resp.ok) {
                 LxResult.failure(LxFailureText.translate(resp.error))
             } else {
-                val url = resp.resultText.trim()
+                // 必须取 result.data.url —— 官方 preload 包了一层信封（见 LxScriptResponse.resultUrl）
+                val url = resp.resultUrl.trim()
                 if (url.startsWith("http://") || url.startsWith("https://")) {
                     LxResult.success(url)
                 } else {

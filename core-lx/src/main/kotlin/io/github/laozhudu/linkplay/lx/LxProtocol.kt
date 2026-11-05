@@ -68,12 +68,41 @@ data class LxScriptResponse(
     val error: String? = null,
     val result: JsonElement? = null,
 ) {
-    /** 结果是字符串时取出来（`musicUrl` 就是字符串）。 */
+    /** 结果原样转成文本。**不要拿它当 URL 用** —— 官方回包是包了一层的，见 [resultUrl]。 */
     val resultText: String
         get() = when (val r = result) {
             null -> ""
             is JsonPrimitive -> r.contentOrNull.orEmpty()
             else -> r.toString()
+        }
+
+    /**
+     * `musicUrl` 的播放地址。
+     *
+     * 为什么不能直接用 [resultText]：官方 preload 的 `handleRequest` 会把脚本返回的字符串
+     * **再包一层**才发回原生侧（`user-api-preload.js`）：
+     *
+     * ```
+     * result = { source, action, data: { type, url } }
+     * ```
+     *
+     * 所以地址在 `result.data.url`。直接读 `result` 会拿到整个对象，
+     * 表现为「脚本返回的不是有效地址：{"source":"tx","action":"musicUrl",…}」——
+     * 那是报文，不是脚本的错。
+     *
+     * 同时兼容裸字符串：pic/lyric 这类动作、以及自己写的宿主可能是直接给字符串。
+     */
+    val resultUrl: String
+        get() = when (val r = result) {
+            null -> ""
+            is JsonPrimitive -> r.contentOrNull.orEmpty()
+            is JsonObject -> when (val d = r["data"]) {
+                null -> ""
+                is JsonPrimitive -> d.contentOrNull.orEmpty()
+                is JsonObject -> (d["url"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+                else -> ""
+            }
+            else -> ""
         }
 }
 

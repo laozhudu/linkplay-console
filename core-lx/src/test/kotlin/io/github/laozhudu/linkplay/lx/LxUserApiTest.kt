@@ -189,6 +189,34 @@ class LxUserApiTest {
     }
 
     @Test
+    fun `官方信封形状能取出地址`() = runTest {
+        // 真机上脚本回的就是这个形状（source/action/data.url），不是裸字符串。
+        // 之前 musicUrl 读 resultText，把这整包当 URL 校验，于是永远报「不是有效地址」。
+        val engine = FakeEngine()
+        engine.initOk()
+        val api = api(engine)
+        api.load("// s", info)
+
+        engine.onCallGlobal = { name, args ->
+            if (name == "__lx_native__" && args[1] == "request") {
+                val payload = args[2] as String
+                val key = Regex("\"requestKey\":\"([^\"]+)\"").find(payload)!!.groupValues[1]
+                engine.fireNativeCall(
+                    engine.globals["__lx_key__"],
+                    "response",
+                    """{"requestKey":"$key","status":true,"result":{"source":"tx","action":"musicUrl","data":{"type":"320k","url":"https://ws.stream.qqmusic.qq.com/a.mp3"}}}""",
+                )
+            }
+            null
+        }
+
+        val r = api.musicUrl("tx", """{"source":"tx","songmid":1}""")
+
+        assertTrue(r.ok)
+        assertEquals("https://ws.stream.qqmusic.qq.com/a.mp3", r.value)
+    }
+
+    @Test
     fun `脚本不回应时超时`() = runTest {
         val engine = FakeEngine()
         engine.initOk()
