@@ -4,6 +4,7 @@ import io.github.laozhudu.linkplay.protocol.upnp.DeviceDescription
 import io.github.laozhudu.linkplay.protocol.upnp.SoapEnvelope
 import io.github.laozhudu.linkplay.protocol.upnp.UpnpServices
 import io.github.laozhudu.linkplay.protocol.upnp.UpnpTransport
+import io.github.laozhudu.linkplay.protocol.upnp.HttpUpnpTransport
 import io.github.laozhudu.linkplay.protocol.upnp.UpnpXml
 
 /**
@@ -72,6 +73,20 @@ class GenericRenderer(
             "CurrentTransportState",
         )
 
+    /**
+     * 曲名。从 `GetPositionInfo` 的 `TrackMetaData` 里取。
+     *
+     * 这里有个坑：`TrackMetaData` 是**整段转义过的 XML**（`&lt;DIDL-Lite…`），
+     * 必须先去转义再当 XML 取 `dc:title`，否则永远取不到（字符串里根本没有 `<`）。
+     */
+    fun title(): String? {
+        val raw = UpnpXml.value(call(UpnpServices.AV_TRANSPORT, "GetPositionInfo", instanceArgs()), "TrackMetaData")
+            ?: return null
+        val xml = UpnpXml.unescape(raw)
+        return UpnpXml.value(xml, "dc:title")?.trim()?.takeIf { it.isNotEmpty() }
+            ?: UpnpXml.value(xml, "title")?.trim()?.takeIf { it.isNotEmpty() }
+    }
+
     fun position(): Pair<Long?, Long?> {
         val xml = call(UpnpServices.AV_TRANSPORT, "GetPositionInfo", instanceArgs())
         return RendererState.parseTime(UpnpXml.value(xml, "RelTime")) to
@@ -83,7 +98,15 @@ class GenericRenderer(
         val (pos, dur) = runCatching { position() }.getOrDefault(null to null)
         val volume = runCatching { volume() }.getOrNull()
         val mute = runCatching { mute() }.getOrNull()
-        return RendererState(transportState = state, positionMs = pos, durationMs = dur, volume = volume, mute = mute)
+        val title = runCatching { title() }.getOrNull()
+        return RendererState(
+            transportState = state,
+            positionMs = pos,
+            durationMs = dur,
+            volume = volume,
+            mute = mute,
+            title = title,
+        )
     }
 
     // ── 音量 ────────────────────────────────────────────────────────────
@@ -120,6 +143,21 @@ class GenericRenderer(
     // ── 内部 ────────────────────────────────────────────────────────────
 
     private fun instanceArgs() = listOf("InstanceID" to instanceId)
+
+    companion object {
+        /**
+         * 从描述地址造一台渲染器（拉 `description.xml` 再解析）。
+         *
+         * 描述只在这里拉一次，之后由调用方缓存 —— 每次拉约 50ms，列表刷新时不能反复拉。
+         */
+        fun describe(location: String, transport: UpnpTransport = HttpUpnpTransport()): GenericRenderer {
+            val xml = transport.get(location)
+            return GenericRenderer(DeviceDescription.parse(location, xml), transport)
+        }
+
+        /** 只知道 IP 时的兜底地址（DLNA 约定端口 49152）。 */
+        fun defaultLocation(ip: String): String = "http://$ip:49152/description.xml"
+    }
 
     /**
      * 发一个动作。四个失败原因必须分开翻译（`docs/52`：命令回 OK ≠ 功能生效，

@@ -34,15 +34,15 @@ private const val DESCRIPTION = """
     </device></root>
 """
 
-class GenericRendererTest {
+private fun renderer(
+    xml: String = DESCRIPTION,
+    transport: FakeTransport = FakeTransport(),
+): Pair<GenericRenderer, FakeTransport> {
+    val desc = DeviceDescription.parse("http://192.168.1.9/desc.xml", xml)
+    return GenericRenderer(desc, transport) to transport
+}
 
-    private fun renderer(
-        xml: String = DESCRIPTION,
-        transport: FakeTransport = FakeTransport(),
-    ): Pair<GenericRenderer, FakeTransport> {
-        val desc = DeviceDescription.parse("http://192.168.1.9/desc.xml", xml)
-        return GenericRenderer(desc, transport) to transport
-    }
+class GenericRendererTest {
 
     @Test
     fun `capabilities come from declared services not from brand`() {
@@ -55,9 +55,7 @@ class GenericRendererTest {
 
     @Test
     fun `a device with no controllable service is not controllable`() {
-        val xml = """
-            <root><device><friendlyName>X</friendlyName><serviceList></serviceList></device></root>
-        """
+        val xml = "<root><device><friendlyName>X</friendlyName><serviceList></serviceList></device></root>"
         val (r, _) = renderer(xml)
         assertFalse(r.capabilities.controllable)
     }
@@ -72,8 +70,7 @@ class GenericRendererTest {
         assertEquals("\"urn:schemas-upnp-org:service:AVTransport:1#SetAVTransportURI\"", call.action)
         assertTrue(call.body.contains("<CurrentURI>http://192.168.1.2:8080/a.mp3</CurrentURI>"))
         assertTrue(call.body.contains("七里香"))
-        // UPnP 规定只设置不播，播必须再发 Play
-        assertFalse(call.action.contains("Play\""))
+        assertFalse("UPnP 规定只设置不播，播必须再发 Play", call.action.endsWith("#Play\""))
     }
 
     @Test
@@ -105,16 +102,15 @@ class GenericRendererTest {
     }
 
     @Test
-    fun `volume on a device without rendering control says unsupported`() {
+    fun `volume on a device without rendering control is null`() {
         val (r, _) = renderer()
         assertNull(r.volume())
     }
 
     @Test
-    fun `missing service on the device is reported as unsupported, not as a network error`() {
+    fun `missing service is reported as unsupported, not as a network error`() {
         val (r, t) = renderer()
         val error = runCatching { r.setVolume(30) }.exceptionOrNull()
-        // 设备没声明 RenderingControl：必须说"它没有这个服务"，不能说"连不上/无响应"
         assertTrue("应抛 Unsupported，实际=$error", error is RendererException.Unsupported)
         assertTrue("不该白发一条请求", t.sent.isEmpty())
     }
@@ -123,7 +119,7 @@ class GenericRendererTest {
 class RendererStateTest {
 
     @Test
-    fun `time parsing handles the standard format`() {
+    fun `time parsing keeps milliseconds`() {
         assertEquals(202_000L, RendererState.parseTime("0:03:22"))
         assertEquals(3_723_000L, RendererState.parseTime("1:02:03"))
         assertEquals(202_500L, RendererState.parseTime("0:03:22.500"))
@@ -144,5 +140,23 @@ class RendererStateTest {
         assertTrue(RendererState(transportState = "PLAYING").playing)
         assertFalse(RendererState(transportState = "PAUSED_PLAYBACK").playing)
         assertFalse(RendererState(transportState = "NO_MEDIA_PRESENT").hasMedia)
+    }
+}
+
+/** 标题解析单独一类：它踩的是"转义 XML"的坑，和动作断言不是一回事。 */
+class RendererTitleTest {
+
+    @Test
+    fun `title is decoded from the escaped didl metadata`() {
+        // TrackMetaData 里是转义过的 XML：不去转义就永远取不到标题（字符串里没有 '<'）
+        val escaped = "&lt;DIDL-Lite&gt;&lt;item&gt;&lt;dc:title&gt;七里香&lt;/dc:title&gt;&lt;/item&gt;&lt;/DIDL-Lite&gt;"
+        val (r, _) = renderer(transport = FakeTransport("<Envelope><TrackMetaData>$escaped</TrackMetaData></Envelope>"))
+        assertEquals("七里香", r.title())
+    }
+
+    @Test
+    fun `empty metadata gives null title instead of a fake one`() {
+        val (r, _) = renderer(transport = FakeTransport("<Envelope><TrackMetaData></TrackMetaData></Envelope>"))
+        assertNull(r.title())
     }
 }

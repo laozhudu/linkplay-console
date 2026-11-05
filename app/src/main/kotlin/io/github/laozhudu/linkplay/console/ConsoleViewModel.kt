@@ -38,6 +38,7 @@ import io.github.laozhudu.linkplay.protocol.player.PlayerStatus
 import io.github.laozhudu.linkplay.protocol.player.SleepTimer
 import io.github.laozhudu.linkplay.protocol.session.SavedDevice
 import io.github.laozhudu.linkplay.protocol.upnp.UpnpRendererClient
+import io.github.laozhudu.upnp.GenericRenderer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.awaitAll
@@ -476,18 +477,41 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** 通用 DMR 的探测：标准 UPnP 三连，缺项就少项。 */
+    /** 通用轨的客户端缓存（key = 描述地址）。描述只拉一次，之后复用。 */
+    private val genericRenderers = java.util.concurrent.ConcurrentHashMap<String, GenericRenderer>()
+
+    private fun genericRenderer(location: String?): GenericRenderer? {
+        val loc = location?.takeIf { it.isNotBlank() } ?: return null
+        genericRenderers[loc]?.let { return it }
+        return runCatching { GenericRenderer.describe(loc) }
+            .onSuccess { genericRenderers[loc] = it }
+            .getOrNull()
+    }
+
+    /**
+     * 探一台**通用** UPnP 渲染器（电视盒子、别的品牌音箱）。
+     *
+     * 现在走 `core-upnp` 的 `GenericRenderer`：只发标准动作
+     * （AVTransport / RenderingControl），完全不知道 LinkPlay 私有命令的存在。
+     *
+     * 以前这条路径借用 `UpnpRendererClient` —— 那个类里混着 `ControlDeviceInfo`、
+     * `SetChannel` 这些 DOSS 专属命令。混着用的后果是"通用设备明明不支持，
+     * 我们却会去发"；分开之后，通用设备永远不会收到它看不懂的报文。
+     *
+     * 判据与旧实现等价：至少一个服务应答才算在线（描述拉不到 / 全失败 → 不在线）。
+     */
     private fun probeGenericDmr(ip: String): DeviceSnapshot? {
         val d = _state.value.saved.firstOrNull { it.ip == ip } ?: return null
-        val c = runCatching { dmrClient(d.location) ?: rendererByIp(ip) }.getOrNull() ?: return null
-        val transport = runCatching { c.transportInfo() }.getOrNull()
-        val position = runCatching { c.positionInfo() }.getOrNull()
-        val volume = runCatching { c.volume() }.getOrNull()
-        if (transport == null && position == null && volume == null) return null
+        val renderer = genericRenderer(d.location)
+            ?: genericRenderer(GenericRenderer.defaultLocation(ip))
+            ?: return null
+        val state = runCatching { renderer.state() }.getOrNull() ?: return null
+        if (state.transportState == null && state.volume == null) return null
         return DeviceSnapshot(
-            title = position?.trackMetadata?.title?.takeIf { it.isNotBlank() },
-            volume = volume?.volume,
-            mute = volume?.mute,
-            playing = transport?.state?.isPlaying,
+            title = state.title,
+            volume = state.volume,
+            mute = state.mute,
+            playing = state.playing,
             answered = setOf(DeviceSnapshot.Channel.GENERIC_DMR),
         )
     }

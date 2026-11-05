@@ -131,6 +131,8 @@ dependencies {
     // core-protocol 必须保持纯 JVM 零依赖，不许反向依赖（docs/74 硬规则 3）
     implementation(project(":core-radio"))
     implementation(project(":core-lx"))
+    // 通用 UPnP 轨（非 DOSS 设备走这条）。LinkPlay 专用命令仍在 core-protocol，两条轨并存。
+    implementation(project(":core-upnp"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
