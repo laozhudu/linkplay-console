@@ -23,7 +23,7 @@ import androidx.core.content.ContextCompat
 import io.github.laozhudu.linkplay.console.MainActivity
 import io.github.laozhudu.linkplay.console.playback.QueueBus
 import io.github.laozhudu.linkplay.protocol.DeviceHttpClient
-import io.github.laozhudu.linkplay.protocol.LinkPlayCommands
+import io.github.laozhudu.linkplay.protocol.playback.PlayIntent
 import io.github.laozhudu.linkplay.protocol.floating.FloatSpec
 import io.github.laozhudu.linkplay.protocol.floating.FloatingLayout
 import kotlinx.coroutines.CoroutineScope
@@ -58,6 +58,11 @@ import kotlinx.coroutines.withContext
 class FloatingControlService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    /** 唯一执行点。懒初始化：服务被系统拉起但用户从没点过时不必建它。 */
+    private val dispatcher by lazy {
+        io.github.laozhudu.linkplay.console.playback.PlaybackDispatcher(application)
+    }
 
     /** 只为发三条播放命令，超时给短一点：网络不通时不能让按钮「看起来点了没反应」。 */
     private val http = DeviceHttpClient(connectTimeoutMs = 3_000, readTimeoutMs = 3_000)
@@ -201,9 +206,9 @@ class FloatingControlService : Service() {
             LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
         )
 
-        prevView = button("⏮") { send(LinkPlayCommands.previousTrack()) }
-        playView = button("⏯") { send(LinkPlayCommands.togglePause()) }
-        nextView = button("⏭") { send(LinkPlayCommands.nextTrack()) }
+        prevView = button("⏮") { dispatch(PlayIntent.Previous) }
+        playView = button("⏯") { dispatch(PlayIntent.TogglePlay) }
+        nextView = button("⏭") { dispatch(PlayIntent.Next) }
         // 关闭：服务停了悬浮窗就该消失，免得留下一个点不动的空壳
         val closeView = button("✕") { stopSelf() }
 
@@ -216,6 +221,29 @@ class FloatingControlService : Service() {
         // 按钮会变成「按下去没反应」。
         bar.setOnTouchListener { _, e -> handleTouch(e, tap = null) }
         return bar
+    }
+
+    /**
+     * 悬浮窗的全部动作都走唯一执行点（S1.3）。
+     *
+     * ## 这里原来是个真 bug
+     *
+     * 三行原来都是直发 LinkPlay 私有 httpapi 命令（`nextTrack` / `previousTrack` / `togglePause`）。
+     * 投通用 DLNA 渲染器（电视盒子）时设备不认这条命令，但按钮照样画着：
+     * 用户按了，什么都没发生，也没有任何提示。
+     *
+     * 而「这台设备支不支持切歌」这件事（`DeviceCapabilities.supportsNextPrev`）
+     * **从来没被读过一次**。
+     */
+    private fun dispatch(intent: PlayIntent) {
+        if (!dispatcher.can(intent)) {
+            // 静默忽略比报错更糟：用户会以为按钮坏了。说清楚是设备做不到。
+            android.widget.Toast
+                .makeText(this, "这台设备不支持这个操作", android.widget.Toast.LENGTH_SHORT)
+                .show()
+            return
+        }
+        scope.launch { dispatcher.dispatch(intent) }
     }
 
     private fun button(label: String, onClick: () -> Unit): TextView = TextView(this).apply {
