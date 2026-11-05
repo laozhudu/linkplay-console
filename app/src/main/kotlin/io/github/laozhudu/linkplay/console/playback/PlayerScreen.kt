@@ -161,6 +161,14 @@ fun PlayerScreen(
             }
         },
     )
+
+    // 登记给 PlaybackDispatcher（S1.2）。dispatcher 是进程级的，拿不到 Composable 作用域，
+    // 所以由播放页在此登记；离开时必须注销 —— 否则它会对着一个已销毁的 VM 发命令，
+    // 表现是「退出播放页后按悬浮窗没反应，但也没报错」。
+    DisposableEffect(vm) {
+        PlaybackViewModels.bind(vm)
+        onDispose { PlaybackViewModels.unbind(vm) }
+    }
     // 设备变了就地切换（首次组合时是同一条设备，switchTo 内部会直接返回，不会重连）
     LaunchedEffect(deviceIp, deviceLocation, deviceUuid) {
         vm.switchTo(deviceIp, deviceLocation, deviceUuid)
