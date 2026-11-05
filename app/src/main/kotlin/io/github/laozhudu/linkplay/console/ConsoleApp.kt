@@ -171,6 +171,18 @@ internal fun ConsoleBody(vm: ConsoleViewModel) {
                 onBack = { sub = null },
             )
 
+            SubPage.SearchHub -> io.github.laozhudu.linkplay.console.search.SearchHubScreen(
+                onBack = { sub = null },
+                onOpenSource = { id ->
+                    sub = when (id) {
+                        io.github.laozhudu.linkplay.console.search.SourceId.Lx -> SubPage.LxSearch
+                        io.github.laozhudu.linkplay.console.search.SourceId.Radio -> SubPage.Radio
+                        io.github.laozhudu.linkplay.console.search.SourceId.Local -> SubPage.Library
+                        io.github.laozhudu.linkplay.console.search.SourceId.Nas -> SubPage.Nas
+                    }
+                },
+            )
+
             SubPage.LxSearch -> io.github.laozhudu.linkplay.console.lx.LxSearchScreen(
                 deviceIp = state.selectedIp.orEmpty(),
                 location = state.selectedLocation,
@@ -292,6 +304,7 @@ internal fun ConsoleBody(vm: ConsoleViewModel) {
                     onOpenSettings = { sub = SubPage.Settings },
                     onOpenScripts = { sub = SubPage.Scripts },
                     onOpenLxSearch = { sub = SubPage.LxSearch },
+                    onOpenSearchHub = { sub = SubPage.SearchHub },
                     onGoDevices = { tab = Tab.Devices },
                 )
             }
