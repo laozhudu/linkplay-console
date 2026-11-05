@@ -182,8 +182,52 @@ python3 scripts/check-single-dispatch.py # 通过
 
 S1.2 `PlaybackDispatcher`（唯一执行点）。前置已就绪：意图层统一了。
 
+## 第七轮 · S1.2 唯一执行点（`PlaybackDispatcher`）
+
+**改动**：1 新 + 1 改。
+
+| 文件 | 动作 |
+|---|---|
+| `app/.../playback/PlaybackDispatcher.kt` | **新建**，14 个意图的 dispatch + `can()` + `PlaybackViewModels` 持有器 |
+| `app/.../playback/PlayerScreen.kt` | `DisposableEffect` 登记 / 注销 VM |
+
+**两条硬规矩写进类注释**：① 能力位判断在这里做，不在界面做；② 不实现播放逻辑，只做分派。
+
+### 收进这一层的那个真 bug
+
+`FloatingControlService` 直发 `LinkPlayCommands.nextTrack()` —— 那是 LinkPlay 私有 httpapi，
+投通用 DLNA 渲染器时设备不认，而 `supportsNextPrev` **从来没被读过**。
+表现：电视盒子上照样画着「下一首」，按了毫无反应。S1.3 接入后由 `can()` 决定画不画。
+
+### 一个自己撞出来的坑（记下来免得重踩）
+
+ExoPlayer 的 `volume` 是 **0f..1f**，设备侧是 **0..100**。第一版直接赋值 Int，编译报：
+
+```
+e: Argument type mismatch: actual type is 'kotlin.Int', but 'kotlin.Float' was expected.
+```
+
+换算是这一层的责任 —— 上层记两套刻度会出现「显示 60 实际 0.6」这种看不出来的错。
+
+### 验证
+
+```bash
+./gradlew :app:assembleDebug            # 通过
+# 全量 1036 用例 0 失败
+python3 scripts/check-init-order.py     # 通过
+python3 scripts/check-single-dispatch.py # 通过
+grep -rn 'PlaybackRouter.of(' app/src/main | grep -v Dispatcher | wc -l   # 8
+```
+
+**那 8 处是 S1.3 的活**：界面还在直连 router，本轮只把 dispatcher 建起来并让播放页登记 VM。
+
+### 没验
+
+- **零行为改动**：没有任何调用点改走 dispatcher（那是 S1.3）。dispatcher 现在还没有调用者。
+- 真机「电视盒子上不显示下一首」要 S1.3 接入后才验得了。
+
 ---
 
 ## 下一道
 
-S1.2 `PlaybackDispatcher` → S1.3 三入口接入 → **S1.4 输出开关搬到播放页（用户可感）**
+S1.3 三入口接入 dispatch（界面 / 悬浮窗 / 语音）→ **S1.4 输出开关搬到播放页（用户可感）**
