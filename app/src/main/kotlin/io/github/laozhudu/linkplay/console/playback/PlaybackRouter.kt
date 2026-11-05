@@ -60,12 +60,12 @@ object PlaybackOutputStore {
 class PlaybackRouter(
     context: Context,
     /** 本地播放器进程级唯一：ExoPlayer 每 new 一个都占一份音频焦点和缓冲。 */
-    private val localPlayer: LocalPlayer = LocalPlayer(context),
+    val local: LocalPlayer = LocalPlayer(context),
 ) {
 
     private val app = context.applicationContext
 
-    val localState: StateFlow<PlayerUiState> = localPlayer.state
+    val localState: StateFlow<PlayerUiState> = local.state
 
     fun output(): PlaybackOutput = PlaybackOutputStore.read(app)
 
@@ -85,7 +85,12 @@ class PlaybackRouter(
     ): Boolean {
         return when (output()) {
             PlaybackOutput.Local -> {
-                localPlayer.play(url, title)
+                // 先拉起前台服务：不启动它，通知栏与锁屏都不会出现（MediaSessionService 只有在
+                // 被启动/绑定之后才持有会话）。失败不影响出声，所以吞掉。
+                runCatching {
+                    app.startService(android.content.Intent(app, PlaybackService::class.java))
+                }
+                local.play(url, title)
                 true
             }
             PlaybackOutput.Remote -> startQueueOnDevice(
@@ -102,7 +107,7 @@ class PlaybackRouter(
 
     /** 切输出时要把另一头停掉，否则两边一起响。 */
     fun pauseBoth() {
-        runCatching { localPlayer.pause() }
+        runCatching { local.pause() }
         LxSourceStatus.reset()
     }
 

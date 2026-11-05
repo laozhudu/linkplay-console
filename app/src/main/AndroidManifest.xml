@@ -32,7 +32,11 @@
 
     <!-- 应用图标：自适应图标（v26+）+ 传统 PNG 兜底（24-25）。
          前景是「音箱箱体 + 音量滑轨」，一眼读作音箱遥控。 -->
-    <application
+        <!-- 媒体播放前台服务：Android 14+ 里服务类型与权限一一对应，
+         mediaPlayback 必须配这条，否则通知栏媒体控件不出现（docs/83 清单第 1 项） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+
+<application
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:allowBackup="false"
@@ -72,5 +76,17 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+    
+        <!-- 本地播放的前台服务（MediaSessionService）。
+             注意不能复用 QueuePlaybackService：那个是 dataSync 类型，显示不了媒体控件。 -->
+        <service
+            android:name=".playback.PlaybackService"
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaSessionService" />
+            </intent-filter>
+        </service>
+
     </application>
 </manifest>
