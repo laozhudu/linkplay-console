@@ -6,7 +6,7 @@ import androidx.lifecycle.viewModelScope
 import io.github.laozhudu.linkplay.protocol.playqueue.DidlLiteBuilder
 import io.github.laozhudu.linkplay.protocol.playqueue.PlayQueueClient
 import io.github.laozhudu.linkplay.protocol.playqueue.QueueContextFormat
-import io.github.laozhudu.linkplay.console.playback.QueuePlaybackService
+import io.github.laozhudu.linkplay.console.playback.startQueueOnDevice
 import io.github.laozhudu.linkplay.protocol.player.LoopMode
 import io.github.laozhudu.linkplay.protocol.playqueue.QueueLoopMode
 import io.github.laozhudu.linkplay.protocol.queue.QueueItem
@@ -187,16 +187,23 @@ class QueueViewModel(
                     )
                 }
                 val host = deviceHost ?: throw IllegalStateException("拿不到音箱地址（需要先通过 SSDP 发现设备）")
-                val session = PlaybackSession(
-                    deviceUuid = host,
+                // 走**全 App 唯一**的投送入口（docs/86 第一批 1.2）。
+                //
+                // 以前这里直接起 QueuePlaybackService（客户端逐首），连"设备侧队列"都不试 ——
+                // 后果是手机本地文件投到音箱后，**App 一退出就停**。DOSS 支持原厂 PlayQueue，
+                // 交出去之后设备自己就能往下播。
+                val ok = startQueueOnDevice(
+                    context = ctx,
                     deviceIp = host,
+                    location = location,
+                    deviceUuid = host,
                     items = items,
-                    index = 0,
-                    loopMode = s.loopMode,
+                    startAt = 0,
+                    note = "手机本地 ${items.size} 首",
+                    log = ::log,
                 )
-                QueuePlaybackService.start(ctx, location, session)
                 _state.update { it.copy(busy = false, pushedCount = items.size) }
-                log("已推送 ${items.size} 首（客户端逐首投流）")
+                log(if (ok) "已推送 ${items.size} 首" else "推送未成功（降级详情见上）")
             } catch (t: Throwable) {
                 _state.update { it.copy(busy = false, error = t.message) }
                 log("推送失败：${t.message}")
