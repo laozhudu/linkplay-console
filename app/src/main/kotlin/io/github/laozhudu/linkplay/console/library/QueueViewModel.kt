@@ -6,7 +6,7 @@ import androidx.lifecycle.viewModelScope
 import io.github.laozhudu.linkplay.protocol.playqueue.DidlLiteBuilder
 import io.github.laozhudu.linkplay.protocol.playqueue.PlayQueueClient
 import io.github.laozhudu.linkplay.protocol.playqueue.QueueContextFormat
-import io.github.laozhudu.linkplay.console.playback.startQueueOnDevice
+import io.github.laozhudu.linkplay.console.playback.PlaybackRouter
 import io.github.laozhudu.linkplay.protocol.player.LoopMode
 import io.github.laozhudu.linkplay.protocol.playqueue.QueueLoopMode
 import io.github.laozhudu.linkplay.protocol.queue.QueueItem
@@ -192,13 +192,12 @@ class QueueViewModel(
                 // 以前这里直接起 QueuePlaybackService（客户端逐首），连"设备侧队列"都不试 ——
                 // 后果是手机本地文件投到音箱后，**App 一退出就停**。DOSS 支持原厂 PlayQueue，
                 // 交出去之后设备自己就能往下播。
-                val ok = startQueueOnDevice(
-                    context = ctx,
+                val ok = PlaybackRouter.of(ctx).playQueue(
+                    items = items,
+                    startAt = 0,
                     deviceIp = host,
                     location = location,
                     deviceUuid = host,
-                    items = items,
-                    startAt = 0,
                     note = "手机本地 ${items.size} 首",
                     log = ::log,
                 )

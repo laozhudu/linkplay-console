@@ -4,7 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.laozhudu.linkplay.console.playback.QueueBus
-import io.github.laozhudu.linkplay.console.playback.startQueueOnDevice
+import io.github.laozhudu.linkplay.console.playback.PlaybackRouter
 import io.github.laozhudu.linkplay.console.session.SessionStore
 import io.github.laozhudu.linkplay.protocol.mediasource.MediaTrack
 import io.github.laozhudu.linkplay.protocol.mediasource.SubsonicClient
@@ -199,8 +199,7 @@ class OnlineViewModel(
                 }
                 if (items.isEmpty()) throw IllegalStateException("这些结果都拿不到直链")
                 val startInItems = start.coerceIn(0, items.lastIndex)
-                startQueueOnDevice(
-                    context = getApplication(),
+                PlaybackRouter.of(getApplication()).playQueue(
                     deviceIp = deviceIp,
                     location = location,
                     deviceUuid = deviceUuid,

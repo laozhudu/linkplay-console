@@ -87,9 +87,7 @@ class PlaybackRouter(
             PlaybackOutput.Local -> {
                 // 先拉起前台服务：不启动它，通知栏与锁屏都不会出现（MediaSessionService 只有在
                 // 被启动/绑定之后才持有会话）。失败不影响出声，所以吞掉。
-                runCatching {
-                    app.startService(android.content.Intent(app, PlaybackService::class.java))
-                }
+                startLocalService()
                 local.play(url, title)
                 true
             }
@@ -103,6 +101,53 @@ class PlaybackRouter(
                 note = "单曲投送",
             )
         }
+    }
+
+    /**
+     * 播一整份列表（NAS 目录 / 手机本地 / 在线曲库 / 歌单都走这里）。
+     *
+     * 为什么必须和 [playOne] 在同一个类里：**输出选择不该由各个源自己判断**。
+     * 以前只有洛雪能选「本机/音箱」，因为只有它调了 router；其它源直接投音箱，
+     * 于是"手机上能放的内容"只有 1/6，`PlaybackService`（通知栏/锁屏/耳机键）
+     * 在另外 5 个场景里都是死的（docs/86 第一批 1.3）。
+     *
+     * 本地播放器目前只支持单曲：切到本机时播 `startAt` 那一首，队列不跟过去 ——
+     * 这一点**必须让人知道**，不能假装"整份列表都在手机上排好了"。
+     */
+    suspend fun playQueue(
+        items: List<QueueItem>,
+        startAt: Int,
+        deviceIp: String,
+        location: String?,
+        deviceUuid: String?,
+        note: String,
+        log: (String) -> Unit = {},
+    ): Boolean {
+        if (items.isEmpty()) return false
+        return when (output()) {
+            PlaybackOutput.Local -> {
+                val item = items.getOrNull(startAt.coerceIn(0, items.lastIndex)) ?: items.first()
+                startLocalService()
+                local.play(item.url, item.title)
+                log("本机播放：只播这一首（本地列表暂不支持） —— ${item.title}")
+                true
+            }
+            PlaybackOutput.Remote -> startQueueOnDevice(
+                context = app,
+                deviceIp = deviceIp,
+                location = location,
+                deviceUuid = deviceUuid,
+                items = items,
+                startAt = startAt,
+                note = note,
+                log = log,
+            )
+        }
+    }
+
+    /** 拉起 MediaSession 前台服务（通知栏/锁屏才活得下去）。失败不影响出声。 */
+    fun startLocalService() {
+        runCatching { app.startService(android.content.Intent(app, PlaybackService::class.java)) }
     }
 
     /** 切输出时要把另一头停掉，否则两边一起响。 */
