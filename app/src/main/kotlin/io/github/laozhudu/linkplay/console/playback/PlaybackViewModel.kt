@@ -498,17 +498,38 @@ class PlaybackViewModel(
             }
 
             // ② 本地有队列但设备没有：把队列交给设备（原厂点"全部播放"就是这个动作）
+            //
+            // 走唯一入口 startQueueOnDevice（docs/86 不变量 I1：一个动作只有一条实现）。
+            // 以前这里直连 DevicePlaylistGateway.push，于是这条路：
+            //   ① 绕过了能力位判断 —— 投通用 DLNA 渲染器（电视盒子）会白撞一次 401 超时；
+            //   ② 绕过了二段/三段降级 —— PlayQueue 拒了就放弃，不会退 m3u 再退客户端逐首；
+            //   ③ 绕过了「最近播放」记账 —— 只做了 markDeviceOwned。
             if (!hasDeviceQueue && localItems.isNotEmpty()) {
-                val ok = withContext(Dispatchers.IO) {
-                    runCatching { DevicePlaylistGateway.push(deviceIp, location, localItems, 0) }.getOrNull()
-                }
-                if (ok?.ok == true) {
-                    if (generation.isStale(gen)) return@safeLaunch
-                    _state.update { it.copy(busy = false, error = null) }
-                    log("播放：已把 ${localItems.size} 首交给设备（${ok.detail}）")
-                    QueueBus.markDeviceOwned(0)
-                    refreshOnce(silent = true)
-                    return@safeLaunch
+                val ctx = appContext
+                if (ctx == null) {
+                    log("播放：本地有 ${localItems.size} 首，但拿不到 Context，没法交给设备")
+                } else {
+                    val pushed = withContext(Dispatchers.IO) {
+                        runCatching {
+                            startQueueOnDevice(
+                                context = ctx,
+                                deviceIp = deviceIp,
+                                location = location,
+                                deviceUuid = deviceUuid,
+                                items = localItems,
+                                startAt = 0,
+                                note = "全部播放",
+                                log = ::log,
+                            )
+                        }.getOrDefault(false)
+                    }
+                    if (pushed) {
+                        if (generation.isStale(gen)) return@safeLaunch
+                        _state.update { it.copy(busy = false, error = null) }
+                        // 「最近播放」与 owner 由 startQueueOnDevice 内部记（docs/88 坑 3：别记两次）
+                        refreshOnce(silent = true)
+                        return@safeLaunch
+                    }
                 }
             }
 
