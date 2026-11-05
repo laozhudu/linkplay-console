@@ -1,6 +1,6 @@
 package io.github.laozhudu.linkplay.console.playback
 
-import android.app.Application
+import android.content.Context
 import io.github.laozhudu.linkplay.protocol.dlna.DeviceCapabilities
 import io.github.laozhudu.linkplay.protocol.playback.PlayIntent
 
@@ -28,7 +28,7 @@ import io.github.laozhudu.linkplay.protocol.playback.PlayIntent
  * `dispatch` 只负责把它们对上号。
  */
 class PlaybackDispatcher(
-    private val app: Application,
+    private val app: android.content.Context,
     private val router: PlaybackRouter = PlaybackRouter.of(app),
     private val capabilities: (ip: String) -> DeviceCapabilities = { DeviceProfileCache.capabilitiesOf(it) },
 ) {

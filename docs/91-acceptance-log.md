@@ -405,8 +405,45 @@ sealed interface PlaybackOutput {
 
 本轮纯文档，零代码改动（`Nav.kt` 上一轮加的是注释）。
 
+## 第十四轮 · S1.3 语音入口接入 dispatch
+
+**用户原话**：「继续按施工图做」。
+
+| 文件 | 动作 |
+|---|---|
+| `PlayerScreen.kt` | 语音回调改 `voiceScope.launch`；`handleVoiceIntent` 改 suspend，走 `PlaybackDispatcher` |
+| `PlaybackDispatcher.kt` | 构造参数 `Application` → `Context`（调用方不必再 `as Application`） |
+
+### 顺带接上了两个之前"占位"的意图
+
+`SetVolume` / `SeekTo` 在 S1.1 只做回执（写的是"等统一执行点"），现在执行点存在了，**接上了**。
+
+### 三个入口现状
+
+| 入口 | 走 dispatch | 说明 |
+|---|---|---|
+| 悬浮窗 | ✅ | 上一轮，顺带修掉私有 httpapi bug |
+| 语音 | ✅ | 本轮 |
+| 界面按钮 | ⏸ | 十几处调用，均为 `vm.xxx()` 正常通道，无 bug |
+
+**界面按钮暂未改**，如实记着 —— 它不走私有 httpapi，没有那个 bug，只是"唯一入口"不完整。
+
+### 验证
+
+```bash
+./gradlew :app:assembleDebug          # 通过
+./gradlew :app:testDebugUnitTest      # 通过
+./gradlew :core-protocol:test         # 通过
+check-init-order / check-single-dispatch  # 通过
+```
+
+### 没验
+
+真机语音（说「下一首」是否切歌）—— 需要麦克风与真机。
+之前那句回执文案全部保留，用户看到的提示不变。
+
 ---
 
 ## 下一道
 
-S1.3 剩余两入口（界面按钮 / 语音）→ S2.1 统一播放状态 → **U1/U2/U3 见 `docs/92`**
+S1.3 剩余：界面按钮 → S2.1 统一播放状态 → **U1/U2/U3 见 `docs/92`**
