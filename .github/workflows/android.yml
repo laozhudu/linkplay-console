@@ -95,10 +95,10 @@ jobs:
       - name: 检查没有全局 opt-in
         run: python3 scripts/check-no-global-optin.py
 
-      # 这两个现在是 warn：先把清单摆出来，清一处划一处（docs/90 S0.5）。
-      # S1.4 搬完输出开关 / S2.3 能力位补齐后去掉 `|| true` 转 error。
-      - name: 检查输出开关位置（warn）
-        run: python3 scripts/check-output-switch.py || true
+      # 输出开关已搬回播放页（S1.4），这条从 warn 转 error。
+      # 型号判断那条仍是 warn：S2.3 能力位补齐后转。
+      - name: 检查输出开关位置
+        run: python3 scripts/check-output-switch.py
 
       - name: 检查界面不判型号（warn）
         run: python3 scripts/check-profile-in-ui.py || true

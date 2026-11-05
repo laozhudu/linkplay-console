@@ -78,30 +78,6 @@ internal fun LxSearchScreen(
             enabled = !state.searching,
         )
 
-        // 输出选择：本地播 / 推流。**界面上只有这一处**，两边共用同一个播放入口。
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
-            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-        ) {
-            Text("从哪出声", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            FilterChip(
-                selected = output == PlaybackOutput.Local,
-                onClick = {
-                    router.setOutput(PlaybackOutput.Local)
-                    output = PlaybackOutput.Local
-                },
-                label = { Text("本机") },
-            )
-            FilterChip(
-                selected = output == PlaybackOutput.Remote,
-                onClick = {
-                    router.setOutput(PlaybackOutput.Remote)
-                    output = PlaybackOutput.Remote
-                },
-                label = { Text("音箱") },
-            )
-        }
-
         if (state.sources.size > 1) {
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                 state.sources.take(6).forEach { s ->

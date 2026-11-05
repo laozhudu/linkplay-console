@@ -360,6 +360,12 @@ fun PlayerScreen(
                 }
             }
 
+            // 「从哪出声」：本机 / 音箱。
+            // 从洛雪页搬到这里（docs/90 S1.4）—— 这个开关管着全部 6 个源，
+            // 藏在跟源无关的页面里，用户想用 NAS 在手机上放，得跑去洛雪页切完再回来。
+            // **内联一行，不能浮层**（docs/37：播放页不许有任何浮层）。
+            OutputSwitchRow()
+
             voiceNote?.let {
                 Text(
                     it,
@@ -894,4 +900,48 @@ private fun handleVoiceIntent(intent: VoiceIntent, vm: PlaybackViewModel): Strin
     // 真正的执行等 S1.2 的唯一执行点（dispatch）—— 那时界面拖条走同一个分支。
     is PlayIntent.SetVolume -> "定值音量（${intent.value}）还没接上，等统一执行点"
     is PlayIntent.SeekTo -> "拖进度（${intent.seconds}s）还没接上，等统一执行点"
+}
+
+/**
+ * 「从哪出声」选择。
+ *
+ * 为什么单独抽一个：它要读的是 `PlaybackRouter` 的输出（全站唯一真相），
+ * 而不是 `PlaybackViewModel` 的状态 —— 后者是"当前设备"的，本机播放时它根本没意义。
+ */
+@Composable
+private fun OutputSwitchRow() {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val router = PlaybackRouter.of(context)
+    var output by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf(router.output())
+    }
+    androidx.compose.foundation.layout.Row(
+        modifier = androidx.compose.ui.Modifier
+            .fillMaxWidth()
+            .padding(top = Spacing.xs, bottom = Spacing.xs),
+        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(Spacing.xs),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "从哪出声",
+            style = MaterialTheme.typography.labelSmall,
+            color = OnDarkPalette.text.copy(alpha = 0.7f),
+        )
+        androidx.compose.material3.FilterChip(
+            selected = output == PlaybackOutput.Local,
+            onClick = {
+                router.setOutput(PlaybackOutput.Local)
+                output = PlaybackOutput.Local
+            },
+            label = { Text("本机") },
+        )
+        androidx.compose.material3.FilterChip(
+            selected = output == PlaybackOutput.Remote,
+            onClick = {
+                router.setOutput(PlaybackOutput.Remote)
+                output = PlaybackOutput.Remote
+            },
+            label = { Text("音箱") },
+        )
+    }
 }
