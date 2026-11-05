@@ -652,21 +652,16 @@ private fun DeviceGroupHeader(group: io.github.laozhudu.linkplay.protocol.dlna.D
         io.github.laozhudu.linkplay.protocol.dlna.DeviceGroup.OtherPlayer -> "其它播放设备"
         io.github.laozhudu.linkplay.protocol.dlna.DeviceGroup.Other -> "其它设备"
     }
-    val hint = when (group) {
-        io.github.laozhudu.linkplay.protocol.dlna.DeviceGroup.MySpeaker -> "能收整份列表、能组网"
-        io.github.laozhudu.linkplay.protocol.dlna.DeviceGroup.OtherPlayer -> "能放声音，但没有队列也不能组网"
-        io.github.laozhudu.linkplay.protocol.dlna.DeviceGroup.Other -> "还没探到它能做什么"
-    }
-    Column(
-        Modifier
+    // 只留一个标题。
+    //
+    // 原来下面还有一行"能收整份列表、能组网"之类的说明 —— 删掉了。
+    // 用户原话：「用户不需要知道全部设备信息，用户只需要能用，好用，简单状态就够」。
+    // 那一行是**给开发看的**（它解释的是代码里怎么分组的），放在界面上只是噪音。
+    Text(
+        label,
+        style = MaterialTheme.typography.titleSmall,
+        modifier = Modifier
             .fillMaxWidth()
             .padding(top = Spacing.md, bottom = Spacing.xs),
-    ) {
-        Text(label, style = MaterialTheme.typography.titleSmall)
-        Text(
-            hint,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
+    )
 }
