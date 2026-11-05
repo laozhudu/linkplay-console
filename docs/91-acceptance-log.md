@@ -637,8 +637,56 @@ grep -rn 'QueueItem(' app/src/main | wc -l              # 9 → 6（剩 6 处待
 另外两个 UseCase（`SetVolumeUseCase` / `PlayFromSourceUseCase`）**本轮没动** ——
 它们要动 4 套音量实现和 5 个 ViewModel 的播放路径，需要整轮。
 
+## 第二十轮 · U2 首页设备按类型隔离（用户第一条 UI 意见兑现）
+
+**用户原话**：「首页设备，通用 upnp 设备根本就没考虑过与 doss 隔离，反而混在一起」。
+
+| 文件 | 动作 |
+|---|---|
+| `home/HomeScreen.kt` | 设备列表按 `DeviceCapabilities.group` 分组渲染 + `DeviceGroupHeader` |
+
+### 现在长这样
+
+```
+我的音箱                     ← 有 PlayQueue + 能组网
+  能收整份列表、能组网
+  [doss1] [doss2] [doss3]
+
+其它播放设备                 ← 能放声音，但没队列没组网
+  能放声音，但没有队列也不能组网
+  [E900V22C-175]
+```
+
+判据用上一轮建的 `DeviceCapabilities.group`（`docs/90` S2.3 前置，5 个用例锁着）。
+**按能力分不按品牌分** —— 型号标签会随固件变，能力是探测出来的。
+
+### 两个刻意的处理
+
+1. **空组不显示** —— 没有电视盒子的人不该看到一个空标题
+2. **文案在 UI 层** —— `core-protocol` 的枚举不带中文，协议模块不该管文案
+
+### 验证
+
+```bash
+./gradlew :app:assembleDebug / :app:testDebugUnitTest   # 通过
+check-init-order.py                                      # 通过
+check-profile-in-ui.py                                   # 仍 warn 1 处（见下）
+```
+
+### 剩下那 1 处（如实记）
+
+`HomeScreen:320` 还有一处 `?: DeviceProfile.UNKNOWN` —— 那是**取默认值**给卡片渲染用，
+不是按型号分支。要彻底清掉得让 `DeviceCardRow` 的 `profile` 参数变成非空，
+改动面在卡片组件里，下一轮一起做。所以 `check-profile-in-ui.py` 还不能转 error。
+
+### 没验（真机）
+
+- 首页是否真的分成两组
+- 电视盒子那台是否落在「其它播放设备」
+- 只有音箱时是否**不显示**空组标题
+
 ---
 
 ## 下一道
 
-S3.1 剩余：6 处 `QueueItem` + `SetVolumeUseCase` + `PlayFromSourceUseCase` → U2 首页分组
+M2 剩余的 1 处型号判断（`DeviceCardRow.profile` 改非空）→ S3.1 剩余 → U1/U3 见 `docs/92`
