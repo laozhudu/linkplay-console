@@ -101,7 +101,8 @@ class GenericRenderer(
         val title = runCatching { title() }.getOrNull()
         return RendererState(
             transportState = state,
-            positionMs = pos,
+            // 位置读数必须先清洗：真机上暂停时会回 28242665ms 这种垃圾值
+            positionMs = DeviceQuirks.sanitizePositionMs(pos, dur),
             durationMs = dur,
             volume = volume,
             mute = mute,
