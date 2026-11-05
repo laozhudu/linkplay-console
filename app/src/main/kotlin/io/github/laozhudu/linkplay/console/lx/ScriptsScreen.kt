@@ -1,14 +1,6 @@
 package io.github.laozhudu.linkplay.console.lx
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -17,26 +9,23 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
-import io.github.laozhudu.linkplay.console.ui.components.AppCard
-import io.github.laozhudu.linkplay.console.ui.components.SectionTitle
 import io.github.laozhudu.linkplay.console.ui.components.VSpace
+import io.github.laozhudu.linkplay.console.ui.skeleton.AppListRow
+import io.github.laozhudu.linkplay.console.ui.skeleton.AppPage
+import io.github.laozhudu.linkplay.console.ui.skeleton.AppStateCard
+import io.github.laozhudu.linkplay.console.ui.skeleton.RowBadge
+import io.github.laozhudu.linkplay.console.ui.skeleton.StateKind
 import io.github.laozhudu.linkplay.console.ui.theme.Spacing
 import io.github.laozhudu.script.ScriptCandidate
 import io.github.laozhudu.script.ScriptEntry
+import io.github.laozhudu.script.ScriptRepository
 
 /**
- * 洛雪音源脚本页：装了什么、哪支在用、导入新的。
+ * 洛雪音源脚本：装了什么、哪支在用、导入新的。
  *
- * ## 为什么这一页必须做得像个"清单"而不是一个"导入按钮"
- *
- * 脚本是**耗材**：官方的失效了要换第三方、第三方的挂了要换下一家。
- * 用户会反复来这一页，而且要能一眼看出"现在用的是哪一支、它多旧"。
- * 所以列表优先，导入是列表下方的一个动作。
+ * 骨架与洛雪音乐页一致（[AppPage]）。这里是"卡片堆叠"型页面，所以整页滚动。
  */
 @Composable
 internal fun ScriptsScreen(onBack: () -> Unit) {
@@ -56,99 +45,62 @@ internal fun ScriptsScreen(onBack: () -> Unit) {
 
     LaunchedEffect(Unit) { reload() }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = Spacing.lg),
+    AppPage(
+        title = "洛雪音源脚本",
+        subtitle = if (entries.isEmpty()) "洛雪只负责搜，脚本负责出直链" else "在用 ${entries.firstOrNull { it.active }?.name ?: "没有启用的"}",
+        onBack = onBack,
+        trailing = { TextButton(onClick = { showImport = true }) { Text("导入") } },
+        scrollWholePage = true,
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.sm),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            TextButton(onClick = onBack) { Text("← 返回") }
-            Text(
-                "洛雪音源脚本",
-                style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.weight(1f),
-            )
-            TextButton(onClick = { showImport = true }) { Text("导入") }
-        }
-
-        AppCard {
-            SectionTitle("这一页是干什么的", "洛雪负责搜，脚本负责出直链")
-            Text(
-                "搜到歌以后要靠脚本来解析真实的播放地址。没有脚本，搜出来的歌点不动。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-
-        VSpace(Spacing.sm)
-
         if (entries.isEmpty()) {
-            AppCard {
-                SectionTitle("还没装脚本", "洛雪只能搜，放不了")
-                Text(
-                    "点右上「导入」：把脚本内容粘进来，或从文件选一份 .js。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            AppStateCard(
+                kind = StateKind.Empty,
+                title = "还没装脚本",
+                hint = "洛雪只能搜，放不了",
+                detail = "点右上「导入」：把脚本内容粘进来，或从文件选、贴链接下载。",
+            )
         } else {
             entries.forEach { entry ->
-                AppCard {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                entry.name + if (entry.active) "  · 在用" else "",
-                                style = MaterialTheme.typography.titleMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            Text(
-                                listOfNotNull(
-                                    entry.version,
-                                    entry.author?.takeIf { it.isNotBlank() },
-                                    if (entry.sizeBytes >= 1024) "${entry.sizeBytes / 1024}KB" else "${entry.sizeBytes}B",
-                                ).joinToString(" · "),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        if (!entry.active) {
+                AppListRow(
+                    title = entry.name + if (entry.active) "  · 在用" else "",
+                    subtitle = listOfNotNull(
+                        entry.version,
+                        entry.author?.takeIf { it.isNotBlank() },
+                        if (entry.sizeBytes >= 1024) "${entry.sizeBytes / 1024}KB" else "${entry.sizeBytes}B",
+                    ).joinToString(" · "),
+                    badge = if (entry.active) RowBadge.Playing else RowBadge.None,
+                    trailing = {
+                        Column {
+                            if (!entry.active) {
+                                TextButton(onClick = {
+                                    repo.setActive(entry.fileName)
+                                    reload()
+                                    note = "已切换到「${entry.name}」"
+                                }) { Text("启用") }
+                            }
                             TextButton(onClick = {
-                                repo.setActive(entry.fileName)
+                                repo.delete(entry.fileName)
                                 reload()
-                                note = "已切换到「${entry.name}」"
-                            }) { Text("启用") }
+                                note = "已删除「${entry.name}」"
+                            }) { Text("删除") }
                         }
-                        TextButton(onClick = {
-                            repo.delete(entry.fileName)
-                            reload()
-                            note = "已删除「${entry.name}」"
-                        }) { Text("删除") }
-                    }
-                }
-                VSpace(Spacing.sm)
+                    },
+                )
+                VSpace(Spacing.xs)
             }
         }
 
         if (broken.isNotEmpty()) {
-            AppCard {
-                SectionTitle("有 ${broken.size} 个文件不像脚本", "它们没有被列在上面")
-                Text(
-                    broken.joinToString("\n"),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            VSpace(Spacing.sm)
+            AppStateCard(
+                kind = StateKind.Hint,
+                title = "有 ${broken.size} 个文件不像脚本",
+                hint = "它们没有被列在上面",
+                detail = broken.joinToString("\n"),
+            )
         }
 
         note?.let {
-            AppCard { Text(it, style = MaterialTheme.typography.bodyMedium) }
-            VSpace(Spacing.sm)
+            AppStateCard(StateKind.Hint, it)
         }
     }
 
