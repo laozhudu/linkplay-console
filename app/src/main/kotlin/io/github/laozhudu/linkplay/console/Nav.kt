@@ -8,6 +8,16 @@ package io.github.laozhudu.linkplay.console
  * 「进 → 出 → 进」，返回键还得数点几次。底部导航是一级入口，切换不需要任何返回操作
  * —— 这也是市面播放器（Spotify / Apple Music / Auxio / Gramophone）的共识结构。
  */
+/**
+ * 底部一级页面。
+ *
+ * ⚠️ **这四项已经不对了**（用户 2026-11-05 明确指出）：按现在的功能模块，
+ * 「洛雪」是内容源却和「媒体库」并列；「媒体库」里挤了 NAS / 本地 / 在线 / 电台 /
+ * 歌单 / 脚本 / 搜索中心 七件事；遥控（红外/蓝牙/WiFi）一个入口都没有。
+ *
+ * **重做排在底层架构（docs/90 S1–S3）之后**，判据写在 `docs/92-ui-restructure-backlog.md`。
+ * 改这里之前先读那份文档 —— 不要再凭感觉拍一遍。
+ */
 internal enum class Tab(val label: String, val glyph: String) {
     Devices("设备", "◍"),
     Player("播放", "▮▮"),
