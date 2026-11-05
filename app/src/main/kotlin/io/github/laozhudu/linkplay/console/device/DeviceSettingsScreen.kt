@@ -111,6 +111,63 @@ fun DeviceSettingsScreen(
         // ---- 设备信息 ----
         // 诊断入口：与首页顶栏那个 ◔ 是同一个页面。
         // 放这里是因为"出问题时人会来设置里找"，两个入口覆盖两种习惯。
+        // 配置备份：整目录打 zip（默认全备、显式排除诊断与崩溃）。
+        // 不做"逐个列举要备份什么"—— 加第 6 处存储时没人会记得回来改清单。
+        AppCard {
+            SectionTitle("配置备份", "设备 / 收藏 / 歌单 / 电台 / 脚本，一个 zip")
+            val context = androidx.compose.ui.platform.LocalContext.current.applicationContext
+            var note by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
+            val exportTo = java.io.File(context.getExternalFilesDir(null), "声控台备份.zip")
+            val picker = androidx.activity.compose.rememberLauncherForActivityResult(
+                androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+            ) { uri ->
+                if (uri == null) return@rememberLauncherForActivityResult
+                val temp = java.io.File(context.cacheDir, "import-backup.zip")
+                val okCopy = runCatching {
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        temp.outputStream().use { output -> input.copyTo(output) }
+                    } != null
+                }.getOrDefault(false)
+                if (!okCopy) {
+                    io.github.laozhudu.linkplay.console.backup.BackupStatus.recorded("导入", false, "选中的文件读不出来")
+                    note = "选中的文件读不出来"
+                } else {
+                    val result = runCatching {
+                        io.github.laozhudu.linkplay.console.backup.ConfigBackup.importFrom(context.filesDir, temp)
+                    }
+                    result.onSuccess { r ->
+                        io.github.laozhudu.linkplay.console.backup.BackupStatus.recorded("导入", true, "${r.files} 个文件")
+                        note = "已导入 ${r.files} 个文件 —— 建议重启 App 让各处重新读取"
+                    }.onFailure { e ->
+                        io.github.laozhudu.linkplay.console.backup.BackupStatus.recorded("导入", false, e.message ?: "失败")
+                        note = "导入失败：${e.message}"
+                    }
+                }
+            }
+            Text(
+                "备份会写到：${exportTo.absolutePath}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            VSpace(Spacing.xs)
+            Row {
+                TextButton(onClick = {
+                    val result = runCatching {
+                        io.github.laozhudu.linkplay.console.backup.ConfigBackup.exportTo(context.filesDir, exportTo)
+                    }
+                    result.onSuccess { r ->
+                        io.github.laozhudu.linkplay.console.backup.BackupStatus.recorded("导出", true, "${r.files} 个文件 / ${r.bytes / 1024}KB")
+                        note = "已导出 ${r.files} 个文件（${r.bytes / 1024}KB）"
+                    }.onFailure { e ->
+                        io.github.laozhudu.linkplay.console.backup.BackupStatus.recorded("导出", false, e.message ?: "失败")
+                        note = "导出失败：${e.message}"
+                    }
+                }) { Text("导出") }
+                TextButton(onClick = { picker.launch(arrayOf("application/zip", "*/*")) }) { Text("导入") }
+            }
+            note?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        }
+
         // 红外：先只做「有没有发射器 + 试发一条 NEC 电源码」。
         // docs/81 的结论是手机不能学码、码库是唯一路径，所以第一步必须先把能力验掉，
         // 否则码库再全也没用。
