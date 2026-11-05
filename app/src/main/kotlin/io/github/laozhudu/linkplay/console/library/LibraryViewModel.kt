@@ -1,5 +1,6 @@
 package io.github.laozhudu.linkplay.console.library
 
+import io.github.laozhudu.linkplay.console.usecase.ToQueueItemsUseCase
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -201,18 +202,19 @@ class LibraryViewModel(
             try {
                 // 先把整条列表的地址都解析出来：本机文件要登记到 LocalMediaServer 才有可投的 URL
                 val items = withContext(Dispatchers.IO) {
-                    list.mapNotNull { t ->
-                        runCatching { resolvePlayableUrl(t) }.getOrNull()?.let { url ->
-                            QueueItem(
+                    ToQueueItemsUseCase.resolveAll(
+                        tracks = list,
+                        resolve = { resolvePlayableUrl(it) },
+                        toItem = { t, url ->
+                            ToQueueItemsUseCase.of(
                                 url = url,
                                 title = t.title,
                                 artist = t.displayArtist,
                                 durationSec = t.durationSec,
-                                mimeType = "audio/mpeg",
                                 albumArtUrl = t.albumArtUri,
                             )
-                        }
-                    }
+                        },
+                    )
                 }
                 if (items.isEmpty()) throw IllegalStateException("这些曲目都没有可播的地址")
 
@@ -269,18 +271,19 @@ class LibraryViewModel(
         safeLaunch("addToPlaylist") {
             try {
                 val items = withContext(Dispatchers.IO) {
-                    tracks.mapNotNull { t ->
-                        runCatching { resolvePlayableUrl(t) }.getOrNull()?.let { url ->
-                            QueueItem(
+                    ToQueueItemsUseCase.resolveAll(
+                        tracks = tracks,
+                        resolve = { resolvePlayableUrl(it) },
+                        toItem = { t, url ->
+                            ToQueueItemsUseCase.of(
                                 url = url,
                                 title = t.title,
                                 artist = t.displayArtist,
                                 durationSec = t.durationSec,
-                                mimeType = "audio/mpeg",
                                 albumArtUrl = t.albumArtUri,
                             )
-                        }
-                    }
+                        },
+                    )
                 }
                 if (items.isEmpty()) throw IllegalStateException("这些曲目都没有可保存的地址")
                 val (added, lists) = withContext(Dispatchers.IO) {
