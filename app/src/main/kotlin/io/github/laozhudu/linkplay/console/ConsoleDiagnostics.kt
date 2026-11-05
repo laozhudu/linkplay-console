@@ -265,6 +265,14 @@ internal class ConsoleDiagnostics(
             }.trimEnd()
         }
 
+        // 红外 —— 第一条要确认的信息是"这台手机有没有发射器"，
+        // 没有的话整个功能不成立（手机也不能学码，docs/81）。
+        AppDiagnostics.sections.register(
+            "ir",
+            "红外",
+            { if (io.github.laozhudu.linkplay.console.ir.IrStatus.lastFailed()) Severity.WARN else Severity.INFO },
+        ) { io.github.laozhudu.linkplay.console.ir.IrStatus.render() }
+
         AppDiagnostics.sections.register("ui", "界面") { NavTrace.render() }
 
         // 口令流水 —— 覆盖「点了没反应」这类最常报的问题。

@@ -111,6 +111,40 @@ fun DeviceSettingsScreen(
         // ---- 设备信息 ----
         // 诊断入口：与首页顶栏那个 ◔ 是同一个页面。
         // 放这里是因为"出问题时人会来设置里找"，两个入口覆盖两种习惯。
+        // 红外：先只做「有没有发射器 + 试发一条 NEC 电源码」。
+        // docs/81 的结论是手机不能学码、码库是唯一路径，所以第一步必须先把能力验掉，
+        // 否则码库再全也没用。
+        AppCard {
+            SectionTitle("红外遥控", "先确认这台手机有没有红外发射器")
+            val context = androidx.compose.ui.platform.LocalContext.current.applicationContext
+            val blaster = androidx.compose.runtime.remember { io.github.laozhudu.linkplay.console.ir.IrBlaster(context) }
+            var note by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
+            androidx.compose.runtime.LaunchedEffect(Unit) {
+                io.github.laozhudu.linkplay.console.ir.IrStatus.probed(blaster.hasEmitter, blaster.carrierFrequencies)
+            }
+            val has = blaster.hasEmitter
+            if (!has) {
+                Text(
+                    "这台手机没有红外发射器 —— 红外功能在它上面不成立（手机也不能学码）。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                Text(
+                    "有发射器。试发一条 NEC 电源码：对着电视/空调按一下，看它有没有反应。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                VSpace(Spacing.xs)
+                TextButton(onClick = {
+                    val error = blaster.transmit(io.github.laozhudu.linkplay.console.ir.NecEncoder.probePower())
+                    io.github.laozhudu.linkplay.console.ir.IrStatus.attempted(ok = error == null, note = error)
+                    note = error ?: "已发出（红外没有回执，只能看设备有没有动）"
+                }) { Text("试发 NEC 电源键") }
+            }
+            note?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        }
+
         AppCard {
             SectionTitle("诊断记录", "闪退堆栈 / 设备取数通道 / 运行期问题")
             TextButton(onClick = onOpenDiagnostics) {
