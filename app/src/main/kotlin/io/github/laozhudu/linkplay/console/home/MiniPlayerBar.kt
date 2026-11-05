@@ -1,5 +1,7 @@
 package io.github.laozhudu.linkplay.console.home
 
+import io.github.laozhudu.linkplay.console.playback.PlaybackOutput
+import io.github.laozhudu.linkplay.console.playback.PlaybackRouter
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -15,6 +17,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -47,13 +51,23 @@ internal fun MiniPlayerBar(
     playing: Boolean = false,
     onToggle: () -> Unit = {},
 ) {
-    // 界面只认 PlayerUiState：将来接本机播放器（Media3）时，换掉的是这里的来源，
-    // 调用方和这个组件的其余部分都不用动。
-    val ui = PlayerUiState.fromRemote(
-        nowPlaying = queue.nowPlaying,
-        running = queue.total > 0,
-        playing = playing,
-    )
+    // 界面只认 PlayerUiState：换输出时换掉的是这里的**来源**，
+    // 调用方和这个组件的其余部分都不用动（这一层当初就是为此建的）。
+    //
+    // 之前本机播放时这条还显示音箱的曲名 —— 因为这里只读 QueueBus。
+    val barContext = androidx.compose.ui.platform.LocalContext.current
+    val routerRef = androidx.compose.runtime.remember { PlaybackRouter.of(barContext) }
+    val localUi by routerRef.localState.collectAsState()
+    val isLocalOutput = routerRef.output() is PlaybackOutput.Local
+    val ui = if (isLocalOutput) {
+        localUi
+    } else {
+        PlayerUiState.fromRemote(
+            nowPlaying = queue.nowPlaying,
+            running = queue.total > 0,
+            playing = playing,
+        )
+    }
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -85,8 +99,14 @@ internal fun MiniPlayerBar(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                if (queue.index >= 0 && queue.total > 0) "第 ${queue.index + 1}/${queue.total} 首 · 点开操作"
-                else "点开继续操作",
+                when {
+                    // 本机播放没有"第几首"的概念（本地播放器目前只播单首）
+                    isLocalOutput && ui.hasContent && ui.durationMs > 0 ->
+                        "${clock(ui.positionMs)} / ${clock(ui.durationMs)} · 点开操作"
+                    isLocalOutput && ui.hasContent -> "本机播放 · 点开操作"
+                    queue.index >= 0 && queue.total > 0 -> "第 ${queue.index + 1}/${queue.total} 首 · 点开操作"
+                    else -> "点开继续操作"
+                },
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -104,4 +124,10 @@ internal fun MiniPlayerBar(
         }
         Text("›", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
+}
+
+/** 毫秒 → `m:ss`。只给迷你条显示进度用，不做"小时"那一档（本机播放没有那么长的音频）。 */
+private fun clock(ms: Long): String {
+    val total = (ms / 1000L).coerceAtLeast(0L)
+    return "${total / 60}:${(total % 60).toString().padStart(2, '0')}"
 }
