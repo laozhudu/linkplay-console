@@ -33,6 +33,9 @@ android {
 }
 
 dependencies {
+    // 这个模块此前零测试：解析逻辑缠在 socket 里。抽成纯函数后才有得测。
+    testImplementation(libs.junit)
+
     implementation(project(":core-protocol"))
     implementation(libs.kotlinx.coroutines.core)
 }
