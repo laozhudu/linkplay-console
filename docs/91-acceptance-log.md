@@ -514,8 +514,43 @@ check-init-order.py                   # 通过
 
 **从本轮起 APK 复制到会话工作区内再给链接。** 这是第二次因为这个路径问题让用户拿不到文件。
 
+## 第十七轮 · S2.3 前半：两个根位 + 首页分组判据（为 U2 铺路）
+
+**为什么不按施工图顺序先做 S2.2**：S2.2 要给 Media3 实现 `Player` 契约
+（`SimpleBasePlayer` + `getState` + 五个 handle*），错误面大、需要整轮空间。
+本轮先做它的前置分类判据 —— 施工图第 6 章也写了「S2.3 的根位与 S2.2 可并行」。
+
+| 文件 | 动作 |
+|---|---|
+| `core-protocol/.../dlna/DeviceProfile.kt` | `DeviceCapabilities` 加 `canPlayAudio` / `canBeRemoted` / `group`；新增 `enum DeviceGroup` |
+| `core-protocol/.../dlna/DeviceGroupTest.kt` | **新建**，5 个用例 |
+
+### 三档分组（按能力，不按品牌）
+
+```
+MySpeaker    有 PlayQueue + 能组网      → 三台 DOSS
+OtherPlayer  能放声音但无队列/无组网    → 电视盒子
+Other        连声音都放不了 / 没探全
+```
+
+**为什么按能力**：型号标签会随固件变（`.153` 旧固件与 `.164` 新固件已实测出字段差异），
+能力是探测出来的、可以随时修正。新加一台设备只要探到能力就自动落组，代码一行不用改。
+
+### 验证
+
+```bash
+./gradlew :core-protocol:test    # 618 用例 0 失败（新增 5）
+```
+
+### 没做
+
+**首页还没按 `group` 渲染** —— 那是 U2 本身（用户定的时机是 S2.3 之后整体做）。
+本轮只把判据准备好，且用 5 个用例锁住"什么能力落哪组"。
+
+**S2.2 留到下一轮**，理由如实写在这里。
+
 ---
 
 ## 下一道
 
-S2.2 通知栏接音箱（`UpnpPlayer` + MediaSession）→ **U1/U2/U3 见 `docs/92`**
+S2.2 通知栏接音箱（`UpnpPlayer` + MediaSession，需整轮）→ U2 首页分组（判据已就绪）

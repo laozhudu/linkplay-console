@@ -70,6 +70,40 @@ data class DeviceCapabilities(
      */
     val supportsChannel: Boolean = false,
 ) {
+
+    // ---------- 两个「根位」：回答"它是什么"，而不是"它支持哪个动作" ----------
+    //
+    // 上面那些字段是"能做哪件事"，这两个是**分类判据**。
+    // 界面据此分组（docs/92 U2：DOSS 与通用 UPnP 混排的问题）。
+    //
+    // 为什么不直接写死一张"品牌 → 分组"的表：型号标签会随固件变
+    // （`.153` 旧固件 3.6.5310 与 `.164` 新固件 3.6.6623 已实测出字段差异），
+    // 而能力是探测出来的、可以随时修正。
+
+    /** 能播出声音（能投流过去）。 */
+    val canPlayAudio: Boolean
+        get() = supportsPlayQueue || supportsVolume || supportsSeek || supportsNextPrev || supportsHttpapi
+
+    /** 能被遥控（至少有一样控制手段，不是个只能看着的摆设）。 */
+    val canBeRemoted: Boolean
+        get() = supportsVolume || supportsMute || supportsSeek || supportsNextPrev || supportsPresets
+
+    /**
+     * 首页该把它归到哪一组。
+     *
+     * 三档而不是按品牌分，是因为**同品牌的设备能力也可能不同**，
+     * 而异品牌也可能落在同一档。
+     */
+    val group: DeviceGroup
+        get() = when {
+            // 有私有队列 + 能组网 = 我的音箱（DOSS 这一档：能收整份列表、App 退出照播）
+            supportsPlayQueue && supportsMultiroom -> DeviceGroup.MySpeaker
+            // 能放声音但没有队列/组网 = 其它播放设备（电视盒子这类）
+            canPlayAudio -> DeviceGroup.OtherPlayer
+            // 连声音都放不了 = 其它（可能是传感器、灯，或者只是没探全）
+            else -> DeviceGroup.Other
+        }
+
     companion object {
         /** LinkPlay 系：实测全能力（含私有 PlayQueue 与 httpapi）。 */
         val LINKPLAY = DeviceCapabilities(
@@ -158,4 +192,23 @@ object DescriptionEndpoints {
         "http://$ip:$port/description.xml",
         "http://$ip:$port/",
     )
+}
+
+/**
+ * 首页的设备分组。
+ *
+ * 用户原话（`docs/92` U2）：「通用 upnp 设备根本就没考虑过与 doss 隔离，反而混在一起」。
+ *
+ * 按**能力**分，不按品牌分 —— 新加一台设备只要探测到能力，自动落到正确的组，
+ * 代码一行不用改。
+ */
+enum class DeviceGroup {
+    /** 我的音箱：有设备侧队列、能组网（DOSS 这一档）。 */
+    MySpeaker,
+
+    /** 其它播放设备：能放声音，但没有队列也没有组网（电视盒子/电视自带 DLNA）。 */
+    OtherPlayer,
+
+    /** 其它：不可控设备，或还没探全。 */
+    Other,
 }
