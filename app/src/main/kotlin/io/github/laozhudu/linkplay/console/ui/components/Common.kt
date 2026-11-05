@@ -19,6 +19,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -64,6 +66,9 @@ fun AppCard(
     onClick: (() -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
+    // 触感统一放在这里：AppCard 是全 App 唯一的标准卡片（19 处使用），
+    // 在各页面自己加必然漏，而且漏掉的那几处会显得"点了没反应"。
+    val haptics = LocalHapticFeedback.current
     val base = modifier
         .fillMaxWidth()
         .clip(AppShapesExpressive.squircle)
@@ -74,7 +79,17 @@ fun AppCard(
             color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
             shape = AppShapesExpressive.squircle,
         )
-    Box(if (onClick != null) base.clickable(onClick = onClick) else base) {
+    Box(
+        if (onClick != null) {
+            base.clickable {
+                // TextHandleMove 是最轻的一档：只是"我收到这一下了"，不是震动提醒
+                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                onClick()
+            }
+        } else {
+            base
+        },
+    ) {
         Column(Modifier.padding(Spacing.md)) { content() }
     }
 }
