@@ -21,6 +21,7 @@ import io.github.laozhudu.linkplay.console.playback.DevicePlaylistGateway
 import io.github.laozhudu.linkplay.console.playback.DeviceQueuePush
 import io.github.laozhudu.linkplay.console.playback.QueueBus
 import io.github.laozhudu.linkplay.console.playback.QueuePlaybackService
+import io.github.laozhudu.linkplay.console.playback.startQueueOnDevice
 import io.github.laozhudu.linkplay.console.library.PlayJournal
 import io.github.laozhudu.linkplay.console.session.SessionStore
 import io.github.laozhudu.linkplay.protocol.queue.QueueItem
@@ -426,48 +427,34 @@ class NasViewModel(
         // 最近播放：NAS 目录起播也要记（以前只有音乐库那页记，从 NAS 点过的歌进不了最近播放）
         PlayJournal.recordCurrent(getApplication(), items, start)
 
-        // 先试「整列表交给设备」：这样 App 退出后设备仍能自己往下播，设备的上一首/下一首也生效
+        // 走**全 App 唯一**的投送入口。
+        //
+        // 这里原来自己写了一遍三段降级（PlayQueue → m3u → 客户端逐首），57 行、
+        // 和 QueueStarter 逐行同构。后果是「改了 QueueStarter 忘了改 NAS」成为必然 ——
+        // docs/86 把它列为最大的一处 I1 违反：一个动作三条实现。
         safeLaunch("pushQueue") {
-            val session = PlaybackSession(
-                deviceUuid = deviceUuid ?: rendererIp,
+            val started = System.currentTimeMillis()
+            startQueueOnDevice(
+                context = getApplication(),
                 deviceIp = rendererIp,
+                location = rendererLocation,
+                deviceUuid = deviceUuid,
                 items = items,
-                index = start,
-                loopMode = _state.value.loopMode,
+                startAt = start,
+                note = "NAS ${items.size} 首 · 第 ${start + 1} 首",
+                log = { line ->
+                    log(line)
+                    // 换入口不能丢诊断：从唯一入口的日志里认回"走了哪一段"
+                    val ms = System.currentTimeMillis() - started
+                    when {
+                        line.contains("设备侧队列") || (line.contains("PlayQueue") && line.contains("生效")) ->
+                            NasSourceStatus.route("设备列表(PlayQueue)", line, ms)
+                        line.contains("m3u") -> NasSourceStatus.route("设备列表(m3u)", line, ms)
+                        line.contains("客户端") || line.contains("逐首") ->
+                            NasSourceStatus.route("客户端逐首（本次未走设备队列）", line, ms)
+                    }
+                },
             )
-            savePlayback(items, start, _state.value.loopMode)
-
-            // ① 原厂机制：CreateQueue + PlayQueueWithIndex（设备握住列表，可读回、退出照播）
-            val pushStarted = System.currentTimeMillis()
-            val upstream = DevicePlaylistGateway.push(rendererIp, rendererLocation, items, start)
-            if (upstream.ok) {
-                NasSourceStatus.route("设备列表(PlayQueue)", upstream.detail, System.currentTimeMillis() - pushStarted)
-                log(upstream.detail + "（设备侧队列 · 原厂 PlayQueue）")
-                QueueBus.restore(rendererIp, items, start, items.getOrNull(start)?.title, deviceOwned = true,
-                    note = "设备列表 ${items.size} 首 · 第 ${start + 1} 首")
-                _state.update { it.copy(playing = true, nowPlaying = items.getOrNull(start)?.title) }
-                return@safeLaunch
-            }
-            log("PlayQueue 未接受：${upstream.detail}")
-
-            // ② 兜底：m3u + setPlayerCmd:playlist（能在老固件上凑效，但读不回曲目清单）
-            val pushed = DeviceQueuePush.push(DeviceHttpClient(), rendererIp, items, start)
-            if (pushed.ok) {
-                NasSourceStatus.route("设备列表(m3u)", pushed.detail, System.currentTimeMillis() - pushStarted)
-                log(pushed.detail + "（设备侧队列 · m3u）")
-                QueueBus.restore(rendererIp, items, start, items.getOrNull(start)?.title, deviceOwned = true,
-                    offset = pushed.offset, note = "设备列表 ${items.size} 首 · 第 ${start + 1} 首（m3u）")
-                QueueBus.markDeviceOwned(pushed.offset)
-                _state.update { it.copy(playing = true, nowPlaying = items.getOrNull(start)?.title) }
-            } else {
-                NasSourceStatus.route(
-                    "客户端逐首（本次未走设备队列）",
-                    pushed.detail,
-                    System.currentTimeMillis() - pushStarted,
-                )
-                log("设备未接收整列表：${pushed.detail} —— 退回客户端逐首投流")
-                QueuePlaybackService.start(getApplication(), rendererLocation, session)
-            }
         }
     }
 
