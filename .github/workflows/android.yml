@@ -71,6 +71,13 @@ jobs:
       - name: Check diagnostics labels
         run: python3 scripts/check-diagnostics-labels.py
 
+      # 文档引用必须带路径且文件真实存在。
+      # 真实事故：docs/64 引用了两篇只在工作区、从没入库的文档（写的是裸名字），
+      # 任何链接检查都抓不到，只有人读到才发现找不到 —— 用户当时以为是「文件丢失」。
+      # 规则：写 `docs/NN-xxx.md` 或注明「工作区草稿，未入库」。
+      - name: Check doc references
+        run: python3 scripts/check-doc-refs.py
+
       # 动作耗时账本按"动作名"聚合。名字漂移会让同一件事在报告里变成两条，
       # 于是"平均 240ms"和"最慢 610ms"都不再代表那个动作。名字现在是枚举，
       # 这里查类型系统管不到的两件事：id 规范 + 每个动作是否真的接上了。
