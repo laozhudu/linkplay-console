@@ -85,6 +85,24 @@ jobs:
       - name: 检查动作耗时账本的动作名
         run: python3 scripts/check-timing-names.py
 
+      # 「一个动作一条实现」被破过 4 次（#130 #131 #132 #139），每次都要单独一个 PR 去修。
+      # 编译期门禁（@SingleEntryPoint）管得住 .kt 里的调用，管不住这两件事：
+      # ① 漏标一个新原语；② 加一行全局 -opt-in= 把整片门禁拆掉。
+      # 所以这里再补一道只读的。
+      - name: 检查下发原语只有一处
+        run: python3 scripts/check-single-dispatch.py
+
+      - name: 检查没有全局 opt-in
+        run: python3 scripts/check-no-global-optin.py
+
+      # 这两个现在是 warn：先把清单摆出来，清一处划一处（docs/90 S0.5）。
+      # S1.4 搬完输出开关 / S2.3 能力位补齐后去掉 `|| true` 转 error。
+      - name: 检查输出开关位置（warn）
+        run: python3 scripts/check-output-switch.py || true
+
+      - name: 检查界面不判型号（warn）
+        run: python3 scripts/check-profile-in-ui.py || true
+
       # 三个模块都要跑：诊断能力是独立的纯 JVM 库，它的测试不该依赖 Android。
       - name: Unit tests
         run: ./gradlew --no-daemon :core-protocol:test :core-diagnostics:test :core-script:test :core-discovery:testDebugUnitTest :core-upnp:test :core-radio:test :core-lx:testDebugUnitTest :app:testDebugUnitTest
