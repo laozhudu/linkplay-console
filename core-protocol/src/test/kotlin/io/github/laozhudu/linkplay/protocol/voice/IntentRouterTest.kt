@@ -1,5 +1,6 @@
 package io.github.laozhudu.linkplay.protocol.voice
 
+import io.github.laozhudu.linkplay.protocol.playback.PlayIntent
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -20,189 +21,189 @@ class IntentRouterTest {
     // ---------- Next ----------
 
     @Test
-    fun `next 直白说法`() = assertRoute("下一首", VoiceIntent.Next)
+    fun `next 直白说法`() = assertRoute("下一首", PlayIntent.Next)
 
     @Test
-    fun `next 带语气词与标点`() = assertRoute("换一首吧！", VoiceIntent.Next)
+    fun `next 带语气词与标点`() = assertRoute("换一首吧！", PlayIntent.Next)
 
     @Test
-    fun `next 跳过这首`() = assertRoute("跳过这首歌", VoiceIntent.Next)
+    fun `next 跳过这首`() = assertRoute("跳过这首歌", PlayIntent.Next)
 
     @Test
-    fun `next 英文`() = assertRoute("next", VoiceIntent.Next)
+    fun `next 英文`() = assertRoute("next", PlayIntent.Next)
 
     @Test
-    fun `next 口语否定式`() = assertRoute("不要这首", VoiceIntent.Next)
+    fun `next 口语否定式`() = assertRoute("不要这首", PlayIntent.Next)
 
     @Test
-    fun `播放下一首 也算 next`() = assertRoute("播放下一首", VoiceIntent.Next)
+    fun `播放下一首 也算 next`() = assertRoute("播放下一首", PlayIntent.Next)
 
     // ---------- Previous ----------
 
     @Test
-    fun `previous 直白说法`() = assertRoute("上一首", VoiceIntent.Previous)
+    fun `previous 直白说法`() = assertRoute("上一首", PlayIntent.Previous)
 
     @Test
-    fun `previous 长句`() = assertRoute("回到上一首", VoiceIntent.Previous)
+    fun `previous 长句`() = assertRoute("回到上一首", PlayIntent.Previous)
 
     @Test
-    fun `previous 英文`() = assertRoute("previous", VoiceIntent.Previous)
+    fun `previous 英文`() = assertRoute("previous", PlayIntent.Previous)
 
     // ---------- Play ----------
 
     @Test
-    fun `play 直白`() = assertRoute("播放", VoiceIntent.Play)
+    fun `play 直白`() = assertRoute("播放", PlayIntent.Play)
 
     @Test
-    fun `play 继续`() = assertRoute("继续", VoiceIntent.Play)
+    fun `play 继续`() = assertRoute("继续", PlayIntent.Play)
 
     @Test
-    fun `play 接着放`() = assertRoute("接着放", VoiceIntent.Play)
+    fun `play 接着放`() = assertRoute("接着放", PlayIntent.Play)
 
     @Test
-    fun `play 英文 resume`() = assertRoute("resume", VoiceIntent.Play)
+    fun `play 英文 resume`() = assertRoute("resume", PlayIntent.Play)
 
     @Test
-    fun `play 带语气词`() = assertRoute("播放吧", VoiceIntent.Play)
+    fun `play 带语气词`() = assertRoute("播放吧", PlayIntent.Play)
 
     // ---------- Pause ----------
 
     @Test
-    fun `pause 直白`() = assertRoute("暂停", VoiceIntent.Pause)
+    fun `pause 直白`() = assertRoute("暂停", PlayIntent.Pause)
 
     // 「停一下」里含「停」，必须仍然算暂停而不是停止
     @Test
-    fun `pause 停一下 不能被当成停止`() = assertRoute("停一下", VoiceIntent.Pause)
+    fun `pause 停一下 不能被当成停止`() = assertRoute("停一下", PlayIntent.Pause)
 
     @Test
-    fun `pause 英文`() = assertRoute("pause", VoiceIntent.Pause)
+    fun `pause 英文`() = assertRoute("pause", PlayIntent.Pause)
 
     // ---------- Stop ----------
 
     @Test
-    fun `stop 直白`() = assertRoute("停止", VoiceIntent.Stop)
+    fun `stop 直白`() = assertRoute("停止", PlayIntent.Stop)
 
     @Test
-    fun `stop 口语`() = assertRoute("别放了", VoiceIntent.Stop)
+    fun `stop 口语`() = assertRoute("别放了", PlayIntent.Stop)
 
     @Test
-    fun `stop 关掉音乐`() = assertRoute("关掉音乐", VoiceIntent.Stop)
+    fun `stop 关掉音乐`() = assertRoute("关掉音乐", PlayIntent.Stop)
 
     @Test
-    fun `stop 英文`() = assertRoute("stop", VoiceIntent.Stop)
+    fun `stop 英文`() = assertRoute("stop", PlayIntent.Stop)
 
     // ---------- TogglePlay ----------
 
     // 「播放暂停」含「暂停」，顺序错了就会变成 Pause
     @Test
-    fun `toggle 播放暂停`() = assertRoute("播放暂停", VoiceIntent.TogglePlay)
+    fun `toggle 播放暂停`() = assertRoute("播放暂停", PlayIntent.TogglePlay)
 
     @Test
-    fun `toggle 切换播放`() = assertRoute("切换播放", VoiceIntent.TogglePlay)
+    fun `toggle 切换播放`() = assertRoute("切换播放", PlayIntent.TogglePlay)
 
     // ---------- 音量 ----------
 
     @Test
-    fun `volume up 大声点`() = assertRoute("大声点", VoiceIntent.VolumeUp)
+    fun `volume up 大声点`() = assertRoute("大声点", PlayIntent.VolumeUp)
 
     @Test
-    fun `volume up 音量加`() = assertRoute("音量加一点", VoiceIntent.VolumeUp)
+    fun `volume up 音量加`() = assertRoute("音量加一点", PlayIntent.VolumeUp)
 
     @Test
-    fun `volume up 把声音调大`() = assertRoute("帮我把声音调大", VoiceIntent.VolumeUp)
+    fun `volume up 把声音调大`() = assertRoute("帮我把声音调大", PlayIntent.VolumeUp)
 
     @Test
-    fun `volume down 小声点`() = assertRoute("小声点", VoiceIntent.VolumeDown)
+    fun `volume down 小声点`() = assertRoute("小声点", PlayIntent.VolumeDown)
 
     @Test
-    fun `volume down 音量减`() = assertRoute("音量减", VoiceIntent.VolumeDown)
+    fun `volume down 音量减`() = assertRoute("音量减", PlayIntent.VolumeDown)
 
     @Test
     fun `volume 英文简写`() {
-        assertRoute("volup", VoiceIntent.VolumeUp)
-        assertRoute("voldown", VoiceIntent.VolumeDown)
+        assertRoute("volup", PlayIntent.VolumeUp)
+        assertRoute("voldown", PlayIntent.VolumeDown)
     }
 
     // ---------- 静音 ----------
 
     @Test
-    fun `mute 静音`() = assertRoute("静音", VoiceIntent.Mute)
+    fun `mute 静音`() = assertRoute("静音", PlayIntent.Mute)
 
     @Test
-    fun `mute 别出声`() = assertRoute("别出声", VoiceIntent.Mute)
+    fun `mute 别出声`() = assertRoute("别出声", PlayIntent.Mute)
 
     @Test
-    fun `mute 英文`() = assertRoute("mute", VoiceIntent.Mute)
+    fun `mute 英文`() = assertRoute("mute", PlayIntent.Mute)
 
     // ---------- 循环 ----------
 
     @Test
-    fun `loop 循环模式`() = assertRoute("循环模式", VoiceIntent.LoopNext)
+    fun `loop 循环模式`() = assertRoute("循环模式", PlayIntent.LoopNext)
 
     @Test
-    fun `loop 单曲循环`() = assertRoute("单曲循环", VoiceIntent.LoopNext)
+    fun `loop 单曲循环`() = assertRoute("单曲循环", PlayIntent.LoopNext)
 
     // 「随机播放」含「播放」，必须仍然算循环
     @Test
-    fun `loop 随机播放 不能被当成播放`() = assertRoute("随机播放", VoiceIntent.LoopNext)
+    fun `loop 随机播放 不能被当成播放`() = assertRoute("随机播放", PlayIntent.LoopNext)
 
     @Test
-    fun `loop 英文 shuffle`() = assertRoute("shuffle", VoiceIntent.LoopNext)
+    fun `loop 英文 shuffle`() = assertRoute("shuffle", PlayIntent.LoopNext)
 
     // ---------- 搜索 ----------
 
     @Test
-    fun `search 放某某的歌`() = assertRoute("放周杰伦的歌", VoiceIntent.Search("周杰伦"))
+    fun `search 放某某的歌`() = assertRoute("放周杰伦的歌", PlayIntent.Search("周杰伦"))
 
     @Test
-    fun `search 播放某某的歌`() = assertRoute("播放周杰伦的歌", VoiceIntent.Search("周杰伦"))
+    fun `search 播放某某的歌`() = assertRoute("播放周杰伦的歌", PlayIntent.Search("周杰伦"))
 
     @Test
-    fun `search 来一首`() = assertRoute("来一首 晴天", VoiceIntent.Search("晴天"))
+    fun `search 来一首`() = assertRoute("来一首 晴天", PlayIntent.Search("晴天"))
 
     @Test
-    fun `search 搜一下`() = assertRoute("搜一下晴天", VoiceIntent.Search("晴天"))
+    fun `search 搜一下`() = assertRoute("搜一下晴天", PlayIntent.Search("晴天"))
 
     @Test
-    fun `search 听某某`() = assertRoute("我想听夜曲", VoiceIntent.Search("夜曲"))
+    fun `search 听某某`() = assertRoute("我想听夜曲", PlayIntent.Search("夜曲"))
 
     @Test
     fun `search 英文歌名保留词边界`() =
-        assertRoute("播放 Taylor Swift 的歌", VoiceIntent.Search("taylor swift"))
+        assertRoute("播放 Taylor Swift 的歌", PlayIntent.Search("taylor swift"))
 
     // 「听歌」是动作，不是关键词（否则会去搜一个叫「歌」的东西）
     @Test
-    fun `听歌 不算搜索`() = assertRoute("听歌", VoiceIntent.Play)
+    fun `听歌 不算搜索`() = assertRoute("听歌", PlayIntent.Play)
 
     // ---------- 归一化 ----------
 
     @Test
     fun `口语礼貌前缀被剥离`() {
-        assertRoute("请帮我下一首", VoiceIntent.Next)
-        assertRoute("麻烦你帮我切歌", VoiceIntent.Next)
-        assertRoute("请播放", VoiceIntent.Play)
+        assertRoute("请帮我下一首", PlayIntent.Next)
+        assertRoute("麻烦你帮我切歌", PlayIntent.Next)
+        assertRoute("请播放", PlayIntent.Play)
     }
 
     @Test
-    fun `全角字母与标点`() = assertRoute("ＮＥＸＴ！", VoiceIntent.Next)
+    fun `全角字母与标点`() = assertRoute("ＮＥＸＴ！", PlayIntent.Next)
 
     @Test
-    fun `大小写与中英标点混用`() = assertRoute("Back, please.", VoiceIntent.Previous)
+    fun `大小写与中英标点混用`() = assertRoute("Back, please.", PlayIntent.Previous)
 
     @Test
-    fun `中间插入空格也能认`() = assertRoute("下 一 首", VoiceIntent.Next)
+    fun `中间插入空格也能认`() = assertRoute("下 一 首", PlayIntent.Next)
 
     // ---------- 兜底 ----------
 
     @Test
-    fun `空串归 Unknown 并保留原文`() = assertRoute("", VoiceIntent.Unknown(""))
+    fun `空串归 Unknown 并保留原文`() = assertRoute("", PlayIntent.Unknown(""))
 
     @Test
-    fun `只有标点归 Unknown`() = assertRoute("！！！", VoiceIntent.Unknown("！！！"))
+    fun `只有标点归 Unknown`() = assertRoute("！！！", PlayIntent.Unknown("！！！"))
 
     @Test
     fun `乱码归 Unknown 并保留原文`() =
-        assertRoute("asdfghjkl 这是啥", VoiceIntent.Unknown("asdfghjkl 这是啥"))
+        assertRoute("asdfghjkl 这是啥", PlayIntent.Unknown("asdfghjkl 这是啥"))
 
     // ---------- 归一化函数本身 ----------
 

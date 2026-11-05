@@ -124,7 +124,66 @@ Mockito/Robolectric。**引测试框架是独立决定，没顺手加。**
 
 ---
 
-## 下一道工序
+## 第六轮 · S1.1 意图层（`PlayIntent`）
 
-`docs/90` S1.1（`PlayIntent` 落地）→ S1.2（`dispatch` 唯一执行点）→ S1.3（三入口接入）
-→ **S1.4（输出开关搬到播放页，用户可感）**
+**工序**：docs/90 S1.1。**改动**：1 新 + 4 改。
+
+| 文件 | 动作 |
+|---|---|
+| `core-protocol/.../playback/PlayIntent.kt` | **新建**，13 个意图分支 |
+| `core-protocol/.../voice/IntentRouter.kt` | `sealed interface VoiceIntent` → `typealias VoiceIntent = PlayIntent` |
+| `core-protocol/.../voice/IntentRouterTest.kt` | 引用改 `PlayIntent.Xxx`（断言逻辑一字未改） |
+| `app/.../playback/PlayerScreen.kt` | 两个 `when` 补 `SetVolume` / `SeekTo` 分支 |
+| `app/.../voice/VoiceSourceStatus.kt` | 引用改 `PlayIntent.Xxx` |
+
+**为什么改这条**：「下一首」在界面 / 悬浮窗 / 语音各走各的，共 4 条路径 —— 因为意图层只给语音开了口。
+**意图不关心它是说出来的还是点出来的。**
+
+### 与施工图的一处偏差（technical，重要）
+
+docs/90 §3.2 说「用 `typealias` 过渡是为了让 613 个单测不用改」。
+
+**实测不行**：Kotlin 的 `typealias` 不能用来访问嵌套成员 ——
+`VoiceIntent.Next` 经别名访问会报 `Unresolved reference 'Next'`。
+
+所以改了 4 个文件的引用（`VoiceIntent.` → `PlayIntent.`）。**但断言逻辑一个字没改**，
+613 个用例全绿，`IntentRouterTest` 的规则判断一条没动 —— 这才是那条要求的本意。
+
+### 编译期强制生效了一次（这工序的真正价值）
+
+`PlayIntent` 比原 `VoiceIntent` 多 `SetVolume` / `SeekTo`，加上去立刻报：
+
+```
+e: PlayerScreen.kt:866:85 'when' expression must be exhaustive.
+   Add the 'is SeekTo', 'is SetVolume' branches or an 'else' branch.
+```
+
+**这就是 sealed interface 的意义**：新增意图时编译器逼你处理，而不是运行时静默落到 else 变成「点了没反应」。
+
+两个分支现在只做回执（语音说不出"音量到 40"这种定值），执行落地在 S1.2 的 dispatch ——
+代码里写明了"等统一执行点"，没有假装接上。
+
+### 验证
+
+```bash
+./gradlew :core-protocol:test          # 613 用例 0 失败
+./gradlew :app:assembleDebug           # BUILD SUCCESSFUL
+python3 scripts/check-init-order.py    # 通过
+python3 scripts/check-single-dispatch.py # 通过
+# 全量 1036 用例 0 失败
+```
+
+### 没验
+
+- 语音说「下一首」真机行为（**本轮零行为改动**：意图类型改名，路由规则与执行都没变）
+- `SetVolume` / `SeekTo` 无法执行 —— 预期，等 S1.2
+
+### 下一道
+
+S1.2 `PlaybackDispatcher`（唯一执行点）。前置已就绪：意图层统一了。
+
+---
+
+## 下一道
+
+S1.2 `PlaybackDispatcher` → S1.3 三入口接入 → **S1.4 输出开关搬到播放页（用户可感）**

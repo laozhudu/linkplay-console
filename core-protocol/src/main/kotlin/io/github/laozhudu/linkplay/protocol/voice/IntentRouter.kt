@@ -1,5 +1,7 @@
 package io.github.laozhudu.linkplay.protocol.voice
 
+import io.github.laozhudu.linkplay.protocol.playback.PlayIntent
+
 /**
  * 一句话能表达的全部意图。
  *
@@ -7,28 +9,17 @@ package io.github.laozhudu.linkplay.protocol.voice
  * 分派端（播放页）必须**穷尽**处理所有分支，新增意图时编译器会直接报错，
  * 而不是在运行时静默落到 else 分支里变成「说了没反应」。
  */
-sealed interface VoiceIntent {
-    data object Next : VoiceIntent
-    data object Previous : VoiceIntent
-    data object Play : VoiceIntent
-    data object Pause : VoiceIntent
-    data object Stop : VoiceIntent
-
-    /** 「播放/暂停」取决于当前状态，所以不拆成两种，交给调用方按播放状态决定。 */
-    data object TogglePlay : VoiceIntent
-    data object VolumeUp : VoiceIntent
-    data object VolumeDown : VoiceIntent
-    data object Mute : VoiceIntent
-
-    /** 循环模式切下一个（与播放页按钮同一个动作，含单曲/列表/随机）。 */
-    data object LoopNext : VoiceIntent
-
-    /** 想找某首/某人的歌：关键词交给搜索，本文不决定从哪个曲库搜。 */
-    data class Search(val keyword: String) : VoiceIntent
-
-    /** 没听懂。**带上原文**是为了能在界面上原样回显，让用户知道我们听到了什么。 */
-    data class Unknown(val text: String) : VoiceIntent
-}
+/**
+ * 过渡期别名：真正的定义已移到 [io.github.laozhudu.linkplay.protocol.playback.PlayIntent]。
+ *
+ * 为什么用 typealias 而不是一次性改名：`core-protocol` 有 613 个单测压着，
+ * 其中一批直接构造 `PlayIntent.Xxx`。改名会让它们全部失效，
+ * 那样这一轮就变成「改类型 + 改几百个测试」—— **规则逻辑一个字没改，风险却全开了**。
+ *
+ * 别名让两边等价：`PlayIntent.Next` 和 `PlayIntent.Next` 是同一个对象。
+ * S1.3 三入口都接上 dispatch 之后，把这个别名删掉。
+ */
+typealias VoiceIntent = io.github.laozhudu.linkplay.protocol.playback.PlayIntent
 
 /**
  * 中文口语命令词 → [VoiceIntent]。
@@ -121,29 +112,29 @@ object IntentRouter {
 
     fun route(text: String): VoiceIntent {
         val spoken = normalize(text)
-        if (spoken.isBlank()) return VoiceIntent.Unknown(text)
+        if (spoken.isBlank()) return PlayIntent.Unknown(text)
         // 剥前缀之前先留着「带空格」的版本给关键词用：英文歌名里空格是词边界，不能删
         val body = stripPolitePrefixes(spoken)
         val compact = compact(body)
-        if (compact.isEmpty()) return VoiceIntent.Unknown(text)
+        if (compact.isEmpty()) return PlayIntent.Unknown(text)
 
         // 顺序即优先级，理由见类注释里的「几个必须记住的坑」
-        if (TOGGLE_PLAY.any { compact.contains(it) }) return VoiceIntent.TogglePlay
-        if (LOOP_NEXT.any { compact.contains(it) }) return VoiceIntent.LoopNext
-        if (NEXT.any { compact.contains(it) }) return VoiceIntent.Next
-        if (PREVIOUS.any { compact.contains(it) }) return VoiceIntent.Previous
-        if (VOLUME_UP.any { compact.contains(it) }) return VoiceIntent.VolumeUp
-        if (VOLUME_DOWN.any { compact.contains(it) }) return VoiceIntent.VolumeDown
-        if (MUTE.any { compact.contains(it) }) return VoiceIntent.Mute
+        if (TOGGLE_PLAY.any { compact.contains(it) }) return PlayIntent.TogglePlay
+        if (LOOP_NEXT.any { compact.contains(it) }) return PlayIntent.LoopNext
+        if (NEXT.any { compact.contains(it) }) return PlayIntent.Next
+        if (PREVIOUS.any { compact.contains(it) }) return PlayIntent.Previous
+        if (VOLUME_UP.any { compact.contains(it) }) return PlayIntent.VolumeUp
+        if (VOLUME_DOWN.any { compact.contains(it) }) return PlayIntent.VolumeDown
+        if (MUTE.any { compact.contains(it) }) return PlayIntent.Mute
 
         // 搜索必须在 Play 之前：「播放周杰伦」是找歌，不是「按播放键」
-        searchKeyword(body)?.let { return VoiceIntent.Search(it) }
+        searchKeyword(body)?.let { return PlayIntent.Search(it) }
 
-        if (PAUSE.any { compact.contains(it) }) return VoiceIntent.Pause
-        if (STOP.any { compact.contains(it) }) return VoiceIntent.Stop
-        if (playOnly(compact)) return VoiceIntent.Play
+        if (PAUSE.any { compact.contains(it) }) return PlayIntent.Pause
+        if (STOP.any { compact.contains(it) }) return PlayIntent.Stop
+        if (playOnly(compact)) return PlayIntent.Play
 
-        return VoiceIntent.Unknown(text)
+        return PlayIntent.Unknown(text)
     }
 
     /**

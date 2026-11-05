@@ -1,5 +1,6 @@
 package io.github.laozhudu.linkplay.console.playback
 
+import io.github.laozhudu.linkplay.protocol.playback.PlayIntent
 import io.github.laozhudu.linkplay.protocol.voice.VoiceIntent
 import io.github.laozhudu.linkplay.protocol.voice.IntentRouter
 import io.github.laozhudu.linkplay.console.voice.VoiceController
@@ -195,7 +196,7 @@ fun PlayerScreen(
                 VoiceSourceStatus.routed(
                     intent = voiceIntentName(intent),
                     result = note,
-                    matched = intent !is VoiceIntent.Unknown,
+                    matched = intent !is PlayIntent.Unknown,
                 )
                 voiceNote = note
             },
@@ -847,36 +848,42 @@ private fun CastPanel(
  */
 /** 意图的短名，只给诊断报告看（`Unknown` 这个值本身就能说明"没匹配上"）。 */
 private fun voiceIntentName(intent: VoiceIntent): String = when (intent) {
-    VoiceIntent.Next -> "Next"
-    VoiceIntent.Previous -> "Previous"
-    VoiceIntent.Play -> "Play"
-    VoiceIntent.Pause -> "Pause"
-    VoiceIntent.Stop -> "Stop"
-    VoiceIntent.TogglePlay -> "TogglePlay"
-    VoiceIntent.VolumeUp -> "VolumeUp"
-    VoiceIntent.VolumeDown -> "VolumeDown"
-    VoiceIntent.Mute -> "Mute"
-    VoiceIntent.LoopNext -> "LoopNext"
-    is VoiceIntent.Search -> "Search(「${intent.keyword}」)"
-    is VoiceIntent.Unknown -> "Unknown"
+    PlayIntent.Next -> "Next"
+    PlayIntent.Previous -> "Previous"
+    PlayIntent.Play -> "Play"
+    PlayIntent.Pause -> "Pause"
+    PlayIntent.Stop -> "Stop"
+    PlayIntent.TogglePlay -> "TogglePlay"
+    PlayIntent.VolumeUp -> "VolumeUp"
+    PlayIntent.VolumeDown -> "VolumeDown"
+    PlayIntent.Mute -> "Mute"
+    PlayIntent.LoopNext -> "LoopNext"
+    is PlayIntent.Search -> "Search(「${intent.keyword}」)"
+    is PlayIntent.Unknown -> "Unknown"
+    is PlayIntent.SetVolume -> "SetVolume(${intent.value})"
+    is PlayIntent.SeekTo -> "SeekTo(${intent.seconds})"
     else -> intent.javaClass.simpleName
 }
 
 private fun handleVoiceIntent(intent: VoiceIntent, vm: PlaybackViewModel): String = when (intent) {
-    VoiceIntent.Next -> { vm.next(); "下一首" }
-    VoiceIntent.Previous -> { vm.previous(); "上一首" }
-    VoiceIntent.Play -> { vm.play(); "播放" }
-    VoiceIntent.Pause -> { vm.pause(); "暂停" }
-    VoiceIntent.Stop -> { vm.stop(); "停止" }
-    VoiceIntent.TogglePlay -> {
+    PlayIntent.Next -> { vm.next(); "下一首" }
+    PlayIntent.Previous -> { vm.previous(); "上一首" }
+    PlayIntent.Play -> { vm.play(); "播放" }
+    PlayIntent.Pause -> { vm.pause(); "暂停" }
+    PlayIntent.Stop -> { vm.stop(); "停止" }
+    PlayIntent.TogglePlay -> {
         // 当前状态以设备回报为准，不在本地猜
         if (vm.state.value.state == TransportState.PLAYING) vm.pause() else vm.play()
         "已切换播放状态"
     }
-    VoiceIntent.VolumeUp -> { vm.setVolumeLive((vm.state.value.volume + 5).coerceAtMost(100)); "音量 +5" }
-    VoiceIntent.VolumeDown -> { vm.setVolumeLive((vm.state.value.volume - 5).coerceAtLeast(0)); "音量 -5" }
-    VoiceIntent.Mute -> { vm.toggleMute(); "静音切换" }
-    VoiceIntent.LoopNext -> { vm.cycleLoopMode(); "循环模式：${vm.state.value.loopMode.label}" }
-    is VoiceIntent.Search -> "要找「${intent.keyword}」：去「媒体库 → 在线曲库」搜一下"
-    is VoiceIntent.Unknown -> "没听清（识别为「${intent.text.take(12)}」）"
+    PlayIntent.VolumeUp -> { vm.setVolumeLive((vm.state.value.volume + 5).coerceAtMost(100)); "音量 +5" }
+    PlayIntent.VolumeDown -> { vm.setVolumeLive((vm.state.value.volume - 5).coerceAtLeast(0)); "音量 -5" }
+    PlayIntent.Mute -> { vm.toggleMute(); "静音切换" }
+    PlayIntent.LoopNext -> { vm.cycleLoopMode(); "循环模式：${vm.state.value.loopMode.label}" }
+    is PlayIntent.Search -> "要找「${intent.keyword}」：去「媒体库 → 在线曲库」搜一下"
+    is PlayIntent.Unknown -> "没听清（识别为「${intent.text.take(12)}」）"
+    // S1.1 新增的两个定值意图。语音入口说不出"音量到 40"这种数，所以这里只做回执，
+    // 真正的执行等 S1.2 的唯一执行点（dispatch）—— 那时界面拖条走同一个分支。
+    is PlayIntent.SetVolume -> "定值音量（${intent.value}）还没接上，等统一执行点"
+    is PlayIntent.SeekTo -> "拖进度（${intent.seconds}s）还没接上，等统一执行点"
 }
