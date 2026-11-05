@@ -1,6 +1,7 @@
 package io.github.laozhudu.linkplay.console.playback
 
 import androidx.media3.session.MediaSession
+import kotlinx.coroutines.launch
 import androidx.media3.session.MediaSessionService
 
 /**
@@ -31,13 +32,55 @@ class PlaybackService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
-        val player = runCatching { PlaybackRouter.of(this).local.raw() }.getOrNull()
+        val player = runCatching { currentPlayer() }.getOrNull()
         if (player == null) {
             // 拿不到播放器就不要建空会话 —— 空会话会显示一个点了没反应的控件
             stopSelf()
             return
         }
         session = MediaSession.Builder(this, player).build()
+    }
+
+    /**
+     * 按当前输出选播放器。
+     *
+     * - 「本机」→ 那个唯一的 ExoPlayer；
+     * - 「某台设备」→ [UpnpPlayer]（把命令转发到设备）。
+     *
+     * ⚠️ `MediaSession` 一旦建立**不容易换 player 实例**，所以切输出后要重建 session
+     * （见 [restart]）。这个取舍写在 `docs/90` S2.2 的风险登记里（R-3）。
+     */
+    private fun currentPlayer(): androidx.media3.common.Player? {
+        val router = PlaybackRouter.of(this)
+        return when (router.output()) {
+            PlaybackOutput.Local -> router.local.raw()
+            // 投设备：没有播放页打开过就拿不到设备状态，此时不建会话 ——
+            // 空会话会显示一个点了没反应的控件，比没有更糟
+            is PlaybackOutput.Device -> buildUpnpPlayer()
+        }
+    }
+
+    private fun buildUpnpPlayer(): UpnpPlayer? {
+        val vm = PlaybackViewModels.current ?: return null
+        val scope = kotlinx.coroutines.CoroutineScope(
+            kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main.immediate,
+        )
+        val dispatcher = PlaybackDispatcher(this)
+        return UpnpPlayer(
+            android.os.Looper.getMainLooper(),
+            uiState = { vm.toUiState() },
+            items = { QueueBus.state.value.items },
+            index = { QueueBus.state.value.index },
+            caps = {
+                val ip = QueueBus.owner()
+                if (ip == null) {
+                    io.github.laozhudu.linkplay.protocol.dlna.DeviceCapabilities.LINKPLAY
+                } else {
+                    DeviceProfileCache.capabilitiesOf(ip)
+                }
+            },
+            onIntent = { intent -> scope.launch { dispatcher.dispatch(intent) } },
+        )
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
@@ -56,5 +99,22 @@ class PlaybackService : MediaSessionService() {
         session?.release()
         session = null
         super.onDestroy()
+    }
+
+    companion object {
+        /**
+         * 切输出后重建会话。
+         *
+         * `MediaSession` 建立后**不容易换 player 实例**（`docs/90` S2.2 风险 R-3），
+         * 所以用"停服务再起"这个最笨但最可靠的办法：
+         * 通知栏会闪一下，但不会出现"控件还在、声音没了"。
+         */
+        fun restart(context: android.content.Context) {
+            val intent = android.content.Intent(context, PlaybackService::class.java)
+            runCatching {
+                context.stopService(intent)
+                context.startService(intent)
+            }
+        }
     }
 }

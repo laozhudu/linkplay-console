@@ -335,6 +335,25 @@ class PlaybackViewModel(
         }
     }
 
+    /**
+     * 设备侧状态 → 界面唯一认识的 [PlayerUiState]。
+     *
+     * 给 `UpnpPlayer`（通知栏）和界面共用：两边读同一份真相，
+     * 不会出现"通知栏说在放、播放页说暂停"。
+     */
+    fun toUiState(): io.github.laozhudu.linkplay.console.ui.player.PlayerUiState {
+        val s = _state.value
+        return io.github.laozhudu.linkplay.console.ui.player.PlayerUiState(
+            title = s.title,
+            playing = s.state == TransportState.PLAYING,
+            hasQueue = s.deviceQueueCount > 0,
+            positionMs = s.positionSec * 1000L,
+            durationMs = s.durationSec * 1000L,
+            isLive = s.durationSec <= 0,
+            volume = s.volume,
+        )
+    }
+
     fun setCastUrl(value: String) = _state.update { it.copy(castUrl = value) }
 
     fun setCastNeedsHeaders(v: Boolean) = _state.update { it.copy(castNeedsHeaders = v) }

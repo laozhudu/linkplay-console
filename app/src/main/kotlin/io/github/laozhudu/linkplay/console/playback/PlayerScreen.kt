@@ -976,6 +976,8 @@ private fun OutputSwitchRow() {
             onClick = {
                 router.setOutput(PlaybackOutput.Local)
                 output = PlaybackOutput.Local
+                // 通知栏要跟着换挂的播放器（MediaSession 不能动态换 player）
+                PlaybackService.restart(context)
             },
             label = { Text("本机") },
         )
@@ -987,6 +989,7 @@ private fun OutputSwitchRow() {
                 onClick = {
                     router.setOutput(target)
                     output = target
+                    PlaybackService.restart(context)
                 },
                 label = { Text(device.name.ifBlank { device.ip }) },
             )

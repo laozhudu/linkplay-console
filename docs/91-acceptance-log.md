@@ -549,8 +549,55 @@ Other        连声音都放不了 / 没探全
 
 **S2.2 留到下一轮**，理由如实写在这里。
 
+## 第十八轮 · S2.2 通知栏接音箱（`UpnpPlayer` + MediaSession 换挂）
+
+| 文件 | 动作 |
+|---|---|
+| `playback/UpnpPlayer.kt` | **新建**，`SimpleBasePlayer` 实现（约 190 行） |
+| `playback/PlaybackService.kt` | `currentPlayer()` 按输出换挂 + `restart()` |
+| `playback/PlaybackViewModel.kt` | 加 `toUiState()`（设备态 → 统一态） |
+| `playback/PlayerScreen.kt` | 切输出后 `PlaybackService.restart()` |
+
+### 修的是什么
+
+`MediaSession` 原来直接挂 `ExoPlayer`（本机播放器）。所以**投音箱时通知栏/锁屏/耳机键
+控制的是手机上那个空播放器** —— 全是死的。
+
+### 三个关键实现点
+
+**① 先改状态再发命令**
+官方硬契约：「update the visible state immediately after each method call」。
+等设备回话（真机 30~80ms，断网更久）会让通知栏按钮按下去半天不变，用户重复按三次。
+
+**② 按钮按能力位给**
+电视盒子没有设备侧队列 → 不给"下一首"。给了就是"按钮在那儿、按下去没反应"
+（悬浮窗踩过同一个坑）。
+
+**③ `SimpleBasePlayer` 没有 `handleSeekToNext`**
+编译报 `overrides nothing`。下一首/上一首都走 `handleSeek`，
+用目标索引和当前索引比较来判断方向 —— 实测签名是这样。
+
+### 已知取舍（写进代码注释）
+
+`MediaSession` 建立后**不容易换 player 实例**，所以切输出时用"停服务再起"重建会话。
+通知栏会闪一下，但不会出现"控件还在、声音没了"。
+
+### 验证
+
+```bash
+:app:compileDebugKotlin / assembleDebug / testDebugUnitTest   # 全通过
+```
+
+### 没验（必须真机）
+
+- 投音箱时**通知栏出现媒体控件**，标题/进度正确
+- 通知栏按暂停 → 音箱真的暂停
+- 耳机键能切歌（投音箱时）
+- 本机播放行为不回归
+- 切输出后通知栏**不会卡在旧状态**
+
 ---
 
 ## 下一道
 
-S2.2 通知栏接音箱（`UpnpPlayer` + MediaSession，需整轮）→ U2 首页分组（判据已就绪）
+S2.2 真机验收 → U2 首页分组（判据已就绪）→ S3.1 UseCase
