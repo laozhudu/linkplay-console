@@ -23,4 +23,5 @@ include(
     ":core-radio",
     ":core-lx",
     ":core-script",
+    ":core-upnp",
 )
