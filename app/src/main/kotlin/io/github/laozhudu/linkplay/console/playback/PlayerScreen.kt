@@ -42,11 +42,13 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -187,6 +189,10 @@ fun PlayerScreen(
     var voiceNote by remember { mutableStateOf<String?>(null) }
     var listening by remember { mutableStateOf(false) }
     val voice = remember { VoiceController(appContext) }
+    // 语音入口也走唯一执行点（S1.3）：识别出来的意图和界面按钮按下去必须是同一条路，
+    // 否则迟早出现"按按钮能切歌、说话切不了"这种不一致。
+    val voiceScope = rememberCoroutineScope()
+    val dispatcher = remember { PlaybackDispatcher(appContext) }
     // 页面销毁时必须取消会话，否则 SpeechRecognizer 会继续占着麦克风
     DisposableEffect(Unit) { onDispose { voice.cancel() } }
 
@@ -200,13 +206,15 @@ fun PlayerScreen(
                 // 只记最后那句提示的话，"没匹配到意图"和"执行失败"就分不开了
                 VoiceSourceStatus.heard(text)
                 val intent = IntentRouter.route(text)
-                val note = handleVoiceIntent(intent, vm)
-                VoiceSourceStatus.routed(
-                    intent = voiceIntentName(intent),
-                    result = note,
-                    matched = intent !is PlayIntent.Unknown,
-                )
-                voiceNote = note
+                voiceScope.launch {
+                    val note = handleVoiceIntent(intent, dispatcher)
+                    VoiceSourceStatus.routed(
+                        intent = voiceIntentName(intent),
+                        result = note,
+                        matched = intent !is PlayIntent.Unknown,
+                    )
+                    voiceNote = note
+                }
             },
             onError = { msg ->
                 listening = false
@@ -879,28 +887,31 @@ private fun voiceIntentName(intent: VoiceIntent): String = when (intent) {
     else -> intent.javaClass.simpleName
 }
 
-private fun handleVoiceIntent(intent: VoiceIntent, vm: PlaybackViewModel): String = when (intent) {
-    PlayIntent.Next -> { vm.next(); "下一首" }
-    PlayIntent.Previous -> { vm.previous(); "上一首" }
-    PlayIntent.Play -> { vm.play(); "播放" }
-    PlayIntent.Pause -> { vm.pause(); "暂停" }
-    PlayIntent.Stop -> { vm.stop(); "停止" }
-    PlayIntent.TogglePlay -> {
-        // 当前状态以设备回报为准，不在本地猜
-        if (vm.state.value.state == TransportState.PLAYING) vm.pause() else vm.play()
-        "已切换播放状态"
-    }
-    PlayIntent.VolumeUp -> { vm.setVolumeLive((vm.state.value.volume + 5).coerceAtMost(100)); "音量 +5" }
-    PlayIntent.VolumeDown -> { vm.setVolumeLive((vm.state.value.volume - 5).coerceAtLeast(0)); "音量 -5" }
-    PlayIntent.Mute -> { vm.toggleMute(); "静音切换" }
-    PlayIntent.LoopNext -> { vm.cycleLoopMode(); "循环模式：${vm.state.value.loopMode.label}" }
+/**
+ * 语音意图的执行。
+ *
+ * 走 [PlaybackDispatcher] 而不是直接 `vm.xxx()` —— 和界面按钮、悬浮窗同一条路。
+ * 回执文案保留原来那套（用户看到的提示不变），只是执行通道换成了唯一入口。
+ */
+private suspend fun handleVoiceIntent(intent: PlayIntent, dispatcher: PlaybackDispatcher): String = when (intent) {
+    PlayIntent.Next -> if (dispatcher.dispatch(intent)) "下一首" else UNSUPPORTED
+    PlayIntent.Previous -> if (dispatcher.dispatch(intent)) "上一首" else UNSUPPORTED
+    PlayIntent.Play -> if (dispatcher.dispatch(intent)) "播放" else UNSUPPORTED
+    PlayIntent.Pause -> if (dispatcher.dispatch(intent)) "暂停" else UNSUPPORTED
+    PlayIntent.Stop -> if (dispatcher.dispatch(intent)) "停止" else UNSUPPORTED
+    PlayIntent.TogglePlay -> if (dispatcher.dispatch(intent)) "已切换播放状态" else UNSUPPORTED
+    PlayIntent.VolumeUp -> if (dispatcher.dispatch(intent)) "音量 +5" else UNSUPPORTED
+    PlayIntent.VolumeDown -> if (dispatcher.dispatch(intent)) "音量 -5" else UNSUPPORTED
+    PlayIntent.Mute -> if (dispatcher.dispatch(intent)) "静音切换" else UNSUPPORTED
+    PlayIntent.LoopNext -> if (dispatcher.dispatch(intent)) "已切循环模式" else UNSUPPORTED
+    is PlayIntent.SetVolume -> if (dispatcher.dispatch(intent)) "音量 ${intent.value}" else UNSUPPORTED
+    is PlayIntent.SeekTo -> if (dispatcher.dispatch(intent)) "跳到 ${intent.seconds}s" else UNSUPPORTED
     is PlayIntent.Search -> "要找「${intent.keyword}」：去「媒体库 → 在线曲库」搜一下"
     is PlayIntent.Unknown -> "没听清（识别为「${intent.text.take(12)}」）"
-    // S1.1 新增的两个定值意图。语音入口说不出"音量到 40"这种数，所以这里只做回执，
-    // 真正的执行等 S1.2 的唯一执行点（dispatch）—— 那时界面拖条走同一个分支。
-    is PlayIntent.SetVolume -> "定值音量（${intent.value}）还没接上，等统一执行点"
-    is PlayIntent.SeekTo -> "拖进度（${intent.seconds}s）还没接上，等统一执行点"
 }
+
+/** 设备做不到这件事时的统一回执。语音说不出"这台设备没这个能力"，但界面得说清。 */
+private const val UNSUPPORTED = "这台设备做不到这个操作"
 
 /**
  * 「从哪出声」——**一个输出口对应一台设备**。
