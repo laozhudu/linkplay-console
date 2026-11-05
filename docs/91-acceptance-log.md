@@ -309,8 +309,66 @@ grep -rn 'setOutput(' app/src/main          # 只剩 PlayerScreen + PlaybackRout
 - 切「音箱」→ 从音箱出，**两边不一起响**
 - 洛雪页确实不再有那个开关
 
+## 第十轮 · S1.4 输出开关搬回播放页（**用户可感**）
+
+| 文件 | 动作 |
+|---|---|
+| `PlayerScreen.kt` | 顶栏下加 `OutputSwitchRow()`（内联一行，**不浮层**，docs/37） |
+| `LxSearchScreen.kt` | 删掉那组 chip（948 字符） |
+| `scripts/check-output-switch.py` | warn → **error** |
+
+```bash
+python3 scripts/check-output-switch.py   # 通过
+grep -rn 'setOutput(' app/src/main        # 只剩 PlayerScreen + PlaybackRouter
+```
+
+**没验**：真机（封面是否被挤变形 / 六个源本机播 / 两边不一起响）。
+
+## 第十一轮 · 输出口改成「本机 + 每台设备一个」（用户纠正）
+
+**用户原话**：「我要一个设备一个输出口，即多少设备就多少输出口，这个说了很多次」。
+
+原来 `enum class PlaybackOutput { Remote, Local }` —— 两个值。家里 4 台设备，
+「投给谁」由**上一个页面选中的设备**隐式决定，用户在这里的显式选择被覆盖。
+
+现在：
+
+```kotlin
+sealed interface PlaybackOutput {
+    data object Local
+    data class Device(val ip: String, val label: String = ip)
+}
+```
+
+存储 `local` / `device:<ip>`；老数据 `remote` → `Device("")` = 跟随当前设备（**绝不回退本机**，否则手机突然外放）。
+
+`PlaybackRouter.outputIp()`：**播放页选的设备覆盖调用方传的 ip** —— 这是行为实质改变。
+
+```bash
+./gradlew :app:assembleDebug                 # 通过
+./gradlew :app:testDebugUnitTest             # 通过（输出选择测试 3 → 5 用例）
+```
+
+**没验**：真机（chip 数量 / 切到某台是否真去那台）。
+
+**我的失职**：`docs/86`/`docs/90` 写的是"本机/音箱"两个口，我照着做，**没有回到用户原话核一遍**。
+那两张图不是用户写的。
+
+## 第十二轮 · UI 待办入档（用户要求「不许忘」）
+
+用户 2026-11-05 指出三件事，明确「允许延后，不允许遗忘」：
+
+| # | 待办 | 状态 |
+|---|---|---|
+| U1 | 底部导航重排（现在四项已不成立） | 待做，前置：S1–S3 完成 |
+| U2 | 首页设备按类型隔离（DOSS 与通用 UPnP 混在一起） | 待做，前置：S2.3 能力位 |
+| U3 | 红外 / 蓝牙 / WiFi 遥控的 UI 入口 | 待做，前置：功能可用 |
+
+**载体**：`docs/92-ui-restructure-backlog.md`（含判据与前置条件）+ `docs/90` 第 9 章引用
++ `Nav.kt` 的 `Tab` 枚举锚点注释。**每轮汇报都会提到，做完一项划一项。**
+
 ---
 
 ## 下一道
 
-S1.3 剩余两入口（界面按钮 / 语音）→ S2.1 统一播放状态（本机播放有进度/音量）
+S1.3 剩余两入口（界面按钮 / 语音）→ S2.1 统一播放状态 → **U1/U2/U3 见 `docs/92`**
