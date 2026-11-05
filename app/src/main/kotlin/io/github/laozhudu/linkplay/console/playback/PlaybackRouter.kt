@@ -9,13 +9,30 @@ import kotlinx.coroutines.flow.StateFlow
 import java.io.File
 
 /** 声音从哪出来。 */
-enum class PlaybackOutput {
-    /** 投到音箱（UPnP / httpapi，现在的主力路径）。 */
-    Remote,
+sealed interface PlaybackOutput {
 
     /** 手机上直接放（Media3 ExoPlayer）。 */
-    Local,
+    data object Local : PlaybackOutput
+
+    /**
+     * 投到**某一台**设备。
+     *
+     * ## 为什么不是「本机 / 音箱」两个
+     *
+     * 家里有三台 DOSS + 一台电视盒子。原来只有 `Remote` 一个值，
+     * 于是"投给谁"完全由**上一个页面选中的设备**决定 —— 用户在播放页切了输出口，
+     * 却不知道该投给哪台，而列表页里选中的那台才真正生效。
+     *
+     * 现在每台设备一个输出口：`Device("192.168.99.153", "doss3")`。
+     *
+     * `ip` 为空表示「跟随当前选中的设备」（老数据 `remote` 也映射到这里），
+     * 这样升级前存的偏好不会丢，行为也和以前一致。
+     */
+    data class Device(val ip: String, val label: String = ip) : PlaybackOutput
 }
+
+/** 还没指定具体设备时跟随当前设备。 */
+val PlaybackOutput_follow = PlaybackOutput.Device("")
 
 /**
  * 输出选择的持久化。
@@ -27,9 +44,27 @@ object PlaybackOutputStore {
 
     private const val FILE = "playback-output.txt"
 
-    /** 纯函数，可单测：读到的文本 → 输出目标。**认不出来的值一律回退 Remote**。 */
-    fun parse(raw: String?): PlaybackOutput =
-        if (raw?.trim()?.equals("local", ignoreCase = true) == true) PlaybackOutput.Local else PlaybackOutput.Remote
+    /**
+     * 纯函数，可单测：读到的文本 → 输出目标。
+     *
+     * 认不出来的值一律回退「跟随当前设备」（= 老版本的 `remote`）——
+     * **不能回退到本机**：那会让手机突然外放。
+     */
+    fun parse(raw: String?): PlaybackOutput {
+        val v = raw?.trim().orEmpty()
+        if (v.equals("local", ignoreCase = true)) return PlaybackOutput.Local
+        if (v.startsWith("device:", ignoreCase = true)) {
+            val ip = v.substringAfter(':').trim()
+            if (ip.isNotEmpty()) return PlaybackOutput.Device(ip)
+        }
+        return PlaybackOutput_follow
+    }
+
+    /** [parse] 的反向。老值 `remote` 仍然写出来，回滚到旧版本时不会变成"本机"。 */
+    fun format(output: PlaybackOutput): String = when (output) {
+        PlaybackOutput.Local -> "local"
+        is PlaybackOutput.Device -> if (output.ip.isEmpty()) "remote" else "device:${output.ip}"
+    }
 
     fun read(context: Context): PlaybackOutput =
         runCatching { File(context.applicationContext.filesDir, FILE).readText() }
@@ -37,9 +72,7 @@ object PlaybackOutputStore {
             .let { parse(it) }
 
     fun write(context: Context, output: PlaybackOutput): Boolean = runCatching {
-        File(context.applicationContext.filesDir, FILE).writeText(
-            if (output == PlaybackOutput.Local) "local" else "remote",
-        )
+        File(context.applicationContext.filesDir, FILE).writeText(format(output))
         true
     }.getOrDefault(false)
 }
@@ -69,6 +102,14 @@ class PlaybackRouter(
 
     fun output(): PlaybackOutput = PlaybackOutputStore.read(app)
 
+    /**
+     * 用户指定的目标设备地址；`null` = 跟随调用方给的那台，或在播放页选了「本机」。
+     *
+     * 为什么单独一个：调用方（NAS 页 / 曲库页）总会带一个 `deviceIp`（它们眼里"选中设备"就是目标），
+     * 而播放页的输出口是**用户显式选的**。显式选择优先 —— 否则"我选了 doss1，声音却去了 doss3"。
+     */
+    fun outputIp(): String? = (output() as? PlaybackOutput.Device)?.ip?.takeIf { it.isNotEmpty() }
+
     fun setOutput(output: PlaybackOutput): Boolean = PlaybackOutputStore.write(app, output)
 
     /**
@@ -91,9 +132,9 @@ class PlaybackRouter(
                 local.play(url, title)
                 true
             }
-            PlaybackOutput.Remote -> startQueueOnDevice(
+            is PlaybackOutput.Device -> startQueueOnDevice(
                 context = app,
-                deviceIp = deviceIp,
+                deviceIp = outputIp() ?: deviceIp,
                 location = location,
                 deviceUuid = deviceUuid,
                 items = listOf(QueueItem(url = url, title = title ?: url)),
@@ -132,9 +173,9 @@ class PlaybackRouter(
                 log("本机播放：只播这一首（本地列表暂不支持） —— ${item.title}")
                 true
             }
-            PlaybackOutput.Remote -> startQueueOnDevice(
+            is PlaybackOutput.Device -> startQueueOnDevice(
                 context = app,
-                deviceIp = deviceIp,
+                deviceIp = outputIp() ?: deviceIp,
                 location = location,
                 deviceUuid = deviceUuid,
                 items = items,

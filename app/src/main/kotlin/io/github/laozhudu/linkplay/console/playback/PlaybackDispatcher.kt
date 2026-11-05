@@ -66,11 +66,11 @@ class PlaybackDispatcher(
     fun can(intent: PlayIntent): Boolean = when (intent) {
         PlayIntent.Next, PlayIntent.Previous -> when (router.output()) {
             PlaybackOutput.Local -> true
-            PlaybackOutput.Remote -> caps().supportsNextPrev
+            is PlaybackOutput.Device -> caps().supportsNextPrev
         }
         is PlayIntent.SeekTo -> when (router.output()) {
             PlaybackOutput.Local -> true
-            PlaybackOutput.Remote -> caps().supportsSeek
+            is PlaybackOutput.Device -> caps().supportsSeek
         }
         is PlayIntent.SetVolume, PlayIntent.VolumeUp, PlayIntent.VolumeDown ->
             router.output() == PlaybackOutput.Local || caps().supportsVolume
@@ -93,7 +93,7 @@ class PlaybackDispatcher(
         val target = vm() ?: return false
         return when (router.output()) {
             PlaybackOutput.Local -> { router.local.raw().seekToNextMediaItem(); true }
-            PlaybackOutput.Remote -> caps().supportsNextPrev.also { if (it) target.next() }
+            is PlaybackOutput.Device -> caps().supportsNextPrev.also { if (it) target.next() }
         }
     }
 
@@ -101,7 +101,7 @@ class PlaybackDispatcher(
         val target = vm() ?: return false
         return when (router.output()) {
             PlaybackOutput.Local -> { router.local.raw().seekToPreviousMediaItem(); true }
-            PlaybackOutput.Remote -> caps().supportsNextPrev.also { if (it) target.previous() }
+            is PlaybackOutput.Device -> caps().supportsNextPrev.also { if (it) target.previous() }
         }
     }
 
@@ -109,7 +109,7 @@ class PlaybackDispatcher(
         val target = vm() ?: return false
         return when (router.output()) {
             PlaybackOutput.Local -> { router.startLocalService(); router.local.raw().play(); true }
-            PlaybackOutput.Remote -> { target.play(); true }
+            is PlaybackOutput.Device -> { target.play(); true }
         }
     }
 
@@ -117,7 +117,7 @@ class PlaybackDispatcher(
         val target = vm() ?: return false
         return when (router.output()) {
             PlaybackOutput.Local -> { router.local.raw().pause(); true }
-            PlaybackOutput.Remote -> { target.pause(); true }
+            is PlaybackOutput.Device -> { target.pause(); true }
         }
     }
 
@@ -125,7 +125,7 @@ class PlaybackDispatcher(
         val target = vm() ?: return false
         return when (router.output()) {
             PlaybackOutput.Local -> { router.local.raw().stop(); true }
-            PlaybackOutput.Remote -> { target.stop(); true }
+            is PlaybackOutput.Device -> { target.stop(); true }
         }
     }
 
@@ -148,7 +148,7 @@ class PlaybackDispatcher(
                 player.volume = ((current + delta).coerceIn(0, 100)) / 100f
                 true
             }
-            PlaybackOutput.Remote -> {
+            is PlaybackOutput.Device -> {
                 if (!caps().supportsVolume) return false
                 target.setVolumeLive((target.state.value.volume + delta).coerceIn(0, 100))
                 true
@@ -160,7 +160,7 @@ class PlaybackDispatcher(
         val target = vm() ?: return false
         return when (router.output()) {
             PlaybackOutput.Local -> { router.local.raw().volume = value.coerceIn(0, 100) / 100f; true }
-            PlaybackOutput.Remote -> {
+            is PlaybackOutput.Device -> {
                 if (!caps().supportsVolume) return false
                 target.setVolumeLive(value.coerceIn(0, 100))
                 true
@@ -173,7 +173,7 @@ class PlaybackDispatcher(
         return when (router.output()) {
             // 本机侧用毫秒；设备侧协议就是秒（见 PlaybackViewModel.seekTo 的参数）
             PlaybackOutput.Local -> { router.local.raw().seekTo(seconds * 1000L); true }
-            PlaybackOutput.Remote -> {
+            is PlaybackOutput.Device -> {
                 if (!caps().supportsSeek) return false
                 target.seekTo(seconds)
                 true
@@ -185,7 +185,7 @@ class PlaybackDispatcher(
         val target = vm() ?: return false
         return when (router.output()) {
             PlaybackOutput.Local -> { router.local.raw().volume = 0f; true }
-            PlaybackOutput.Remote -> {
+            is PlaybackOutput.Device -> {
                 if (!caps().supportsMute) return false
                 target.toggleMute()
                 true
@@ -195,7 +195,7 @@ class PlaybackDispatcher(
 
     private suspend fun loopNext(): Boolean {
         // 循环模式只有设备侧有（本机侧 ExoPlayer 的 repeatMode 不在本轮范围）
-        if (router.output() != PlaybackOutput.Remote) return false
+        if (router.output() != PlaybackOutput.Device("")) return false
         val target = vm() ?: return false
         target.cycleLoopMode()
         return true
