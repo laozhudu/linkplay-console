@@ -903,10 +903,16 @@ private fun handleVoiceIntent(intent: VoiceIntent, vm: PlaybackViewModel): Strin
 }
 
 /**
- * 「从哪出声」选择。
+ * 「从哪出声」——**一个输出口对应一台设备**。
  *
- * 为什么单独抽一个：它要读的是 `PlaybackRouter` 的输出（全站唯一真相），
- * 而不是 `PlaybackViewModel` 的状态 —— 后者是"当前设备"的，本机播放时它根本没意义。
+ * ## 为什么不是「本机 / 音箱」两个
+ *
+ * 家里三台 DOSS + 一台电视盒子。只有两个值时，「投给谁」实际由**上一个页面选中的设备**决定，
+ * 用户在这里切了输出口却不知道该投给哪台 —— 显式选择被隐式状态覆盖，这是最难查的那种不一致。
+ *
+ * 现在：本机 + 每一台已保存的设备，各一个按钮。
+ *
+ * ⚠️ **内联一行、横向滚动**，不能用浮层（`docs/37`：播放页不许有任何浮层）。
  */
 @Composable
 private fun OutputSwitchRow() {
@@ -915,10 +921,17 @@ private fun OutputSwitchRow() {
     var output by androidx.compose.runtime.remember {
         androidx.compose.runtime.mutableStateOf(router.output())
     }
+    // 每次进页面读一次：设备列表只在增删设备时变，不值得轮询
+    val devices = androidx.compose.runtime.remember {
+        runCatching { io.github.laozhudu.linkplay.console.session.SessionStore.of(context).savedDevices() }
+            .getOrDefault(emptyList())
+    }
+
     androidx.compose.foundation.layout.Row(
         modifier = androidx.compose.ui.Modifier
             .fillMaxWidth()
-            .padding(top = Spacing.xs, bottom = Spacing.xs),
+            .padding(top = Spacing.xs, bottom = Spacing.xs)
+            .horizontalScroll(rememberScrollState()),
         horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(Spacing.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -928,20 +941,24 @@ private fun OutputSwitchRow() {
             color = OnDarkPalette.text.copy(alpha = 0.7f),
         )
         androidx.compose.material3.FilterChip(
-            selected = output == PlaybackOutput.Local,
+            selected = output is PlaybackOutput.Local,
             onClick = {
                 router.setOutput(PlaybackOutput.Local)
                 output = PlaybackOutput.Local
             },
             label = { Text("本机") },
         )
-        androidx.compose.material3.FilterChip(
-            selected = output == PlaybackOutput.Remote,
-            onClick = {
-                router.setOutput(PlaybackOutput.Remote)
-                output = PlaybackOutput.Remote
-            },
-            label = { Text("音箱") },
-        )
+        devices.forEach { device ->
+            val target = PlaybackOutput.Device(device.ip, device.name)
+            androidx.compose.material3.FilterChip(
+                selected = output is PlaybackOutput.Device &&
+                    (output as PlaybackOutput.Device).ip == device.ip,
+                onClick = {
+                    router.setOutput(target)
+                    output = target
+                },
+                label = { Text(device.name.ifBlank { device.ip }) },
+            )
+        }
     }
 }
