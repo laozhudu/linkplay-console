@@ -53,6 +53,7 @@ object DevicePlaylistGateway {
      *
      * @return [PushResult.ok] 只有设备真的接受了列表（随后 `BrowseQueue` 能读回同样条数）才为 true
      */
+    @io.github.laozhudu.linkplay.console.playback.guards.SingleEntryPoint
     suspend fun push(
         ip: String,
         location: String?,
