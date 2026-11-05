@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
@@ -20,7 +21,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -29,48 +29,33 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
-import io.github.laozhudu.linkplay.console.ui.components.AppCard
 import io.github.laozhudu.linkplay.console.ui.components.AppShapesExpressive
 import io.github.laozhudu.linkplay.console.ui.components.PillTag
-import io.github.laozhudu.linkplay.console.ui.components.SectionTitle
 import io.github.laozhudu.linkplay.console.ui.components.VSpace
+import io.github.laozhudu.linkplay.console.ui.skeleton.AppListRow
+import io.github.laozhudu.linkplay.console.ui.skeleton.AppPage
+import io.github.laozhudu.linkplay.console.ui.skeleton.AppSearchField
+import io.github.laozhudu.linkplay.console.ui.skeleton.AppStateCard
+import io.github.laozhudu.linkplay.console.ui.skeleton.RowBadge
+import io.github.laozhudu.linkplay.console.ui.skeleton.StateKind
 import io.github.laozhudu.linkplay.console.ui.theme.Spacing
 import io.github.laozhudu.linkplay.console.ui.theme.StatusColors
 import io.github.laozhudu.linkplay.protocol.radio.RadioStation
 import io.github.laozhudu.linkplay.protocol.radio.VerifiedRadioCatalog
 import io.github.laozhudu.linkplay.radio.playbackHint
-import io.github.laozhudu.radiodiscovery.model.RadioStation as DiscoveryStation
 
 /**
- * 网络电台 —— **和洛雪音乐同一个模子**：搜索框 + 一排切换 + 列表，点一行就响。
+ * 网络电台 —— 与洛雪音乐同一个骨架（[AppPage] + [AppSearchField] + [AppListRow]）。
  *
- * ## 为什么改成这个样子
+ * 原来「我的电台 / 内置可添加 / 发现对话框」三块并排，想听一个台得先想清楚它属于哪一块；
+ * 现在只有一条路：上面搜（空着就是热门），下面点。
  *
- * 原来是"我的电台 + 内置可添加 + 发现对话框"三块并排，想听一个台要先想清楚
- * "它是在我的收藏里，还是得先去发现里找"。同一件事（找一个台听）被拆成三条路。
- *
- * 现在只有一条：上面搜，下面点。收藏和发现只是**同一个列表的两种来源**，
- * 用一排 chip 切，位置不变、手势不变。
- *
- * ## 点一行会发生什么
- *
- * - 「我的电台」里：直接播（已经存过）。
- * - 「热门 / 搜索结果」里：**存进收藏 + 立即播**。不会先说"已加入收藏，请再点一次" ——
- *   用户点了就是要听，收藏顺带完成。
- *
- * ## 空态分开（不给假空态）
- *
- * 没收藏 / 正在查 / 连不上目录 / 查到 0 条，四句话各不相同。
+ * 点一行：收藏里直接播；热门/搜索结果里**存进收藏并立即播**。
  */
 @Composable
 fun RadioScreen(
@@ -90,51 +75,39 @@ fun RadioScreen(
     var showingDiscover by remember { mutableStateOf(false) }
     var showAdd by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<RadioStation?>(null) }
-    val focus = remember { FocusRequester() }
 
-    // 进页面就能打字：少一次"点一下输入框"
-    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = Spacing.lg),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.sm),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            TextButton(onClick = onBack) { Text("← 返回") }
-            Text("网络电台", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-            if (state.busy) {
-                PillTag(text = "连接中", color = MaterialTheme.colorScheme.secondary)
+    AppPage(
+        title = "网络电台",
+        subtitle = when {
+            state.busy -> "正在连接…"
+            state.playingUrl == null -> deviceLabel ?: deviceIp
+            else -> "正在播放"
+        },
+        onBack = onBack,
+        trailing = {
+            if (state.playingUrl != null && !state.busy) {
+                PillTag(text = "播放中", color = StatusColors.ok)
                 Spacer(Modifier.width(Spacing.xs))
             }
             TextButton(onClick = { showAdd = true }) { Text("添加") }
-        }
-
-        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = keyword,
-                onValueChange = { keyword = it },
-                modifier = Modifier.weight(1f).focusRequester(focus),
-                singleLine = true,
-                placeholder = { Text("台名，空着就是热门") },
-            )
-            TextButton(
-                onClick = {
-                    vm.discover(keyword)
-                    showingDiscover = true
-                },
-                enabled = !state.discovering,
-            ) { Text("搜索") }
-        }
+        },
+    ) {
+        AppSearchField(
+            value = keyword,
+            onValueChange = { keyword = it },
+            placeholder = "台名，空着就是热门",
+            onSubmit = {
+                vm.discover(keyword)
+                showingDiscover = true
+            },
+            enabled = !state.discovering,
+        )
 
         Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
             FilterChip(
                 selected = !showingDiscover,
                 onClick = { showingDiscover = false; vm.clearError() },
-                label = { Text("我的电台${if (state.stations.isNotEmpty()) " ${state.stations.size}" else ""}") },
+                label = { Text("我的电台" + if (state.stations.isNotEmpty()) " ${state.stations.size}" else "") },
             )
             FilterChip(
                 selected = showingDiscover,
@@ -150,99 +123,53 @@ fun RadioScreen(
         VSpace(Spacing.xs)
 
         val error = state.error
-        val note = state.note
         when {
-            // 发现模式下先看"正在查"，否则用户以为按钮没反应
-            showingDiscover && state.discovering -> AppCard {
-                Text("正在查目录…", style = MaterialTheme.typography.bodyMedium)
-            }
-            showingDiscover && state.discoverError != null -> AppCard {
-                SectionTitle("连不上目录", "网络或目录服务的问题，不是你搜错了")
-                Text(
-                    state.discoverError!!,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-            error != null -> AppCard {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        SectionTitle("没成功", "原因原样给你，不猜")
-                        Text(error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                    }
-                    TextButton(onClick = { vm.clearError() }) { Text("知道了") }
-                }
-            }
-            note != null -> AppCard { Text(note, style = MaterialTheme.typography.bodyMedium) }
-            // 下面两个是"真的空"，但空的原因不同
-            showingDiscover && state.discoverResults.isEmpty() && state.discoverQuery.isNotBlank() -> AppCard {
-                SectionTitle("没搜到「${state.discoverQuery}」", "换个名字试试，或点「热门」")
-            }
-            showingDiscover && state.discoverResults.isEmpty() -> AppCard {
-                SectionTitle("热门还没取回来", "点一下「热门」，或直接搜台名")
-            }
-            state.stations.isEmpty() -> AppCard {
-                SectionTitle("还没有电台", "搜一个加进来，或点右上「添加」粘流地址")
-            }
+            showingDiscover && state.discovering -> AppStateCard(StateKind.Busy, "正在查目录…")
+            showingDiscover && state.discoverError != null -> AppStateCard(
+                kind = StateKind.Error,
+                title = "连不上目录",
+                hint = "网络或目录服务的问题，不是你搜错了",
+                detail = state.discoverError,
+                onDismiss = { vm.clearError() },
+            )
+            error != null -> AppStateCard(StateKind.Error, "没成功", detail = error, onDismiss = { vm.clearError() })
+            state.note != null -> AppStateCard(StateKind.Hint, state.note!!)
+            showingDiscover && state.discoverResults.isEmpty() && state.discoverQuery.isNotBlank() ->
+                AppStateCard(StateKind.Empty, "没搜到「${state.discoverQuery}」", hint = "换个名字试试，或点「热门」")
+            showingDiscover && state.discoverResults.isEmpty() ->
+                AppStateCard(StateKind.Empty, "热门还没取回来", hint = "点一下「热门」，或直接搜台名")
+            state.stations.isEmpty() ->
+                AppStateCard(StateKind.Empty, "还没有电台", hint = "搜一个加进来，或点右上「添加」粘流地址")
         }
 
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             if (showingDiscover) {
                 items(state.discoverResults) { station ->
-                    // 整行可点：点一下就存进收藏并且立刻播
-                    AppCard(onClick = { if (!state.busy) vm.playDiscovered(station) }) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    station.name,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                Text(
-                                    listOfNotNull(
-                                        station.country?.takeIf { it.isNotBlank() },
-                                        station.codec?.takeIf { it.isNotBlank() },
-                                        // HLS 只有约 37% 能播 —— 按格式提示，不做网络探测
-                                        station.playbackHint(),
-                                    ).joinToString(" · "),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                            Text(
-                                if (state.busy) "…" else "▶",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.primary,
-                            )
-                        }
-                    }
+                    AppListRow(
+                        title = station.name,
+                        subtitle = listOfNotNull(
+                            station.country?.takeIf { it.isNotBlank() },
+                            station.codec?.takeIf { it.isNotBlank() },
+                            // HLS 只有约 37% 能播 —— 按格式提示，不做网络探测
+                            station.playbackHint(),
+                        ).joinToString(" · "),
+                        badge = if (state.busy) RowBadge.Loading else RowBadge.Arrow,
+                        onClick = { if (!state.busy) vm.playDiscovered(station) },
+                    )
                 }
             } else {
                 items(state.stations) { station ->
                     val playing = state.playingUrl != null && state.playingUrl == station.url
-                    AppCard(onClick = { if (!state.busy && !playing) vm.play(station) }) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    station.name,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                Text(
-                                    if (playing) "正在播放" else station.url,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = if (playing) StatusColors.ok else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
+                    AppListRow(
+                        title = station.name,
+                        subtitle = if (playing) "正在播放" else station.url,
+                        badge = if (playing) RowBadge.Playing else RowBadge.None,
+                        subtitleColor = if (playing) StatusColors.ok else null,
+                        onClick = { if (!state.busy && !playing) vm.play(station) },
+                        trailing = {
                             TextButton(onClick = { pendingDelete = station }) { Text("删除") }
-                        }
-                    }
+                        },
+                    )
                 }
             }
         }
@@ -253,7 +180,7 @@ fun RadioScreen(
             onDismiss = { showAdd = false },
             onAdd = { name, url ->
                 vm.add(name, url)
-                // 粘了地址就是为了听：跟"点一行即播"保持一致，不要多按一次播放
+                // 粘了地址就是为了听：跟"点一行即播"保持一致
                 vm.playUrl(url, name)
                 showAdd = false
                 showingDiscover = false

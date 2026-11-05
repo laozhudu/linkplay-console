@@ -24,6 +24,7 @@ import io.github.laozhudu.linkplay.console.playback.QueueBus
 import io.github.laozhudu.linkplay.console.playback.QueueRunState
 import io.github.laozhudu.linkplay.console.ui.components.AppShapesExpressive
 import io.github.laozhudu.linkplay.console.ui.components.CircleIcon
+import io.github.laozhudu.linkplay.console.ui.player.PlayerUiState
 import io.github.laozhudu.linkplay.console.ui.theme.Spacing
 
 /**
@@ -46,6 +47,13 @@ internal fun MiniPlayerBar(
     playing: Boolean = false,
     onToggle: () -> Unit = {},
 ) {
+    // 界面只认 PlayerUiState：将来接本机播放器（Media3）时，换掉的是这里的来源，
+    // 调用方和这个组件的其余部分都不用动。
+    val ui = PlayerUiState.fromRemote(
+        nowPlaying = queue.nowPlaying,
+        running = queue.total > 0,
+        playing = playing,
+    )
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -71,7 +79,7 @@ internal fun MiniPlayerBar(
         Spacer(Modifier.width(Spacing.sm))
         Column(Modifier.weight(1f)) {
             Text(
-                queue.nowPlaying ?: "未在播放",
+                ui.title ?: "未在播放",
                 style = MaterialTheme.typography.titleMedium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -85,7 +93,7 @@ internal fun MiniPlayerBar(
         }
         // 播放/暂停：与首页「全部播放」配套，不用为了停一下再进播放页
         CircleIcon(onClick = onToggle, size = 40.dp) {
-            if (playing) {
+            if (ui.playing) {
                 Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
                     Box(Modifier.size(4.dp, 14.dp).background(MaterialTheme.colorScheme.onSurface))
                     Box(Modifier.size(4.dp, 14.dp).background(MaterialTheme.colorScheme.onSurface))
