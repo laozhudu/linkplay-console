@@ -1,0 +1,284 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-font-smoothing:antialiased}
+body{background:#DFDFE4;font-family:-apple-system,"SF Pro Text","Helvetica Neue","PingFang SC",sans-serif;
+     display:flex;gap:26px;padding:28px;align-items:flex-start}
+.phone{width:390px;height:844px;border-radius:44px;overflow:hidden;position:relative;
+       background:#F2F2F7;box-shadow:0 12px 40px rgba(0,0,0,.18);flex:none}
+.dark{background:#000}
+.status{height:50px;display:flex;align-items:center;justify-content:space-between;
+        padding:0 26px;font-size:14px;font-weight:600;color:#1C1C1E}
+.dark .status{color:#fff}
+.body{padding:0 16px}
+h1{font-size:34px;font-weight:700;letter-spacing:.3px;color:#1C1C1E;padding:6px 2px 12px}
+.dark h1{color:#fff}
+.gtitle{font-size:13px;color:rgba(60,60,67,.6);letter-spacing:.4px;padding:20px 2px 7px}
+.dark .gtitle{color:rgba(255,255,255,.45)}
+.group{background:#fff;border-radius:12px;overflow:hidden}
+.dark .group{background:#1C1C1E}
+.row{display:flex;align-items:center;min-height:56px;padding:0 14px;position:relative}
+.row+.row::before{content:"";position:absolute;left:14px;right:0;top:0;height:.5px;background:rgba(60,60,67,.16)}
+.dark .row+.row::before{background:rgba(255,255,255,.12)}
+.dot{width:9px;height:9px;border-radius:50%;margin-right:10px;flex:none}
+.on{background:#34C759}.off{background:rgba(60,60,67,.25)}
+.nm{font-size:17px;color:#1C1C1E;width:76px;flex:none}
+.dark .nm{color:#fff}
+.st{font-size:13px;color:rgba(60,60,67,.6);flex:1;white-space:nowrap;overflow:hidden;
+    text-overflow:ellipsis;padding-right:8px}
+.dark .st{color:rgba(255,255,255,.5)}
+.sl{width:54px;height:4px;border-radius:2px;background:rgba(60,60,67,.2);position:relative;flex:none;
+    margin-right:8px}
+.sl i{position:absolute;left:0;top:0;bottom:0;border-radius:2px;background:#007AFF}
+.sl b{position:absolute;top:-5px;width:14px;height:14px;border-radius:50%;background:#fff;
+      box-shadow:0 1px 4px rgba(0,0,0,.28);margin-left:-7px}
+.val{font-size:15px;color:rgba(60,60,67,.6);width:24px;text-align:right;flex:none}
+.chev{font-size:19px;color:rgba(60,60,67,.28);margin-left:6px;flex:none;line-height:1}
+.dark .chev{color:rgba(255,255,255,.3)}
+.tabbar{position:absolute;bottom:0;left:0;right:0;height:83px;background:rgba(255,255,255,.94);
+        border-top:.5px solid rgba(60,60,67,.2);display:flex;padding-bottom:20px}
+.dark .tabbar{background:rgba(28,28,30,.96);border-top-color:rgba(255,255,255,.15)}
+.tab{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;
+     font-size:10px;color:rgba(60,60,67,.5)}
+.dark .tab{color:rgba(255,255,255,.45)}
+.tab.act{color:#007AFF}.dark .tab.act{color:#0A84FF}
+.tab svg{display:block}
+.cover{width:252px;height:252px;border-radius:10px;margin:6px auto 22px;
+       background:linear-gradient(150deg,#0C4750,#2E7F6E);display:flex;align-items:center;
+       justify-content:center}
+.tt{font-size:19px;color:#fff;text-align:center;font-weight:600;padding:0 24px;white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis}
+.ar{font-size:13px;color:rgba(255,255,255,.5);text-align:center;margin-top:6px}
+.pbar{margin:28px 10px 7px;height:5px;border-radius:3px;background:rgba(255,255,255,.2);position:relative}
+.pbar i{position:absolute;left:0;top:0;bottom:0;width:74%;border-radius:3px;background:rgba(255,255,255,.9)}
+.time{display:flex;justify-content:space-between;font-size:12px;color:rgba(255,255,255,.5);margin:0 10px}
+.ctrl{display:flex;justify-content:center;align-items:center;gap:52px;margin-top:32px}
+.b{width:68px;height:68px;border-radius:50%;background:#fff;display:flex;align-items:center;
+   justify-content:center}
+.plist{margin:26px 10px 0;display:flex;align-items:center;justify-content:space-between;font-size:14px;color:rgba(255,255,255,.7);background:rgba(255,255,255,.1);border-radius:10px;padding:11px 14px}
+.out{margin-top:16px;padding:0 10px}
+.outl{font-size:12px;color:rgba(255,255,255,.45);margin-bottom:9px}
+.chips{display:flex;gap:7px}
+.chip{padding:7px 14px;border-radius:17px;font-size:13px;background:rgba(255,255,255,.14);
+      color:#fff;white-space:nowrap}
+.chip.sel{background:#fff;color:#000;font-weight:600}
+.search{background:rgba(118,118,128,.12);border-radius:10px;height:38px;display:flex;
+        align-items:center;padding:0 10px;gap:8px;font-size:16px;color:rgba(60,60,67,.5);margin-bottom:12px}
+.srcs{display:flex;gap:7px}
+.schip{padding:7px 14px;border-radius:17px;font-size:13px;background:#fff;color:#1C1C1E;
+       border:.5px solid rgba(60,60,67,.14);white-space:nowrap}
+.schip.sel{background:#007AFF;color:#fff;border-color:#007AFF;font-weight:600}
+.li{display:flex;align-items:center;padding:0 14px;min-height:54px;position:relative}
+.li+.li::before{content:"";position:absolute;left:52px;right:0;top:0;height:.5px;background:rgba(60,60,67,.16)}
+.ico{width:32px;height:32px;border-radius:8px;background:rgba(0,122,255,.12);display:flex;
+     align-items:center;justify-content:center;margin-right:11px;flex:none}
+.li .tx{flex:1;font-size:16px;color:#1C1C1E;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.li .sub{font-size:13px;color:rgba(60,60,67,.5);margin-left:8px;flex:none}
+.badge{font-size:11px;color:#34C759;background:rgba(52,199,89,.12);padding:3px 8px;border-radius:9px;
+       margin-left:8px;flex:none}
+</style></head><body>
+
+<!-- ================= 1 设备 ================= -->
+<div class="phone">
+  <div class="status"><span>20:45</span>
+    <span style="letter-spacing:1px">●●● ⌁ ▮</span></div>
+  <div class="body">
+    <h1>设备</h1>
+    <div class="gtitle">我的音箱</div>
+    <div class="group">
+      <div class="row"><div class="dot on"></div><div class="nm">doss1</div>
+        <div class="st">在放《034 诸子百家》</div>
+        <div class="sl"><i style="width:47%"></i><b style="left:47%"></b></div>
+        <div class="val">47</div><div class="chev">›</div></div>
+      <div class="row"><div class="dot off"></div><div class="nm">doss2</div>
+        <div class="st">暂停</div>
+        <div class="sl"><i style="width:29%"></i><b style="left:29%"></b></div>
+        <div class="val">29</div><div class="chev">›</div></div>
+      <div class="row"><div class="dot on"></div><div class="nm">doss3</div>
+        <div class="st">3 分钟前停的</div>
+        <div class="sl"><i style="width:39%"></i><b style="left:39%"></b></div>
+        <div class="val">39</div><div class="chev">›</div></div>
+    </div>
+    <div class="gtitle">其它播放设备</div>
+    <div class="group">
+      <div class="row"><div class="dot off"></div><div class="nm">电视盒子</div>
+        <div class="st">没在用</div><div class="chev">›</div></div>
+    </div>
+    <div class="gtitle">遥控设备</div>
+    <div class="group">
+      <div class="row">
+        <div class="ico" style="background:rgba(255,59,48,.12)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#FF3B30" stroke-width="1.9"><rect x="7" y="2.5" width="10" height="19" rx="3"/><circle cx="12" cy="17" r="1.2" fill="#FF3B30"/></svg></div>
+        <div class="tx" style="flex:1;font-size:16px;color:#1C1C1E">添加红外设备</div>
+        <div class="sub" style="font-size:13px;color:rgba(60,60,67,.5)">电视 · 空调</div>
+        <div class="chev">›</div></div>
+      <div class="row">
+        <div class="ico" style="background:rgba(0,122,255,.12)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#007AFF" stroke-width="1.9"><path d="M12 3v18M7 7l10 10M17 7L7 17" stroke-linecap="round"/></svg></div>
+        <div class="tx" style="flex:1;font-size:16px;color:#1C1C1E">添加蓝牙设备</div>
+        <div class="sub" style="font-size:13px;color:rgba(60,60,67,.5)">遥控 · 耳机</div>
+        <div class="chev">›</div></div>
+    </div>
+  </div>
+  <div class="tabbar">
+    <div class="tab act">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="8.2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="3" /></svg>
+      设备</div>
+    <div class="tab">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>
+      播放</div>
+    <div class="tab">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="10.5" cy="10.5" r="6.2"/><path d="M15.2 15.2L20 20" stroke-linecap="round"/></svg>
+      内容</div>
+    <div class="tab">
+      <svg width="24" height="24" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      我</div>
+  </div>
+</div>
+
+<!-- ================= 2 播放 ================= -->
+<div class="phone dark">
+  <div class="status"><span>20:45</span><span style="letter-spacing:1px">●●● ⌁ ▮</span></div>
+  <div class="body">
+    <div class="cover"><svg width="86" height="86" viewBox="0 0 24 24" fill="rgba(255,255,255,.55)"><path d="M12 3v10.55A4 4 0 1014 17V7h4V3z"/></svg></div>
+    <div class="tt">034 【诸子百家】儒家孔子：仁者爱人</div>
+    <div class="ar">doss1 · 投送中</div>
+    <div class="pbar"><i></i></div>
+    <div class="time"><span>7:45</span><span>10:41</span></div>
+    <div class="ctrl">
+      <svg width="30" height="30" viewBox="0 0 24 24" fill="#fff" opacity=".92"><path d="M18 5.5v13L8 12zM7 5.5v13h1.6v-13z"/></svg>
+      <div class="b"><svg width="26" height="26" viewBox="0 0 24 24" fill="#000"><rect x="6.5" y="5" width="4" height="14" rx="1.4"/><rect x="13.5" y="5" width="4" height="14" rx="1.4"/></svg></div>
+      <svg width="30" height="30" viewBox="0 0 24 24" fill="#fff" opacity=".92"><path d="M6 5.5v13L16 12zM17 5.5v13h-1.6v-13z"/></svg>
+    </div>
+    <div class="plist">
+      <span>播放列表 · 100 首 · 第 8 首</span><span class="chev" style="color:rgba(255,255,255,.4)">›</span>
+    </div>
+    <div class="out">
+      <div class="outl">从哪出声</div>
+      <div class="chips">
+        <div class="chip">本机</div>
+        <div class="chip sel">doss1</div>
+        <div class="chip">doss2</div>
+        <div class="chip">doss3</div>
+      </div>
+    </div>
+  </div>
+  <div class="tabbar">
+    <div class="tab">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.2"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>
+      设备</div>
+    <div class="tab act">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>
+      播放</div>
+    <div class="tab">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="10.5" cy="10.5" r="6.2"/><path d="M15.2 15.2L20 20" stroke-linecap="round"/></svg>
+      内容</div>
+    <div class="tab">
+      <svg width="24" height="24" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      我</div>
+  </div>
+</div>
+
+<!-- ================= 3 内容 ================= -->
+<div class="phone">
+  <div class="status"><span>20:45</span><span style="letter-spacing:1px">●●● ⌁ ▮</span></div>
+  <div class="body">
+    <h1>内容</h1>
+    <div class="search">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="rgba(60,60,67,.5)" stroke-width="2"><circle cx="10.5" cy="10.5" r="6.2"/><path d="M15.2 15.2L20 20" stroke-linecap="round"/></svg>
+      歌名、歌手，或「周杰伦」</div>
+    <div class="srcs">
+      <div class="schip sel">全部</div><div class="schip">NAS</div><div class="schip">本地</div>
+      <div class="schip">在线</div><div class="schip">电台</div><div class="schip">B站</div>
+    </div>
+    <div class="gtitle">接着听</div>
+    <div class="group">
+      <div class="li">
+        <div class="ico"><svg width="15" height="15" viewBox="0 0 24 24" fill="#007AFF"><path d="M12 3v10.55A4 4 0 1014 17V7h4V3z"/></svg></div>
+        <div class="tx">034 诸子百家·仁者爱人</div><div class="sub">7:45</div>
+        <div class="badge">doss1</div></div>
+      <div class="li">
+        <div class="ico"><svg width="15" height="15" viewBox="0 0 24 24" fill="#007AFF"><path d="M12 3v10.55A4 4 0 1014 17V7h4V3z"/></svg></div>
+        <div class="tx">晴天</div><div class="sub">洛雪</div>
+        <div class="badge" style="color:#007AFF;background:rgba(0,122,255,.12)">在线</div></div>
+    </div>
+    <div class="gtitle">最近加入</div>
+    <div class="group">
+      <div class="li">
+        <div class="ico" style="background:rgba(255,149,0,.14)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#FF9500" stroke-width="2"><rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M3.5 10h17"/></svg></div>
+        <div class="tx">叶惠美（整张）</div><div class="sub">11 首</div></div>
+      <div class="li">
+        <div class="ico" style="background:rgba(255,59,48,.12)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#FF3B30" stroke-width="2"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.4" fill="#FF3B30"/></svg></div>
+        <div class="tx">中国之声</div><div class="sub">电台</div></div>
+    </div>
+  </div>
+  <div class="tabbar">
+    <div class="tab">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.2"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>
+      设备</div>
+    <div class="tab">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>
+      播放</div>
+    <div class="tab act">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1"><circle cx="10.5" cy="10.5" r="6.2"/><path d="M15.2 15.2L20 20" stroke-linecap="round"/></svg>
+      内容</div>
+    <div class="tab">
+      <svg width="24" height="24" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      我</div>
+  </div>
+</div>
+
+<!-- ================= 4 我 ================= -->
+<div class="phone">
+  <div class="status"><span>20:45</span><span style="letter-spacing:1px">●●● ⌁ ▮</span></div>
+  <div class="body">
+    <h1>我</h1>
+    <div class="group">
+      <div class="row">
+        <div class="ico" style="background:rgba(0,122,255,.12)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#007AFF" stroke-width="2"><path d="M3 12h4l2.5-6 3.5 12 2.5-6h5.5" stroke-linecap="round"/></svg></div>
+        <div class="tx" style="flex:1;font-size:17px;color:#1C1C1E">诊断台</div>
+        <div class="sub" style="font-size:13px;color:rgba(60,60,67,.5)">一切正常</div>
+        <div class="chev">›</div></div>
+    </div>
+    <div class="gtitle">设备</div>
+    <div class="group">
+      <div class="row"><div class="tx" style="flex:1;font-size:17px;color:#1C1C1E">添加设备</div><div class="chev">›</div></div>
+      <div class="row"><div class="tx" style="flex:1;font-size:17px;color:#1C1C1E">配网</div>
+        <div class="sub" style="font-size:13px;color:rgba(60,60,67,.5)">含 WPS</div><div class="chev">›</div></div>
+      <div class="row"><div class="tx" style="flex:1;font-size:17px;color:#1C1C1E">悬浮控制条</div>
+        <div class="sub" style="font-size:13px;color:rgba(60,60,67,.5)">未开启</div><div class="chev">›</div></div>
+    </div>
+    <div class="gtitle">内容源</div>
+    <div class="group">
+      <div class="row"><div class="tx" style="flex:1;font-size:17px;color:#1C1C1E">洛雪音源脚本</div>
+        <div class="sub" style="font-size:13px;color:rgba(60,60,67,.5)">1 支</div><div class="chev">›</div></div>
+      <div class="row"><div class="tx" style="flex:1;font-size:17px;color:#1C1C1E">在线曲库</div>
+        <div class="sub" style="font-size:13px;color:rgba(60,60,67,.5)">可选</div><div class="chev">›</div></div>
+      <div class="row"><div class="tx" style="flex:1;font-size:17px;color:#1C1C1E">B站音源</div>
+        <div class="sub" style="font-size:13px;color:rgba(60,60,67,.5)">未接入</div><div class="chev">›</div></div>
+    </div>
+    <div class="gtitle">权限与数据</div>
+    <div class="group">
+      <div class="row"><div class="tx" style="flex:1;font-size:17px;color:#1C1C1E">权限</div>
+        <div class="sub" style="font-size:13px;color:#FF3B30">2 项未授权</div><div class="chev">›</div></div>
+      <div class="row"><div class="tx" style="flex:1;font-size:17px;color:#1C1C1E">备份与恢复</div><div class="chev">›</div></div>
+    </div>
+  </div>
+  <div class="tabbar">
+    <div class="tab">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.2"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>
+      设备</div>
+    <div class="tab">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>
+      播放</div>
+    <div class="tab">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="10.5" cy="10.5" r="6.2"/><path d="M15.2 15.2L20 20" stroke-linecap="round"/></svg>
+      内容</div>
+    <div class="tab act">
+      <svg width="24" height="24" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      我</div>
+  </div>
+</div>
+
+</body></html>
