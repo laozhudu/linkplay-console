@@ -26,7 +26,10 @@ import io.github.laozhudu.linkplay.console.ui.skeleton.AppSearchField
 import io.github.laozhudu.linkplay.console.ui.skeleton.AppStateCard
 import io.github.laozhudu.linkplay.console.ui.skeleton.RowBadge
 import io.github.laozhudu.linkplay.console.ui.skeleton.StateKind
+import io.github.laozhudu.linkplay.console.playback.PlaybackOutput
+import io.github.laozhudu.linkplay.console.playback.PlaybackRouter
 import io.github.laozhudu.linkplay.console.ui.theme.Spacing
+import androidx.compose.material3.MaterialTheme
 import io.github.laozhudu.script.ScriptCandidate
 import io.github.laozhudu.script.ScriptRepository
 
@@ -57,6 +60,9 @@ internal fun LxSearchScreen(
     val state by vm.state.collectAsState()
     var keyword by remember { mutableStateOf("") }
     var importError by remember { mutableStateOf<String?>(null) }
+    // 声音从哪出来：存在进程级路由里（下次进来还是同一个选择）
+    val router = remember { PlaybackRouter.of(app) }
+    var output by remember { mutableStateOf(router.output()) }
 
     AppPage(
         title = "洛雪音乐",
@@ -71,6 +77,30 @@ internal fun LxSearchScreen(
             onSubmit = { vm.search(keyword) },
             enabled = !state.searching,
         )
+
+        // 输出选择：本地播 / 推流。**界面上只有这一处**，两边共用同一个播放入口。
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+        ) {
+            Text("从哪出声", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            FilterChip(
+                selected = output == PlaybackOutput.Local,
+                onClick = {
+                    router.setOutput(PlaybackOutput.Local)
+                    output = PlaybackOutput.Local
+                },
+                label = { Text("本机") },
+            )
+            FilterChip(
+                selected = output == PlaybackOutput.Remote,
+                onClick = {
+                    router.setOutput(PlaybackOutput.Remote)
+                    output = PlaybackOutput.Remote
+                },
+                label = { Text("音箱") },
+            )
+        }
 
         if (state.sources.size > 1) {
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {

@@ -4,10 +4,9 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.laozhudu.linkplay.console.LxSourceStatus
-import io.github.laozhudu.linkplay.console.playback.startQueueOnDevice
+import io.github.laozhudu.linkplay.console.playback.PlaybackRouter
 import io.github.laozhudu.linkplay.lx.LxScriptInfo
 import io.github.laozhudu.linkplay.lx.LxTrack
-import io.github.laozhudu.linkplay.protocol.queue.QueueItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -160,14 +159,13 @@ class LxSearchViewModel(
                 LxSourceStatus.resolveOk(track.source, track.name, System.currentTimeMillis() - started)
 
                 val title = track.singer.takeIf { it.isNotBlank() }?.let { "${track.name} - $it" } ?: track.name
-                val ok = startQueueOnDevice(
-                    context = app,
+                // 本地播 / 推流由 PlaybackRouter 分派 —— 界面和这里都不判断"从哪出声"
+                val ok = PlaybackRouter.of(app).playOne(
+                    url = resolved,
+                    title = title,
                     deviceIp = deviceIp,
                     location = location,
                     deviceUuid = deviceUuid,
-                    items = listOf(QueueItem(url = resolved, title = title)),
-                    startAt = 0,
-                    note = "洛雪 ${track.source}",
                 )
                 LxSourceStatus.cast(ok, title)
                 if (!ok) throw IllegalStateException("地址拿到了，但设备那边没起播")

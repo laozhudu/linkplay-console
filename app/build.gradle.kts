@@ -141,6 +141,11 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
     implementation(libs.kotlinx.coroutines.android)
+    // Media3（Apache-2.0）：本地播放的引擎。选它不是为了"播放"，
+    // 是为了**本地和投送共用一个 Player 接口**（docs/77），界面不用分两套。
+    implementation(libs.androidx.media3.exoplayer)
+    implementation(libs.androidx.media3.common)
+
     // 封面加载（Apache-2.0）：DLNA 的 albumArtURI 是普通 http 图，Coil 一句 AsyncImage 就够
     implementation(libs.coil.compose)
 

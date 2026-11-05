@@ -251,6 +251,20 @@ internal class ConsoleDiagnostics(
             )
         }
 
+        // 播放输出 —— 本地播和推流是两套实现，出问题时第一件事是确认"声音该从哪出来"
+        AppDiagnostics.sections.register("output", "播放输出") {
+            val router = io.github.laozhudu.linkplay.console.playback.PlaybackRouter.of(application)
+            val out = router.output()
+            val local = router.localState.value
+            buildString {
+                appendLine("  当前=${if (out == io.github.laozhudu.linkplay.console.playback.PlaybackOutput.Local) "本机（Media3 ExoPlayer）" else "音箱（推流）"}")
+                appendLine("  本机状态=在放 ${local.playing} · 有内容 ${local.hasQueue} · ${local.displayTitle}")
+                if (out == io.github.laozhudu.linkplay.console.playback.PlaybackOutput.Local && local.hasQueue && !local.playing) {
+                    appendLine("  ← 本机有内容但没在放：可能是被来电/别的 App 抢了焦点")
+                }
+            }.trimEnd()
+        }
+
         AppDiagnostics.sections.register("ui", "界面") { NavTrace.render() }
 
         // 口令流水 —— 覆盖「点了没反应」这类最常报的问题。
