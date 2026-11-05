@@ -59,6 +59,7 @@ object DeviceQueuePush {
      * @param startIndex 从第几首开始（0 基）
      * @return 成功与否 + 一句给人看的说明
      */
+    @io.github.laozhudu.linkplay.console.playback.guards.SingleEntryPoint
     suspend fun push(
         device: DeviceHttpClient,
         deviceIp: String,

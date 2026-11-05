@@ -1,3 +1,5 @@
+@file:OptIn(io.github.laozhudu.linkplay.console.playback.guards.SingleEntryPoint::class)
+
 package io.github.laozhudu.linkplay.console.playback
 
 import android.content.Context

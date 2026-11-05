@@ -270,6 +270,7 @@ class QueuePlaybackService : Service() {
          *
          * @param session 已编好码的快照：服务端直接用它跑，也顺手作为灾备记录
          */
+        @io.github.laozhudu.linkplay.console.playback.guards.SingleEntryPoint
         fun start(context: Context, location: String?, session: PlaybackSession) {
             ensureChannel(context)
             val intent = Intent(context, QueuePlaybackService::class.java).apply {
