@@ -288,7 +288,24 @@ internal fun HomeScreen(
                 }
             }
 
-            items(state.saved, key = { it.uuid }) { device ->
+            // ---- 按能力分组（docs/92 U2）----
+            //
+            // 用户原话：「通用 upnp 设备根本就没考虑过与 doss 隔离，反而混在一起」。
+            //
+            // 这两类能力差一个量级：音箱有设备侧队列、能组网、有电量固件；
+            // 通用渲染器（电视盒子）只能 Play/Pause/SetVolume/Seek。
+            // 混排的结果是"四台看起来一样的设备"，而其中一台一半的入口点不动。
+            //
+            // 按**能力**分而不是按品牌分：型号标签会随固件变，能力是探测出来的。
+            val byGroup = state.saved.groupBy { dev ->
+                (state.cards[dev.uuid]?.capabilities
+                    ?: io.github.laozhudu.linkplay.protocol.dlna.DeviceCapabilities.LINKPLAY).group
+            }
+            io.github.laozhudu.linkplay.protocol.dlna.DeviceGroup.entries.forEach { group ->
+                val groupDevices = byGroup[group].orEmpty()
+                if (groupDevices.isEmpty()) return@forEach
+                item(key = "hdr-${group.name}") { DeviceGroupHeader(group) }
+                items(groupDevices, key = { it.uuid }) { device ->
                 DeviceCardRow(
                     device = device,
                     online = state.online[device.uuid],
@@ -312,6 +329,7 @@ internal fun HomeScreen(
                     onTogglePlay = { vm.toggleDevicePlay(device) },
                     onRename = { menuTarget = device },
                 )
+                }
             }
 
             item {
@@ -618,6 +636,37 @@ internal fun HomeScreen(
                 }) { Text("删除") }
             },
             dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("取消") } },
+        )
+    }
+}
+
+/**
+ * 设备分组标题。
+ *
+ * 文案写在 UI 层，不写进 `core-protocol` 的枚举 —— 协议模块不该带中文文案。
+ */
+@Composable
+private fun DeviceGroupHeader(group: io.github.laozhudu.linkplay.protocol.dlna.DeviceGroup) {
+    val label = when (group) {
+        io.github.laozhudu.linkplay.protocol.dlna.DeviceGroup.MySpeaker -> "我的音箱"
+        io.github.laozhudu.linkplay.protocol.dlna.DeviceGroup.OtherPlayer -> "其它播放设备"
+        io.github.laozhudu.linkplay.protocol.dlna.DeviceGroup.Other -> "其它设备"
+    }
+    val hint = when (group) {
+        io.github.laozhudu.linkplay.protocol.dlna.DeviceGroup.MySpeaker -> "能收整份列表、能组网"
+        io.github.laozhudu.linkplay.protocol.dlna.DeviceGroup.OtherPlayer -> "能放声音，但没有队列也不能组网"
+        io.github.laozhudu.linkplay.protocol.dlna.DeviceGroup.Other -> "还没探到它能做什么"
+    }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = Spacing.md, bottom = Spacing.xs),
+    ) {
+        Text(label, style = MaterialTheme.typography.titleSmall)
+        Text(
+            hint,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
