@@ -167,7 +167,15 @@ CCTV-13新闻伴音    https://piccpndali.v.myalicdn.com/audio/cctv13_2.m3u8    
 怀集音乐之声       https://lhttp.qingting.fm/live/4804/64k.mp3                MP3
 ```
 
-### 硬约束：**音箱不认 https**（真机刚验的）
+### ~~硬约束：音箱不认 https~~ ⚠️ **本节结论已推翻，勿再引用**
+
+> **更正（`docs/85`）**：音箱**能播 https**。后续实测 `https://icecast.radiofrance.fr/fip-hifi.aac`、
+> `https://ngcdn001.cnr.cn/live/zgzs/index.m3u8` 在 `.164` 上都是 `play`。
+> 当时那次 `lhttp.qingting.fm` 的 https 没播，是**那个站的问题**，不是设备不认 https。
+> 由此「必须中继转发才能播 https」整套方案作废。
+> 保留本节只为记录当时的判断过程，**下面按 scheme 过滤 https 的做法不要再用**。
+>
+> 另：HLS 本身没问题 —— 音箱播 m3u8 在 `docs/19` 就已实测通过。
 
 `.164` 上逐个投流看 `status`：
 

@@ -10,7 +10,7 @@
 ## 零、结论（三句话）
 
 1. **6 个内容源 × 2 种输出 = 12 格，现在只通 6 格。** 洛雪是唯一「两边都能用」的源。
-2. **电台能手机播，但不只是「接到 Router」** —— 45% 的电台是 HLS（`.m3u8`），而 media3 **没引 hls 模块**，不补就少一半。
+2. **电台能手机播，但不只是「接到 Router」** —— 手机本机走 ExoPlayer，官方文档明确要求播放 HLS 必须依赖 `media3-exoplayer-hls`。**这是一行前置依赖，不是障碍、不是风险**；音箱侧的 HLS 早已多次实测可播（见 1.2）。
 3. **真正的结构障碍是播放页读的是「设备状态」不是「播放状态」** —— 所以哪怕把 6 个源全接上 Router，本地播放时**播放页看不到进度和音量**。
 
 **所以这一轮不是「接线」，是「把播放页从设备遥控器变成播放器」。**
@@ -53,37 +53,71 @@ repeat(6) { delay(1000); /* 轮询 6 秒看 status 是否 PLAY */ }
 
 ---
 
-## 二、五个结构性障碍（这才是真实工作量）
+## 二、一个前置依赖 + 四个结构性障碍
 
-### 障碍 1 · HLS 模块没引 —— 电台本地播会少一半 🔴
+先分清两件不同的事，之前文档把它们的措辞混在一起了：
+
+| | 音箱播 HLS | 手机本机播 HLS |
+|---|---|---|
+| 谁在解流 | **音箱固件自己**（curl 拉流后自己解播放列表） | **ExoPlayer**（我们代码里的播放器） |
+| 要不要额外依赖 | **不要** | **要一行 `media3-exoplayer-hls`** |
+| 实测状态 | ✅ **多次实测可播**（见 1.2） | 尚未实现，因为本机播电台整个还没做 |
+
+**所以 HLS 从来不是「问题」。** 音箱侧是既有能力，本机侧是一行依赖 —— 两者都不构成风险。
+
+### 前置 1 · 本机播放要一行 HLS 依赖（不是障碍）⬜
+
+**先说结论：HLS 没问题，音箱侧已多次实测能播，用户也确认过。** 这里说的是完全不同的另一件事。
+
+#### 1.2 音箱侧 HLS —— 已实测可播（不是问题，别再当问题提）
+
+| 依据 | 记录 |
+|---|---|
+| `docs/19` | CNR 中国之声 / CNR 音乐之声 `index.m3u8` → **✅ play，curpos 递增** |
+| `docs/42` | 「好消息是音箱**能播 m3u8**（CNR 已验证）」 |
+| `docs/85` | `https://ngcdn001.cnr.cn/…m3u8` 也 `play`（https 那条旧结论一并推翻） |
+
+内置 5 台里 2 台是 HLS，**投音箱一直是通的**。这一轮完全不碰这条路。
+
+> ⚠️ 顺带修两条早已被推翻但没标过时的旧结论（见本轮同时修的 `docs/16` `docs/42`）：
+> `docs/16` 说「m3u8 设备端不解析」、`docs/42` 说「音箱不认 https」—— **两条都是错的**，
+> 分别被 `docs/19` 和 `docs/85` 的实测推翻。
+
+#### 本机侧要一行依赖
 
 ```toml
 # gradle/libs.versions.toml 现状
 androidx-media3-exoplayer = ...   ✅
 androidx-media3-common    = ...   ✅
 androidx-media3-session   = ...   ✅
-androidx-media3-exoplayer-hls = ???  ❌ 没有
+androidx-media3-exoplayer-hls = ❌ 没有
 ```
 
-**实测数据**（`docs/72` Radio Browser 中国区 500 台）：`.m3u8` **228 台 = 45%**。
+为什么需要：手机本机播的是 **ExoPlayer**，不是音箱固件。ExoPlayer 把 HLS 拆成了独立模块，
+官方文档原话：
 
-内置 5 台里也有 2 台是 HLS：
+> **To play an HLS stream, you need to depend on the HLS module.**
+> `implementation("androidx.media3:media3-exoplayer-hls:1.11.1")`
+> —— `developer.android.com/media/media3/exoplayer/hls`
 
-```
-CNR 中国之声   http://ngcdn001.cnr.cn/live/zgzs/index.m3u8
-CNR 音乐之声   http://ngcdn002.cnr.cn/live/yyzs/index.m3u8
-```
+我核过 `media3-exoplayer-1.5.1.aar`：853 个类里 **HLS 相关类 0 个**（`HlsMediaSource` / `DefaultHls` / `HlsPlaylistParser` 全为 0），所以确实要单独加。
 
-**没有 hls 模块，ExoPlayer 遇到 `.m3u8` 会报格式不识别** —— 也就是「点了没反应」那一类。
-
-**好消息**：`media3-exoplayer-hls:1.5.1` 存在，而且：
+**但这只是一行，而且零风险**：
 
 ```
-minAndroidGradlePluginVersion = 1.0.0
-minCompileSdk = 35
+media3-exoplayer-hls:1.5.1
+  minAndroidGradlePluginVersion = 1.0.0
+  minCompileSdk = 35
 ```
 
-**跟现有 media3 完全同版本，加一行依赖就行，没有任何升级风险。**
+跟现有 `media3 = "1.5.1"` **完全同版本**，不涉及任何构建工具链升级（`docs/87` 那套门槛问题在这里不存在）。
+
+#### 量级参考（不是障碍，是「加了能多播多少」）
+
+`docs/72` Radio Browser 中国区 500 台：`.m3u8` **228 台 = 45%**。
+加了这行，本机播放覆盖 100%；不加，本机播电台只能覆盖 55%。
+
+**所以它不是「障碍」，是「要不要顺手把 45% 一起拿下」。我的建议：加。**
 
 ### 障碍 2 · `LocalPlayer` 不支持队列 🔴
 
@@ -205,7 +239,7 @@ data class PlayerUiState(
 
 ### T7 · 电台支持本机播放（用户明确要的）
 
-#### 7.1 加 HLS 依赖
+#### 7.1 加 HLS 依赖（一行，本机侧才需要）
 
 ```toml
 # gradle/libs.versions.toml
@@ -217,7 +251,8 @@ androidx-media3-exoplayer-hls = { module = "androidx.media3:media3-exoplayer-hls
 implementation(libs.androidx.media3.exoplayer.hls)
 ```
 
-**同版本 1.5.1，无升级风险。**
+**同版本 1.5.1，无升级风险。** 音箱侧不需要它（音箱固件自己解 HLS，`docs/19` 已实测），
+所以这条只影响「手机本机播电台」这一格。
 
 #### 7.2 给 `playUrl` 加本机分支
 
@@ -256,7 +291,8 @@ val isLive = player.isCurrentMediaItemLive
 | 项 | 前 | 后 |
 |---|---|---|
 | 电台输出 | 只有音箱 | **音箱 + 手机** |
-| 能本地播的电台比例 | 0% | **100%**（补 HLS 后） |
+| 音箱侧 HLS | ✅ 已可播 | ✅ **不变**（本来就没问题） |
+| 本机侧 HLS | — （本机播电台整个没做） | ✅ 一行依赖后 100% 覆盖 |
 | 矩阵格数 | 6/12 | **7/12** |
 
 #### ⚠️ 7.4 一个现成的 bug：切到本机时音箱不停
@@ -439,7 +475,7 @@ fun canHandleVolumeKey(): Boolean {
 ## 七、五个坑
 
 1. **投音箱那条电台流程一个字别改** —— `switchMode("wifi")` 是真机验过的（旧固件不切输入源只存 uri 不播）
-2. **`.m3u8` 需要 hls 模块**，只加 `media3-exoplayer` 不够 —— 这是本轮最容易漏的一条
+2. **手机本机播 `.m3u8` 需要 hls 模块**（官方要求），只加 `media3-exoplayer` 不够；**音箱侧不需要，别搞混**
 3. **直播流 `duration` 是 0**，进度条不能按「0/0」画，要显示「直播」
 4. **`ExoPlayer` 音量是 0.0-1.0 浮点**，`PlayerUiState.volume` 是 0-100 整数，转换别搞反
 5. **`canHandleVolumeKey` 的返回值必须在 `ACTION_DOWN` 和 `ACTION_UP` 一致**（现有注释的硬要求，改它别破坏）
@@ -448,7 +484,9 @@ fun canHandleVolumeKey(): Boolean {
 
 ## 八、一句话
 
-**「所有源都能在任何设备用」不是接线活 —— 6/12 缺的 6 格里，真正卡住的是三件事：没引 HLS 模块（电台少一半）、`LocalPlayer` 只会播一首、播放页读的是设备状态所以本机播放没有进度和音量。把这三件做完，12 格才可能全通。**
+**「所有源都能在任何设备用」不是接线活 —— 6/12 缺的 6 格里，真正卡住的是三件事：`LocalPlayer` 只会播一首、播放页读的是设备状态所以本机播放没有进度和音量、切到本机时音箱不停。把这三件做完，12 格才可能全通。**
+
+**HLS 不在这三件里。** 音箱侧它一直是通的（`docs/19` `docs/42` `docs/85` 都实测过）；手机本机侧只是要加一行 `media3-exoplayer-hls`，官方要求、同版本、零风险 —— 属于「顺手把 45% 一起拿下」，不属于「卡住」。
 
 ---
 
