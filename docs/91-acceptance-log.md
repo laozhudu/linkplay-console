@@ -226,8 +226,52 @@ grep -rn 'PlaybackRouter.of(' app/src/main | grep -v Dispatcher | wc -l   # 8
 - **零行为改动**：没有任何调用点改走 dispatcher（那是 S1.3）。dispatcher 现在还没有调用者。
 - 真机「电视盒子上不显示下一首」要 S1.3 接入后才验得了。
 
+## 第八轮 · S1.3 悬浮窗接入 dispatch（真 bug 修复）
+
+**改动**：1 文件。
+
+| 位置 | 前 | 后 |
+|---|---|---|
+| `FloatingControlService:204-206` | `send(LinkPlayCommands.previousTrack()/togglePause()/nextTrack())` | `dispatch(PlayIntent.Previous/TogglePlay/Next)` |
+| 新增 `dispatch(intent)` | — | `can()` 判断 + 不支持时 Toast |
+
+### 修的是什么（这是 S1.3 的全部意义）
+
+那三行直发 **LinkPlay 私有 httpapi**。投通用 DLNA 渲染器（电视盒子 `.175`）时设备不认，
+但按钮照样画着 —— **按了什么都不发生，也没有提示**。
+
+而「这台设备支不支持切歌」（`DeviceCapabilities.supportsNextPrev`）**从来没被读过一次**。
+
+现在 `can()` 先判断：做不到就 Toast「这台设备不支持这个操作」，而不是静默失败。
+
+### 验证
+
+```bash
+grep -rn 'LinkPlayCommands' app/src/main/kotlin/.../floating/   # 0 处 ✅（docs/90 验收第 4 条）
+./gradlew :app:assembleDebug                                     # 通过
+```
+
+### 没做完的部分（如实记录）
+
+docs/90 的 S1.3 要求**三个入口**都接：界面 / 悬浮窗 / 语音。
+本轮只做了**悬浮窗**（真 bug 所在 + 验收硬指标）。
+
+| 入口 | 状态 | 为什么 |
+|---|---|---|
+| 悬浮窗 | ✅ | 真 bug，`grep` 可验 |
+| 界面 `PlayerScreen` 按钮 | ⏸ | 十几处调用要改成 suspend 上下文（`dispatch` 是 suspend），属于机械改动但面广 |
+| 语音 `handleVoiceIntent` | ⏸ | 同上，且它现在是普通函数，要改成跑在 scope 里 |
+
+**不接的两个入口目前仍走 `vm.xxx()` 直连** —— 它们本来就工作正常（不走私有 httpapi），
+没有那个 bug，所以「没接」不影响正确性，只影响"唯一入口"的完整性。
+
+### 没验
+
+- 真机：投电视盒子看悬浮窗「下一首」是否变灰/提示（需装机）
+- 真机：投音箱时悬浮窗三个按钮是否照常工作
+
 ---
 
 ## 下一道
 
-S1.3 三入口接入 dispatch（界面 / 悬浮窗 / 语音）→ **S1.4 输出开关搬到播放页（用户可感）**
+S1.3 剩余两入口（界面按钮 / 语音）→ **S1.4 输出开关搬到播放页（用户可感）**
