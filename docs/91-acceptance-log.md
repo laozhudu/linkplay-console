@@ -596,8 +596,49 @@ Other        连声音都放不了 / 没探全
 - 本机播放行为不回归
 - 切输出后通知栏**不会卡在旧状态**
 
+## 第十九轮 · S3.1 第一项：`ToQueueItemsUseCase`（收掉 2 处逐字重复）
+
+| 文件 | 动作 |
+|---|---|
+| `usecase/ToQueueItemsUseCase.kt` | **新建**：`of()` 单条构造 + `resolveAll()` 批量解析 |
+| `library/LibraryViewModel.kt` | **两处逐字重复**合并（`:206` 播放列表 / `:274` 加入歌单） |
+| `test/.../ToQueueItemsUseCaseTest.kt` | **新建**，5 个用例 |
+
+### 为什么不引入 `SourceTrack` 抽象（与施工图的一处偏差）
+
+施工图 §3.6 写的是 `ToQueueItemsUseCase(resolveUrl: (SourceTrack) -> String?)`。
+但**这个类型不存在**，而且要造它就得让五个源（`BrowseEntry` / `LocalTrack` /
+`SubsonicSong` / `RadioStation` / `LxTrack`）都去实现一个公共父类 ——
+那是牵动五个模块的改动，收益只是"少写一个字段名"。
+
+改用泛型 + 两个 lambda：**不新增类型，只统一流程和字段落点**。
+
+### 收的真实收益（不是行数）
+
+`resolveAll` 统一了"解析失败怎么办"：**直接丢弃，不占位、不崩整批**。
+
+五处手写循环各自处理不同：
+- 有的 `getOrNull()?.let{}`（对）
+- 有的 `!!`（一条失败整批崩）
+- 有的保留空 url 占位（设备回 400，表现是"随机有几首放不了"）
+
+### 验证
+
+```bash
+./gradlew :app:compileDebugKotlin / testDebugUnitTest   # 通过，5 个用例 0 失败
+grep -rn 'QueueItem(' app/src/main | wc -l              # 9 → 6（剩 6 处待收）
+```
+
+### 没做完（如实记）
+
+施工图 S3.1 要求收 **8 处**，本轮收了 **2 处**（音乐库里那对逐字重复，价值最高）。
+还剩 6 处：NAS / 队列 / 电台 / PlaybackRouter / PlaybackViewModel / PlaylistStore / DevicePlaylistGateway。
+
+另外两个 UseCase（`SetVolumeUseCase` / `PlayFromSourceUseCase`）**本轮没动** ——
+它们要动 4 套音量实现和 5 个 ViewModel 的播放路径，需要整轮。
+
 ---
 
 ## 下一道
 
-S2.2 真机验收 → U2 首页分组（判据已就绪）→ S3.1 UseCase
+S3.1 剩余：6 处 `QueueItem` + `SetVolumeUseCase` + `PlayFromSourceUseCase` → U2 首页分组
