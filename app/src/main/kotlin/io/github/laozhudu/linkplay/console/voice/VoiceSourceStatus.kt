@@ -1,5 +1,6 @@
 package io.github.laozhudu.linkplay.console.voice
 
+import io.github.laozhudu.linkplay.protocol.playback.PlayIntent
 import io.github.laozhudu.linkplay.console.diagnostics.SourceFailure
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -56,7 +57,7 @@ object VoiceSourceStatus {
     /**
      * 意图匹配 + 执行的结果。
      *
-     * [matched] 为 false 表示 `IntentRouter` 没认出这个说法（`VoiceIntent.Unknown`）——
+     * [matched] 为 false 表示 `IntentRouter` 没认出这个说法（`PlayIntent.Unknown`）——
      * 这**不是**失败，是"还没实现这个口令"，报告里的措辞要能区分。
      */
     fun routed(intent: String, result: String, matched: Boolean) = mutate {
