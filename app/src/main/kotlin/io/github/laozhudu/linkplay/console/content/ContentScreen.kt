@@ -14,6 +14,8 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
@@ -73,6 +75,11 @@ internal fun ContentScreen(
     /** 点「接着听」里的一行：再投一次。**不是**打开详情。 */
     onReplay: (io.github.laozhudu.linkplay.protocol.library.RecentPlay) -> Unit,
     onOpenRecentAdd: (RecentAdd) -> Unit,
+    /**
+     * 播一条搜索结果。**由外面实现**（它知道当前设备、本机地址、洛雪脚本）。
+     * 内容页只负责"把结果列出来、点了调这个"。
+     */
+    onPlayHit: (io.github.laozhudu.linkplay.console.search.SearchHit) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     // 进页面刷一次：数量会随「刚导入的歌 / 刚连的 NAS / 刚建的歌单」变化，
@@ -89,6 +96,19 @@ internal fun ContentScreen(
     val target = targetState.value
     // B 站零实现。**画了就不许点着没反应** —— 点一下给一句实话。
     val context = androidx.compose.ui.platform.LocalContext.current
+    // 搜索结果**在本页出**（用户明确要求：不要点进去再搜一遍）
+    val searchVm: io.github.laozhudu.linkplay.console.search.SearchHubViewModel =
+        androidx.lifecycle.viewmodel.compose.viewModel(
+            factory = viewModelFactory {
+                initializer {
+                    io.github.laozhudu.linkplay.console.search.SearchHubViewModel(
+                        context.applicationContext as android.app.Application,
+                    )
+                }
+            },
+        )
+    val searchState by searchVm.state.collectAsState()
+    val searching = searchState.keyword.isNotBlank()
     var biliHint by remember { mutableStateOf(false) }
 
     // 回调**必须**从外面传进来 —— 上一版这里先写成 onClick = {}，
@@ -128,7 +148,10 @@ internal fun ContentScreen(
             value = keyword,
             onValueChange = { keyword = it },
             placeholder = "歌名、歌手，或「周杰伦」",
-            onSubmit = { if (keyword.isNotBlank()) onSearch(keyword.trim()) },
+            onSubmit = {
+                val q = keyword.trim()
+                if (q.isNotEmpty()) searchVm.search(q)
+            },
             autoFocus = false,
         )
 
@@ -169,12 +192,29 @@ internal fun ContentScreen(
 
         VSpace(Spacing.md)
 
+        // ---- 搜索结果（有词就顶掉下面的浏览区）----
+        if (searching) {
+            SearchResultList(
+                state = searchState,
+                onPlay = onPlayHit,
+                onOpenSource = { src ->
+                    when (src) {
+                        io.github.laozhudu.linkplay.console.search.SourceId.Nas -> onOpenNas()
+                        io.github.laozhudu.linkplay.console.search.SourceId.Radio -> onOpenRadio()
+                        io.github.laozhudu.linkplay.console.search.SourceId.Local -> onOpenLocal()
+                        io.github.laozhudu.linkplay.console.search.SourceId.Lx -> onOpenScripts()
+                    }
+                },
+            )
+            VSpace(Spacing.md)
+        }
+
         // ---- 「接着听」：定稿内容页第一组 ----
         //
         // 快捷入口，不是列表页：只放 3 条，多了会把下面挤出首屏。
         // 右侧两列回答「多久」和「投给谁」—— 定稿图里就是 `7:45  doss1`。
         val listening = state.recentPlays
-        if (listening.isNotEmpty()) {
+        if (!searching && listening.isNotEmpty()) {
             InsetGroup(title = "接着听") {
                 listening.forEachIndexed { i, play ->
                     val deviceName = play.deviceIp?.let { ip ->
@@ -204,7 +244,7 @@ internal fun ContentScreen(
 
         // ---- 「最近加入」：定稿内容页第二组 ----
         val adds = state.recentAdds
-        if (adds.isNotEmpty()) {
+        if (!searching && adds.isNotEmpty()) {
             InsetGroup(title = "最近加入") {
                 adds.forEachIndexed { i, add ->
                     ListRow(
@@ -232,7 +272,7 @@ internal fun ContentScreen(
         // ⚠️ 定稿图里**没有这一组**（它只画了 搜索 + 筛选 + 接着听 + 最近加入）。
         // 但删掉就没地方进 NAS / 本地曲库 / 歌单 —— 筛选条只能筛列表，不能当导航。
         // 所以保留、压到最后一组、标题统一成「全部来源」。**这条偏差已记在 docs/91。**
-        if (shown.isNotEmpty()) {
+        if (!searching && shown.isNotEmpty()) {
             InsetGroup(title = "全部来源") {
                 shown.forEachIndexed { i, row ->
                     ListRow(
@@ -442,6 +482,62 @@ private fun TargetRow(
                 },
                 label = { Text(dev.name.ifBlank { dev.ip }) },
             )
+        }
+    }
+}
+
+/**
+ * 搜索结果列表 —— **在本页直接列、直接点**（用户明确要求）。
+ *
+ * 按源分组，每组最多 5 条（`SearchHubViewModel` 已经截好）。
+ * 没有合并排序：NAS 上的《晴天》和洛雪的《晴天》不是同一份东西，混排只会让人点错。
+ */
+@Composable
+private fun SearchResultList(
+    state: io.github.laozhudu.linkplay.console.search.SearchHubUiState,
+    onPlay: (io.github.laozhudu.linkplay.console.search.SearchHit) -> Unit,
+    onOpenSource: (io.github.laozhudu.linkplay.console.search.SourceId) -> Unit,
+) {
+    io.github.laozhudu.linkplay.console.search.SourceId.entries.forEach { src ->
+        val probe = state.probes[src] ?: return@forEach
+        val items = (probe as? io.github.laozhudu.linkplay.console.search.ProbeState.Found)?.items.orEmpty()
+
+        if (items.isNotEmpty()) {
+            InsetGroup(
+                title = src.label,
+                footer = (probe as? io.github.laozhudu.linkplay.console.search.ProbeState.Found)
+                    ?.let { if (it.count > it.items.size) "共 ${it.count} 条，这里显示前 ${it.items.size} 条" else null },
+            ) {
+                items.forEachIndexed { i, hit ->
+                    ListRow(
+                        title = hit.title,
+                        subtitle = hit.subtitle,
+                        showChevron = false,
+                        onClick = { onPlay(hit) },
+                        showDivider = i != items.lastIndex,
+                    )
+                }
+            }
+            VSpace(Spacing.sm)
+        } else {
+            // 没结果 / 不可用：说清原因，并且给一个"去那边"的出口
+            val reason = when (probe) {
+                io.github.laozhudu.linkplay.console.search.ProbeState.Searching -> "搜索中…"
+                io.github.laozhudu.linkplay.console.search.ProbeState.Idle -> return@forEach
+                is io.github.laozhudu.linkplay.console.search.ProbeState.Failed -> probe.reason
+                is io.github.laozhudu.linkplay.console.search.ProbeState.NotReady -> probe.hint
+                is io.github.laozhudu.linkplay.console.search.ProbeState.Found -> "没找到"
+            }
+            InsetGroup(title = src.label) {
+                ListRow(
+                    title = "没有结果",
+                    subtitle = reason,
+                    showChevron = true,
+                    onClick = { onOpenSource(src) },
+                    showDivider = false,
+                )
+            }
+            VSpace(Spacing.sm)
         }
     }
 }
