@@ -83,6 +83,7 @@ internal fun HomeScreen(
     onOpenPlayer: () -> Unit = {},
     /** 诊断页（顶栏 ◔ / 崩溃横幅都进这里）。 */
     onOpenDiagnostics: () -> Unit = {},
+    onOpenRemote: () -> Unit = {},
 ) {
     val extras = LocalExtraColors.current
     var showAdd by remember { mutableStateOf(false) }
@@ -361,11 +362,7 @@ internal fun HomeScreen(
                             }
                         },
                         showChevron = true,
-                        onClick = {
-                            remoteHint = "红外码库（Flipper-IRDB，30 万条）还没接进来。\n" +
-                                "现在只有一个探测键，用来试「这台手机能不能发红外」。\n" +
-                                "接好之后这里会变成「选品牌 → 选型号」。"
-                        },
+                        onClick = onOpenRemote,
                     )
                     ListRow(
                         title = "添加蓝牙设备",
