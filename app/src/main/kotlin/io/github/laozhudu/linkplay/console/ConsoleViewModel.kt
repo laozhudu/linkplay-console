@@ -859,10 +859,31 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         runCatching {
             io.github.laozhudu.linkplay.console.playback.PlaybackOutputStore.write(
                 getApplication(),
-                io.github.laozhudu.linkplay.console.playback.PlaybackOutput.Device(ip),
+                io.github.laozhudu.linkplay.console.playback.PlaybackOutput.Device(
+                    ip,
+                    _state.value.saved.firstOrNull { it.ip == ip }?.name ?: ip,
+                ),
             )
         }
         refreshStatus()
+    }
+
+    /**
+     * 把"当前选中的设备"同步成播放目标。
+     *
+     * 凡是 `selectedIp` 变成一台具体设备的地方都该调它 —— 包括启动恢复。
+     * 什么时候**不**调：用户显式选了「本机」。那种情况下 selectedIp 仍然指向某台设备
+     * （用来查看状态），但目标就是本机，不该被覆盖回去。
+     */
+    private fun syncTargetToSelected() {
+        val ip = _state.value.selectedIp ?: return
+        val name = _state.value.saved.firstOrNull { it.ip == ip }?.name ?: ip
+        runCatching {
+            io.github.laozhudu.linkplay.console.playback.PlaybackOutputStore.write(
+                getApplication(),
+                io.github.laozhudu.linkplay.console.playback.PlaybackOutput.Device(ip, name),
+            )
+        }
     }
 
     fun refreshStatus() {
@@ -1424,6 +1445,12 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         // 否则"重开 App 列表是空的"会被当成恢复失效。
         // device 先、queue 后是这个顺序唯一正确的排法，已在 SessionRestore.restore() 里写死。
         sessionRestore.restore()
+        // **恢复出来的"上次那台设备"也要成为播放目标。**
+        //
+        // 漏了这一步的后果（用户截图）：顶栏显示 E900V22C，左下角 cast 却写「本机」——
+        // 因为 `SessionRestore` 只改了 `selectedIp`，没改目标，目标还停在上次手动选的「本机」。
+        // 这是"两套状态"的最后一处漏网：open()/select() 都同步了，恢复这条路没同步。
+        syncTargetToSelected()
         // 首页多房间卡片的低频心跳：不在播放页时也能跟上设备侧/遥控器的音量变化
         safeLaunch("groupVolumeHeartbeat") {
             while (true) {
