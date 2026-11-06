@@ -191,15 +191,24 @@ internal fun HomeScreen(
             contentPadding = PaddingValues(bottom = Spacing.xl),
             verticalArrangement = Arrangement.spacedBy(Spacing.sm),
         ) {
-            state.error?.let { err ->
+            /*
+             * 顶部那条红色横幅删掉了。
+             *
+             * 原因（真机截图）：`ConnectException: Failed to connect to /192.168.99.175:80`
+             * 挂在页顶，而用户当前选的是 doss1 —— 那条错误是切去 E900V22C 时留下的。
+             * 一条属于某台设备的错误挂在页面顶部，看起来像整个 App 坏了。
+             *
+             * 现在分两种：
+             * - **有归属**（errorIp != null）→ 显示在那台设备行上（红色副标题）
+             * - **无归属**（比如"名字不能为空"）→ 一行小字提示，不带卡片样式
+             */
+            state.error?.takeIf { state.errorIp == null }?.let { err ->
                 item {
-                    AppCard {
-                        Text(
-                            err,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = StatusColors.error,
-                        )
-                    }
+                    Text(
+                        err,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = StatusColors.error,
+                    )
                 }
             }
 
@@ -279,6 +288,7 @@ internal fun HomeScreen(
                         onVolumeCommit = { vm.setCardVolume(device, it) },
                         onLongClick = { menuTarget = device },
                         inUse = targetIp == device.ip,
+                        errorText = state.error?.takeIf { state.errorIp == device.ip },
                     )
                 }
             }

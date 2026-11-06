@@ -177,6 +177,18 @@ data class ConsoleUiState(
     val online: Map<String, Boolean> = emptyMap(),
     val log: List<String> = emptyList(),
     val error: String? = null,
+    /**
+     * 这条错误是**哪台设备**产生的（IP）。
+     *
+     * 为什么要区分：真机截图里页顶挂着
+     * `ConnectException: Failed to connect to /192.168.99.175:80`，
+     * 而用户当前选中的是 doss1 —— 那条错误是**切去 E900V22C 时**探活失败留下的，
+     * 一直挂到切回来都没清。
+     *
+     * 一条属于某台设备的错误挂在页面顶部，等于告诉用户"整个 App 坏了"。
+     * 现在按设备归属显示（`null` = 与设备无关，比如"名字不能为空"）。
+     */
+    val errorIp: String? = null,
     val busy: Boolean = false,
     /** 扫描后有没有被过滤掉的其它 UPnP 设备（用于给用户一句解释，而不是「怎么什么都搜不到」）。 */
     val filteredOutCount: Int = 0,
@@ -1276,7 +1288,13 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                 withContext(Dispatchers.IO) { block() }
                 log("$label 完成")
             } catch (t: Throwable) {
-                _state.update { it.copy(error = "${t.javaClass.simpleName}: ${t.message}") }
+                // 记下**当时**在操作哪台 —— 之后切设备了，这条错误也不会跟到别的行上
+                _state.update {
+                    it.copy(
+                        error = "${t.javaClass.simpleName}: ${t.message}",
+                        errorIp = it.selectedIp,
+                    )
+                }
                 log("$label 失败：${t.message}")
             } finally {
                 _state.update { it.copy(busy = false) }
