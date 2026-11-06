@@ -1193,3 +1193,60 @@ NAS(21) + 本地(15) + 在线(7) + 电台(11) + 洛雪(6) + 本地队列(10) + �
 
 不建这两个接口，遥控页和内容页就会变成两坨各自硬编码的界面，下次加东西还得拆。
 
+## 第三十四轮 · 基础设施第一步：`RemoteControl` 接口 + 红外实现
+
+用户：「基础设施先完善吧」→ 按 `docs/95` 第四节顺序，先建接口再跑车。
+
+| 文件 | 动作 |
+|---|---|
+| `remote/RemoteKey.kt` | **新建**：14 个语义键 + `Custom(name)` |
+| `remote/RemoteResult.kt` | **新建**：`Sent` / `Unsupported` / `Failed(reason)` |
+| `remote/RemoteControl.kt` | **新建**：接口 + 三种传输方式枚举 |
+| `remote/IrRemoteControl.kt` | **新建**：红外实现（NEC） |
+| `test/.../IrRemoteControlTest.kt` | **新建**，**8 个用例** |
+
+### 三个关键设计
+
+**① 界面只认语义键，不认码值**
+
+红外是 NEC 码、蓝牙是 HID usage、WiFi 是各家 JSON —— 同一个"电源键"三种传输完全不同。
+界面存码值的话，**红外遥控器就永远是红外遥控器**，换蓝牙要重画一遍。
+
+**② `keys()` 决定界面画什么**
+
+没有发射器时返回**空集** → 界面整块不显示，而不是画一个按了没反应的遥控器。
+这条由单测锁着（`no emitter means zero keys`）。
+
+**③ `Sent` 不等于 `Success`**
+
+红外 `transmit()` 是 void，**没有回执**。系统只保证"波形交给驱动了"，
+不保证电视收到了。所以结果类型里**没有 Success**，界面文案只能说"已发送"。
+
+### 现在的真实能力（诚实标注）
+
+内置码表**只有一条探测码**（NEC 地址 `0x04` / 命令 `0x08`），
+所以 `keys()` 只返回 Power，遥控页现在只会有一个电源键。
+
+**这是真实能力，不是设计偷懒。** 接 `Flipper-IRDB`（CC0，30 万条）时只换 `codebook`，
+界面和接口都不用动。诊断行里明确写着「码表=示例（1 键，未接码库）」。
+
+### 一个刻意的可测性取舍
+
+`IrRemoteControl` 的依赖是**三个 lambda**（hasEmitter / transmit / onAttempt），
+不是直接 `new IrBlaster` —— 因为 `IrBlaster` 要 Android 的 `ConsumerIrManager`，
+直接依赖它这个类就跑不了纯 JVM 单测，而"没有发射器时必须不画键"恰恰最该被锁住。
+
+Android 工厂在 `companion fun from(context)`，是唯一碰 `IrBlaster` 的地方。
+
+### 验证
+
+```bash
+./gradlew :app:testDebugUnitTest   # 全量 1056 用例 0 失败（新增 8）
+```
+
+### 没做
+
+- 码库（Flipper-IRDB）没接
+- **还没接进 UI**（遥控页还没建）—— 本轮只建接口 + 实现 + 测试
+- 蓝牙 / WiFi 实现（接口已就绪，加实现时 UI 零改动）
+
