@@ -3,4 +3,9 @@
     <!-- 图标底色：与 App 深色主题的 background 一致（0xFF0A0C11 附近），
          自适应图标在圆形/方形/水滴等不同形状下都保持同一块深底。 -->
     <color name="ic_launcher_background">#0B0E15</color>
+
+    <!-- 启动窗口 / 状态栏露出来的那层底色。
+         必须和 `ui/theme/Theme.kt` 的 LightColors.background（#F7F9FC）一致，
+         否则顶上会有一条色差带，启动瞬间也能看到。 -->
+    <color name="app_background">#FFF7F9FC</color>
 </resources>

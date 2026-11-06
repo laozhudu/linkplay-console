@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        深色模式的主主题。
+
+        之前只有 `values/themes.xml` 一份，父主题写死 `Theme.Material.Light` ——
+        于是系统自己的东西（键盘、权限弹窗、启动白闪）在深色模式下仍是浅色。
+        这里换成 Material 深色版本，并把背景色对齐 Compose 的 `DarkColors.background`（#0A0C11）。
+    -->
+    <style name="Theme.LinkPlayConsole" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/app_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>
