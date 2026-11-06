@@ -19,6 +19,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import io.github.laozhudu.linkplay.console.ui.apple.InsetGroup
+import io.github.laozhudu.linkplay.console.ui.apple.ListRow
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -38,7 +40,6 @@ import androidx.compose.ui.unit.dp
 import io.github.laozhudu.linkplay.console.ConsoleUiState
 import io.github.laozhudu.linkplay.console.ConsoleViewModel
 import io.github.laozhudu.linkplay.console.diagnostics.NavTrace
-import io.github.laozhudu.linkplay.console.home.DeviceCardRow
 import io.github.laozhudu.linkplay.console.ui.components.AppCard
 import io.github.laozhudu.linkplay.console.ui.components.AppShapesExpressive
 import io.github.laozhudu.linkplay.console.ui.components.CircleIcon
@@ -339,67 +340,91 @@ internal fun HomeScreen(
                 }
             }
 
+            // ---- 「发现」分组：**常驻**（docs/93 屏 1）----
+            //
+            // 定稿里它一直在，不用先点"添加音箱"。因为"附近有什么"是设备页的
+            // 基本信息，不该藏在一个开关后面。
+            item {
+                InsetGroup(title = "发现") {
+                    if (state.devices.isNotEmpty()) {
+                        state.devices.take(3).forEachIndexed { index, d ->
+                            ListRow(
+                                title = d.friendlyName ?: d.friendlySsid ?: d.ip,
+                                subtitle = d.ip,
+                                trailing = {
+                                    Text(
+                                        "添加",
+                                        color = MaterialTheme.colorScheme.primary,
+                                        style = MaterialTheme.typography.labelLarge,
+                                    )
+                                },
+                                onClick = { onAddDiscovered(d) },
+                                showDivider = true,
+                            )
+                        }
+                    }
+                    ListRow(
+                        title = if (state.scanning) "正在搜索局域网…" else "扫描附近设备",
+                        subtitle = when {
+                            state.scanning -> null
+                            state.devices.isNotEmpty() -> "已发现 ${state.devices.size} 台"
+                            else -> "点一下开始扫描"
+                        },
+                        leading = {
+                            Box(Modifier.size(30.dp), contentAlignment = Alignment.Center) {
+                                Text(
+                                    if (state.scanning) "…" else "◎",
+                                    color = MaterialTheme.colorScheme.primary,
+                                    style = MaterialTheme.typography.titleMedium,
+                                )
+                            }
+                        },
+                        onClick = if (state.scanning) null else onScan,
+                        showDivider = false,
+                    )
+                }
+            }
+
             if (showAdd) {
-                item {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(56.dp)
-                            .clip(AppShapesExpressive.pill)
-                            .background(MaterialTheme.colorScheme.primary)
-                            .clickable(enabled = !state.scanning, onClick = onScan),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            if (state.scanning) "正在搜索音箱…" else "搜索局域网音箱",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onPrimary,
-                        )
-                    }
-                }
-                item {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedTextField(
-                            value = manualIp,
-                            onValueChange = { manualIp = it },
-                            label = { Text("手动填 IP（如 192.168.99.153）") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Spacer(Modifier.width(Spacing.sm))
-                        Button(onClick = { onAddManual(manualIp); manualIp = "" }) { Text("添加") }
-                    }
-                }
                 if (state.filteredOutCount > 0) {
                     item {
                         Text(
-                            "已忽略 ${state.filteredOutCount} 个非音箱的 UPnP 设备（电视 / 路由 / NAS 等）",
-                            style = MaterialTheme.typography.labelMedium,
+                            "已忽略 ${state.filteredOutCount} 个非音箱设备（电视 / 路由 / NAS）",
+                            style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 16.dp, top = 6.dp, end = 16.dp),
                         )
                     }
                 }
-                items(state.devices, key = { it.ip }) { d ->
-                    AppCard(onClick = { onAddDiscovered(d) }) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    d.friendlyName ?: d.friendlySsid ?: d.ip,
-                                    style = MaterialTheme.typography.titleMedium,
-                                )
-                                Text(
-                                    d.ip,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            Text("添加", color = MaterialTheme.colorScheme.primary)
-                        }
-                    }
-                }
                 item {
-                    OutlinedButton(onClick = onProvision, modifier = Modifier.fillMaxWidth()) {
-                        Text("新音箱？走 AP 直连配网")
+                    InsetGroup(title = "或") {
+                        // 这一行**不能**用 ListRow：它是输入框，不是可点行。
+                        // （第一版我改成 ListRow 就把输入能力弄丢了 —— 幸好编译期先撞到图标问题）
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            OutlinedTextField(
+                                value = manualIp,
+                                onValueChange = { manualIp = it },
+                                placeholder = { Text("手动填 IP", style = MaterialTheme.typography.bodyMedium) },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Spacer(Modifier.width(Spacing.sm))
+                            TextButton(
+                                onClick = { onAddManual(manualIp); manualIp = "" },
+                                enabled = manualIp.isNotBlank(),
+                            ) { Text("添加") }
+                        }
+                        ListRow(
+                            title = "新音箱？走 AP 直连配网",
+                            showChevron = true,
+                            onClick = onProvision,
+                            showDivider = false,
+                        )
                     }
                 }
             }
