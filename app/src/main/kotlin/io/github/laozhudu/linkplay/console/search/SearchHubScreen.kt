@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -36,13 +37,21 @@ import io.github.laozhudu.linkplay.console.ui.theme.Spacing
 internal fun SearchHubScreen(
     onBack: () -> Unit,
     onOpenSource: (SourceId) -> Unit,
+    /** 从「内容」页的搜索框带过来的词。非空时开页即搜，省掉一次手动回车。 */
+    initialKeyword: String = "",
 ) {
     val app = LocalContext.current.applicationContext as android.app.Application
     val vm: SearchHubViewModel = viewModel(
         factory = viewModelFactory { initializer { SearchHubViewModel(app) } },
     )
     val state by vm.state.collectAsState()
-    var keyword by remember { mutableStateOf("") }
+    var keyword by remember { mutableStateOf(initialKeyword) }
+
+    // 带着词进来就立刻搜一次 —— 否则用户在上一个页面明明已经输入过，
+    // 进来还要再敲一遍回车，会以为"刚才没生效"。
+    LaunchedEffect(initialKeyword) {
+        if (initialKeyword.isNotBlank()) vm.search(initialKeyword)
+    }
 
     AppPage(
         title = "找点东西听",

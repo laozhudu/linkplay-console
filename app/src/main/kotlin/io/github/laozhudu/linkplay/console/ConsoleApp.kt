@@ -90,6 +90,8 @@ internal fun ConsoleBody(vm: ConsoleViewModel) {
     val queue by QueueBus.state.collectAsState()
 
     var tab by remember { mutableStateOf(Tab.Devices) }
+    // 内容页搜索框 → 统一搜索页。带一个种子词过去，省掉重新输入。
+    var searchSeed by remember { mutableStateOf("") }
     var sub by remember { mutableStateOf<SubPage?>(null) }
 
     // 把"用户此刻在哪"同步到诊断快照。
@@ -172,7 +174,8 @@ internal fun ConsoleBody(vm: ConsoleViewModel) {
             )
 
             SubPage.SearchHub -> io.github.laozhudu.linkplay.console.search.SearchHubScreen(
-                onBack = { sub = null },
+                initialKeyword = searchSeed,
+                onBack = { sub = null; searchSeed = "" },
                 onOpenSource = { id ->
                     sub = when (id) {
                         io.github.laozhudu.linkplay.console.search.SourceId.Lx -> SubPage.LxSearch
@@ -286,23 +289,22 @@ internal fun ConsoleBody(vm: ConsoleViewModel) {
                     )
                 }
 
-                // 「内容」格 —— 六个源合一格（定稿第 2 屏）。
+                // 「内容」格 —— 六源合一（定稿第 2 屏）。
                 //
-                // 本轮**只做"合并入口"这一层**：真正的内容页（搜索框 + 按源筛选 +
-                // 最近播放）排在下一轮。现在复用 SourcesScreen 当骨架，
-                // 因为它本来就只是"六件事的入口列表"，形状是对的。
-                Tab.Content -> SourcesScreen(
+                // 原来这里是「洛雪」和「媒体库」两个并列的一级格，
+                // 都属于"有什么可放"，按使用场景合成一格，**按源筛选而不是按模块分页**。
+                Tab.Content -> io.github.laozhudu.linkplay.console.content.ContentScreen(
                     state = state,
-                    vm = vm,
-                    onOpenOnline = { sub = SubPage.Online },
-                    onOpenNas = { sub = SubPage.Nas },
-                    onOpenLibrary = { sub = SubPage.Library },
+                    onRefresh = vm::refreshMusicCounts,
+                    onSearch = { q -> searchSeed = q; sub = SubPage.SearchHub },
                     onOpenLocal = { sub = SubPage.LocalQueue },
+                    onOpenNas = { sub = SubPage.Nas },
+                    onOpenPlaylists = { sub = SubPage.Library },
+                    onOpenRecent = { sub = SubPage.Library },
+                    onOpenOnline = { sub = SubPage.Online },
                     onOpenRadio = { sub = SubPage.Radio },
-                    onOpenSettings = { sub = SubPage.Settings },
+                    onOpenLibrary = { sub = SubPage.Library },
                     onOpenScripts = { sub = SubPage.Scripts },
-                    onOpenLxSearch = { sub = SubPage.LxSearch },
-                    onOpenSearchHub = { sub = SubPage.SearchHub },
                     onGoDevices = { tab = Tab.Devices },
                 )
 
