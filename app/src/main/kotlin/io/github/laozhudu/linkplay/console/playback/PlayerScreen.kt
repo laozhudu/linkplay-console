@@ -197,6 +197,30 @@ fun PlayerScreen(
     val targetFlow = io.github.laozhudu.linkplay.console.playback.PlaybackOutputStore.current
         .collectAsState()
     val targetNow = targetFlow.value
+    // 目标名字要用真实设备名，而 PlaybackUiState 不含设备列表 —— 从会话存储读一次
+    val savedDevices = remember {
+        runCatching {
+            io.github.laozhudu.linkplay.console.session.SessionStore.of(appContext).savedDevices()
+        }.getOrDefault(emptyList())
+    }
+
+    /**
+     * 目标的人话名字 —— 顶栏和左下角 cast **都用这一个**。
+     *
+     * 之前两边各算一次（顶栏用 `state.friendlyName`、cast 用 target），
+     * 只要有一处没同步就出现「顶栏 E900V22C、左下角本机」。现在只有一个来源。
+     */
+    val targetLabel: String = when (val tn = targetNow) {
+        is PlaybackOutput.Local -> "本机"
+        // Device 的 label 可能是空串（老数据 `remote`）或就是 IP —— 都回退到真实设备名
+        is PlaybackOutput.Device ->
+            savedDevices.firstOrNull { it.ip == tn.ip }?.name
+                ?: tn.label.takeIf { it.isNotBlank() && it != tn.ip }
+                ?: state.friendlyName
+                ?: deviceIp
+        // 目标还没读过：按当前选中设备显示，避免闪一下空白
+        null -> state.friendlyName ?: deviceIp
+    }
 
     // ---- 语音：一条顶栏提示 + 一个麦克风按钮，不引入任何浮层 ----
     var voiceNote by remember { mutableStateOf<String?>(null) }
@@ -348,7 +372,8 @@ fun PlayerScreen(
                 }
                 Column(Modifier.weight(1f)) {
                     Text(
-                        state.friendlyName ?: deviceIp,
+                        // 顶栏和左下角 cast 用**同一个** targetLabel（唯一来源）
+                        targetLabel,
                         style = MaterialTheme.typography.titleSmall,
                         color = OnDarkPalette.text,
                         maxLines = 1,
@@ -364,8 +389,10 @@ fun PlayerScreen(
                             //
                             // 但真切到线路输入/蓝牙时**必须说** —— 否则用户会以为"App 里点了播放
                             // 却没声音"，其实是音箱在放 AUX。
+                            // 只在**拿得到 LinkPlay 模式**时才有"输入源"这个概念。
+                            // 通用 DLNA 渲染器（电视盒子）没有 mode，`sourceLabel` 会给出
+                            // 「DLNA 渲染器」——那是协议名不是输入源，写上去既错又长。
                             val source = state.mode?.let { PlayerSource.describe(it) }
-                                ?: state.sourceLabel
                             val isNetwork = source == null ||
                                 source.contains("网络") || source.contains("NETWORK", ignoreCase = true)
                             if (!isNetwork) {
@@ -506,17 +533,13 @@ fun PlayerScreen(
             // 用户最常见的困惑不是"没有播放按钮"，而是"按了播放却没声音"
             // —— 因为声音投到了另一台设备。把这个信息从顶栏的小字提到标题正下方。
             Text(
-                text = buildString {
-                    append(deviceName ?: deviceIp)
-                    append(" · ")
-                    append(
-                        when {
-                            state.error != null -> "出错了"
-                            playing -> "投送中"
-                            queue.running -> "已暂停"
-                            else -> "待播放"
-                        },
-                    )
+                // 只写**状态**，不再重复设备名 —— 顶栏已经写了一次。
+                // 之前是「E900V22C-175[DLNA] · 待播放」，一屏里同一个名字出现两遍。
+                text = when {
+                    state.error != null -> "出错了"
+                    playing -> "投送中"
+                    queue.running -> "已暂停"
+                    else -> "待播放"
                 },
                 style = MaterialTheme.typography.labelMedium,
                 color = OnDarkPalette.muted,
@@ -645,7 +668,7 @@ fun PlayerScreen(
             ) {
                 // 左下角：从哪出声（大厂的 cast / AirPlay 位置）
                 CastButton(
-                    label = (targetNow as? PlaybackOutput.Device)?.label?.takeIf { it.isNotBlank() },
+                    label = targetLabel,
                     isLocal = targetNow is PlaybackOutput.Local,
                     onClick = { showTargetSheet = true },
                 )
@@ -758,15 +781,19 @@ fun PlayerScreen(
     // ---------- 选目标（左下角 cast 图标点开）----------
     if (showTargetSheet) {
         TargetSheet(
+            devices = savedDevices,
             onDismiss = { showTargetSheet = false },
             onPick = { out ->
                 showTargetSheet = false
+                // 两件都不能让异常冒出去：写文件失败会静默，重建服务失败会崩界面
                 runCatching {
                     io.github.laozhudu.linkplay.console.playback.PlaybackOutputStore
                         .write(appContext, out)
                 }
                 // 换挂播放器：MediaSession 不能动态换 player，必须重建
-                io.github.laozhudu.linkplay.console.playback.PlaybackService.restart(appContext)
+                runCatching {
+                    io.github.laozhudu.linkplay.console.playback.PlaybackService.restart(appContext)
+                }
             },
         )
     }
@@ -1197,7 +1224,7 @@ private fun PlaylistSheet(
  */
 @Composable
 private fun CastButton(
-    label: String?,
+    label: String,
     isLocal: Boolean,
     onClick: () -> Unit,
 ) {
@@ -1247,12 +1274,8 @@ private fun CastButton(
             )
         }
         Text(
-            // 有设备名就显示名字（一眼知道投给谁），本机就写「本机」
-            text = when {
-                isLocal -> "本机"
-                label != null -> label.take(6)
-                else -> "设备"
-            },
+            // label 已经是最终名字（由 targetLabel 算好），这里只截长度防溢出
+            text = label.take(8),
             style = MaterialTheme.typography.labelSmall,
             color = OnDarkPalette.muted,
             maxLines = 1,
@@ -1270,17 +1293,13 @@ private fun CastButton(
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun TargetSheet(
+    /** 从外面传进来 —— 内部再读一次的话，读不到就只剩「本机」，表现是"换不出别的设备"。 */
+    devices: List<io.github.laozhudu.linkplay.protocol.session.SavedDevice>,
     onDismiss: () -> Unit,
     onPick: (PlaybackOutput) -> Unit,
 ) {
-    val context = androidx.compose.ui.platform.LocalContext.current
     val target = io.github.laozhudu.linkplay.console.playback.PlaybackOutputStore.current
         .collectAsState().value
-    val devices = remember {
-        runCatching {
-            io.github.laozhudu.linkplay.console.session.SessionStore.of(context).savedDevices()
-        }.getOrDefault(emptyList())
-    }
 
     androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.padding(bottom = Spacing.lg)) {
