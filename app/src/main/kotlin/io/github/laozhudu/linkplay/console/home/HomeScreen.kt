@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import io.github.laozhudu.linkplay.console.ui.apple.InsetGroup
+import io.github.laozhudu.linkplay.console.ui.apple.LargeTitle
 import io.github.laozhudu.linkplay.console.ui.apple.ListRow
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -42,9 +43,7 @@ import io.github.laozhudu.linkplay.console.ConsoleViewModel
 import io.github.laozhudu.linkplay.console.diagnostics.NavTrace
 import io.github.laozhudu.linkplay.console.ui.components.AppCard
 import io.github.laozhudu.linkplay.console.ui.components.AppShapesExpressive
-import io.github.laozhudu.linkplay.console.ui.components.CircleIcon
 import io.github.laozhudu.linkplay.console.ui.components.EmptyState
-import io.github.laozhudu.linkplay.console.ui.components.SectionTitle
 import io.github.laozhudu.linkplay.console.ui.components.VSpace
 import io.github.laozhudu.linkplay.console.ui.theme.LocalExtraColors
 import io.github.laozhudu.linkplay.console.ui.theme.Spacing
@@ -80,7 +79,6 @@ internal fun HomeScreen(
     /** 齿轮菜单里的「设备内容」（预设键 / 固件升级）。 */
     onOpenContent: () -> Unit = {},
     /** 聚合播放条点一下进播放页。 */
-    onOpenPlayer: () -> Unit = {},
     /** 诊断页（顶栏 ◔ / 崩溃横幅都进这里）。 */
     onOpenDiagnostics: () -> Unit = {},
     onOpenRemote: () -> Unit = {},
@@ -116,40 +114,19 @@ internal fun HomeScreen(
 
     Column(Modifier.fillMaxSize().padding(horizontal = Spacing.lg)) {
         VSpace(Spacing.md)
-        // 顶栏按原厂的「设备列表 + 添加 + 刷新」：这两个动作原来藏在「添加音箱」折叠区里，
-        // 用户得先展开才能刷新，属于把常用动作埋在低频入口后面
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.weight(1f)) {
-                SectionTitle(
-                    title = "我的音箱",
-                    subtitle = when {
-                        state.busy -> "正在连接…"
-                        state.saved.isEmpty() -> "还没有添加"
-                        else -> "${state.saved.count { state.online[it.uuid] != false }} 台在线"
-                    },
-                )
-            }
-            CircleIcon(onClick = { showAdd = !showAdd }, size = 40.dp) {
-                Text("+", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
-            }
-            Spacer(Modifier.width(Spacing.xs))
-            // 刷新 = 重新探活（不清设备列表、不闪屏），比"再搜一遍"快
-            CircleIcon(onClick = { vm.refreshDevices() }, size = 40.dp) {
-                Text("↻", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            // 诊断入口：**常驻**在首页顶栏。
-            // 为什么不只放设置页：闪退之后用户第一件事是回到首页，多一层点击就多一次劝退；
-            // 而且有了它，任何"不对劲"都能立刻截图给我，不用描述现象。
-            Spacer(Modifier.width(Spacing.xs))
-            CircleIcon(onClick = onOpenDiagnostics, size = 40.dp) {
-                Text(
-                    if (state.lastCrashAtStart != null) "⚠" else "◔",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = if (state.lastCrashAtStart != null) StatusColors.warn
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
+        // 大标题按定稿：**「设备」**，不是「我的音箱」。
+        //
+        // 原来这里写「我的音箱」，下面分组标题又写一次「我的音箱」—— 一屏出现两遍。
+        // 定稿的大标题是格名（设备），分组标题才是设备类别（我的音箱 / 其它播放设备）。
+        LargeTitle(
+            title = "设备",
+            subtitle = when {
+                state.busy -> "正在连接…"
+                state.saved.isEmpty() -> "还没有添加"
+                else -> "${state.saved.count { state.online[it.uuid] != false }} 台在线"
+            },
+        )
+
         // ---------- 崩溃横幅 ----------
         // 上次运行崩过就顶一条红卡：点开进诊断页，能看到完整堆栈。
         // 系统那个"因自身空指针问题"的弹窗没有任何定位信息，这条才是能用来改代码的东西。
@@ -193,77 +170,7 @@ internal fun HomeScreen(
             }
         }
 
-        // ---------- 聚合播放条（Sonos 的 Now Playing 条 / Music Assistant 的 Player Bar）----------
-        // 主页最需要但之前一直缺的一块：**现在在放什么、一键停**。
-        // 之前要点进播放页才能看到，首页只有一堆卡片。
-        if (state.saved.isNotEmpty()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = Spacing.sm)
-                    .clip(AppShapesExpressive.squircle)
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .clickable { onOpenPlayer() }
-                    .padding(horizontal = Spacing.md, vertical = Spacing.sm),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        state.playingTitle ?: if (state.anyPlaying) "正在播放" else "未在播放",
-                        style = MaterialTheme.typography.titleSmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        buildString {
-                            append(state.groupMasterName ?: state.saved.firstOrNull { it.ip == state.selectedIp }?.title ?: "未选设备")
-                            if (state.groupSize > 1) append(" · ${state.groupSize} 台同步")
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                    )
-                }
-                // 组级别的退出入口：以前只有一个藏在每张卡片里的小字「解除」，
-                // 而且它的显示条件是"界面认为这台在组里"——认知一错位，入口就彻底消失。
-                // 组的信息条本身就该能操作，Sonos/Cast 的组行都是这么做的。
-                if (state.groupSize > 1) {
-                    val master = state.saved.firstOrNull { it.ip == state.groupMasterIp }
-                    TextButton(
-                        onClick = { master?.let { vm.ungroupCard(it) } },
-                        contentPadding = PaddingValues(horizontal = 8.dp),
-                    ) {
-                        Text(
-                            "退出同步",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-                // 播放/暂停：与底部大按钮共用同一个判定（state.anyPlaying），
-                // 两处各自算一次必然出现"条上说暂停、按钮说播放"
-                CircleIcon(onClick = { vm.togglePlayAll() }, size = 44.dp) {
-                    Text(
-                        if (state.anyPlaying) "⏸" else "▶",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                }
-                Spacer(Modifier.width(Spacing.xs))
-                // 组网入口：勾选式（Sonos Grouping 菜单）—— 唯一的组网方式
-                CircleIcon(onClick = { vm.openGrouping() }, size = 44.dp) {
-                    Text("⧉", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-        }
-        if (state.saved.size >= 2) {
-            Text(
-                "点 ⧉ 勾选要同步的音箱",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = Spacing.xs),
-            )
-        }
+
         VSpace(Spacing.md)
 
         LazyColumn(
@@ -326,20 +233,6 @@ internal fun HomeScreen(
                         onVolumeCommit = { vm.setCardVolume(device, it) },
                         onLongClick = { menuTarget = device },
                     )
-                }
-            }
-
-            item {
-                VSpace(Spacing.sm)
-                AppCard(onClick = { showAdd = !showAdd }) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            if (showAdd) "收起" else "添加音箱",
-                            style = MaterialTheme.typography.titleMedium,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Text(if (showAdd) "−" else "+", style = MaterialTheme.typography.titleLarge)
-                    }
                 }
             }
 
@@ -422,6 +315,16 @@ internal fun HomeScreen(
                             }
                         },
                         onClick = if (state.scanning) null else onScan,
+                        // 下面还有一行「手动填 IP」，所以这里要画分隔线
+                        showDivider = true,
+                    )
+                    // 手动添加 / 配网：定稿图里没有，但它们没有别的地方可去
+                    // （原来挂在「添加音箱」那个大按钮后面）。压成发现组里的最后一行，
+                    // 频次低但必须存在 —— 一个扫不到的老音箱只能靠手动填 IP。
+                    ListRow(
+                        title = if (showAdd) "收起手动添加" else "扫不到？手动填 IP / 配网",
+                        showChevron = true,
+                        onClick = { showAdd = !showAdd },
                         showDivider = false,
                     )
                 }
@@ -471,41 +374,11 @@ internal fun HomeScreen(
                 }
             }
 
-            // 底部只留「全部播放」（原厂那个大按钮）。
-            // 原来上面还有一行「如何在多音箱同步和独立播放间切换？」—— 用户要求删掉：
-            // 有了拖拽，这行字既不是操作也不是链接，占位置而已。
-            if (state.saved.isNotEmpty()) {
-                item {
-                    VSpace(Spacing.md)
-                    // 媒体播放器的通行约定：播放/暂停按钮显示**点了会发生什么**，
-                    // 不是当前状态（UX StackExchange 上 572 赞的结论，主流播放器全都如此）。
-                    // 所以正在放的时候这里必须是「全部暂停」—— 用户反馈的就是这一点。
-                    val playing = state.anyPlaying
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(52.dp)
-                            .clip(AppShapesExpressive.pill)
-                            .background(
-                                if (playing) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.surfaceVariant,
-                            )
-                            .clickable(enabled = !state.busy, onClick = { vm.togglePlayAll() }),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            when {
-                                state.busy -> "正在准备…"
-                                playing -> "⏸  全部暂停"
-                                else -> "▶  全部播放"
-                            },
-                            style = MaterialTheme.typography.titleMedium,
-                            color = if (playing) MaterialTheme.colorScheme.onPrimary
-                            else MaterialTheme.colorScheme.onSurface,
-                        )
-                    }
-                }
-            }
+            // 原来这里有一个「全部播放」大按钮 —— **按定稿删掉了**。
+            //
+            // 定稿设备页只管"有哪些设备、各自什么状态"，播放控制在播放页。
+            // 而且它和顶上那条聚合播放条、以及底部常驻播放条**三个入口干同一件事**，
+            // 用户会犹豫点哪个。现在设备页不再承担播放动作。
 
             // 多房间卡片已删除：勾选式组网（⧉）能直接成组，再放一张"组起来"的卡片就是两套入口。
             // 组内状态（谁是从机、属哪台）已经画在各自的设备卡片上。
@@ -608,6 +481,11 @@ internal fun HomeScreen(
                                 "定时关闭"
                             },
                         )
+                    }
+                    // 组合同步：勾选式组网（Sonos Grouping）。原来是顶上那条聚合播放条里的 ⧉，
+                    // 那条按定稿删掉之后这里必须补上 —— 否则「三台一起响」就没有入口了。
+                    TextButton(onClick = { vm.openGrouping(); menuTarget = null }) {
+                        Text("组合同步（勾选其它音箱）")
                     }
                     // 以下四项原来在卡片上，现在收进长按菜单（苹果的 context menu）
                     val card = state.cards[target.uuid]
@@ -774,7 +652,11 @@ private fun deviceStatusText(
     online == false -> "离线"
     inGroup && title.isNullOrBlank() -> "同步中"
     !title.isNullOrBlank() && playing == true -> "在放《$title》"
-    !title.isNullOrBlank() -> "暂停 · $title"
+    // 暂停时**只写「暂停」**，不拼歌名。
+    // 原来写「暂停 · 046【秦】揭竿而起」—— 一行里塞两件事，屏窄时歌名被截成
+    // 「046【秦】揭手而…」，既认不出是哪首，也让"暂停"这个状态挤没了。
+    // 定稿这里就是两个字。歌名去播放页看。
+    !title.isNullOrBlank() -> "暂停"
     inGroup -> "同步中"
     battery != null && battery <= 20 -> "待播放 · 电量 $battery%"
     else -> "待播放"
