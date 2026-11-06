@@ -191,6 +191,13 @@ fun PlayerScreen(
     /** 全屏播放列表是否打开（定稿里它是从一行入口点开的一层）。 */
     var showPlaylist by remember { mutableStateOf(false) }
 
+    /** 选目标的那层 sheet（左下角 cast 图标点开）。 */
+    var showTargetSheet by remember { mutableStateOf(false) }
+    // 当前目标（唯一真值，`docs/96` 模型 A）
+    val targetFlow = io.github.laozhudu.linkplay.console.playback.PlaybackOutputStore.current
+        .collectAsState()
+    val targetNow = targetFlow.value
+
     // ---- 语音：一条顶栏提示 + 一个麦克风按钮，不引入任何浮层 ----
     var voiceNote by remember { mutableStateOf<String?>(null) }
     var listening by remember { mutableStateOf(false) }
@@ -349,15 +356,25 @@ fun PlayerScreen(
                     )
                     Text(
                         buildString {
-                            // 输入源以设备回报为准：模式数字 → 人话（PlayerSource.describe）。
-                            // 前缀「输入源」是用户明确要求的：一眼能看出当前在哪一路上，
-                            // 而不是只看到一句「网络播放 · 本地播放列表」猜不出这是输入源。
-                            append("输入源 ")
-                            append(
-                                if (state.mode != null) PlayerSource.describe(state.mode)
-                                else state.sourceLabel ?: "连接中",
-                            )
-                            if (playing) append(" · 播放中")
+                            // **只在"不是网络播放"时才提输入源。**
+                            //
+                            // 音箱的 `mode` 可能是网络播放 / 线路输入 / 蓝牙 / U盘 / 光纤。
+                            // 平时就是网络播放，写出来只是噪音，而且和底部「从哪出声」看起来
+                            // 像同一件事说了两遍（用户反馈）。
+                            //
+                            // 但真切到线路输入/蓝牙时**必须说** —— 否则用户会以为"App 里点了播放
+                            // 却没声音"，其实是音箱在放 AUX。
+                            val source = state.mode?.let { PlayerSource.describe(it) }
+                                ?: state.sourceLabel
+                            val isNetwork = source == null ||
+                                source.contains("网络") || source.contains("NETWORK", ignoreCase = true)
+                            if (!isNetwork) {
+                                append("输入源 ")
+                                append(source)
+                            } else {
+                                append(if (playing) "正在播放" else "已暂停")
+                            }
+                            if (!isNetwork && playing) append(" · 播放中")
                         },
                         style = MaterialTheme.typography.labelSmall,
                         color = OnDarkPalette.muted,
@@ -623,9 +640,15 @@ fun PlayerScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = Spacing.xs),
-                horizontalArrangement = Arrangement.SpaceEvenly,
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                // 左下角：从哪出声（大厂的 cast / AirPlay 位置）
+                CastButton(
+                    label = (targetNow as? PlaybackOutput.Device)?.label?.takeIf { it.isNotBlank() },
+                    isLocal = targetNow is PlaybackOutput.Local,
+                    onClick = { showTargetSheet = true },
+                )
                 // 能力位决定这个按钮能不能用（docs/86 不变量 I3）。
                 //
                 // 通用 DLNA 渲染器（电视盒子）没有设备侧队列 → supportsNextPrev = false。
@@ -675,6 +698,8 @@ fun PlayerScreen(
                         modifier = Modifier.size(28.dp),
                     )
                 }
+                // 右侧对称占位：让三个键保持视觉居中
+                Spacer(Modifier.width(48.dp))
             }
 
             // ---------- 播放列表入口（定稿：`播放列表 · 100 首 · 第 8 首  ›`）----------
@@ -713,15 +738,37 @@ fun PlayerScreen(
                 )
             }
 
-            // ---------- 「从哪出声」（定稿在底部；大厂同位置）----------
+            // ---------- 「从哪出声」：左下角投屏图标，点开选 ----------
             //
-            // Spotify 的 Connect 图标就在底部播放条里，Sonos 的当前房间也在视觉底部。
-            // 原来它在顶栏 —— 顶栏是"这页是什么"的地方，目标选择是"东西往哪去"，
-            // 语义不同层。挪到最下面之后，和内容页的「投给」是同一种位置关系。
+            // 用户指定：「以左下角类似大厂投屏的符号，点开可选才合理」。
             //
-            // **内联一行，不能浮层**（docs/37：播放页不许任何浮层）。
-            OutputSwitchRow()
+            // 原来是一整行 inline chips（本机/doss1/doss2/doss3 全铺开）——
+            // 设备一多就横滚，而且和顶栏的「输入源」看起来像同一件事说了两遍。
+            //
+            // 大厂做法：Spotify 底部一条 cast 图标、Apple Music 的 AirPlay 图标、
+            // YouTube 顶栏 cast —— 都是**一个图标 + 点开一层列表**，不占常驻空间。
+            //
+            // ⚠️ `docs/37` 里"播放页不许任何浮层"这条约束在**这里被有意放宽**：
+            // 原意是不许把控制面板藏在浮层里（那样每次调音量都要开关一次），
+            // 而"选目标"是低频且必须弹出一层才看得全的动作 —— `docs/97` 把它归为
+            // sheet 类（临时任务层），不算违反。
         }
+    }
+
+    // ---------- 选目标（左下角 cast 图标点开）----------
+    if (showTargetSheet) {
+        TargetSheet(
+            onDismiss = { showTargetSheet = false },
+            onPick = { out ->
+                showTargetSheet = false
+                runCatching {
+                    io.github.laozhudu.linkplay.console.playback.PlaybackOutputStore
+                        .write(appContext, out)
+                }
+                // 换挂播放器：MediaSession 不能动态换 player，必须重建
+                io.github.laozhudu.linkplay.console.playback.PlaybackService.restart(appContext)
+            },
+        )
     }
 
     // ---------- 全屏播放列表（从入口行打开）----------
@@ -965,69 +1012,6 @@ private suspend fun handleVoiceIntent(intent: PlayIntent, dispatcher: PlaybackDi
 /** 设备做不到这件事时的统一回执。语音说不出"这台设备没这个能力"，但界面得说清。 */
 private const val UNSUPPORTED = "这台设备做不到这个操作"
 
-/**
- * 「从哪出声」——**一个输出口对应一台设备**。
- *
- * ## 为什么不是「本机 / 音箱」两个
- *
- * 家里三台 DOSS + 一台电视盒子。只有两个值时，「投给谁」实际由**上一个页面选中的设备**决定，
- * 用户在这里切了输出口却不知道该投给哪台 —— 显式选择被隐式状态覆盖，这是最难查的那种不一致。
- *
- * 现在：本机 + 每一台已保存的设备，各一个按钮。
- *
- * ⚠️ **内联一行、横向滚动**，不能用浮层（`docs/37`：播放页不许有任何浮层）。
- */
-@Composable
-private fun OutputSwitchRow() {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val router = PlaybackRouter.of(context)
-    var output by androidx.compose.runtime.remember {
-        androidx.compose.runtime.mutableStateOf(router.output())
-    }
-    // 每次进页面读一次：设备列表只在增删设备时变，不值得轮询
-    val devices = androidx.compose.runtime.remember {
-        runCatching { io.github.laozhudu.linkplay.console.session.SessionStore.of(context).savedDevices() }
-            .getOrDefault(emptyList())
-    }
-
-    androidx.compose.foundation.layout.Row(
-        modifier = androidx.compose.ui.Modifier
-            .fillMaxWidth()
-            .padding(top = Spacing.xs, bottom = Spacing.xs)
-            .horizontalScroll(rememberScrollState()),
-        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(Spacing.xs),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            "从哪出声",
-            style = MaterialTheme.typography.labelSmall,
-            color = OnDarkPalette.text.copy(alpha = 0.7f),
-        )
-        androidx.compose.material3.FilterChip(
-            selected = output is PlaybackOutput.Local,
-            onClick = {
-                router.setOutput(PlaybackOutput.Local)
-                output = PlaybackOutput.Local
-                // 通知栏要跟着换挂的播放器（MediaSession 不能动态换 player）
-                PlaybackService.restart(context)
-            },
-            label = { Text("本机") },
-        )
-        devices.forEach { device ->
-            val target = PlaybackOutput.Device(device.ip, device.name)
-            androidx.compose.material3.FilterChip(
-                selected = output is PlaybackOutput.Device &&
-                    (output as PlaybackOutput.Device).ip == device.ip,
-                onClick = {
-                    router.setOutput(target)
-                    output = target
-                    PlaybackService.restart(context)
-                },
-                label = { Text(device.name.ifBlank { device.ip }) },
-            )
-        }
-    }
-}
 
 /** 设备缺能力时的提示。**说清是设备做不到**，不是"操作失败"。 */
 private const val NOT_SUPPORTED_NEXT = "这台设备没有「下一首」（它不持有播放列表）"
@@ -1199,6 +1183,157 @@ private fun PlaylistSheet(
                     Text("停止")
                 }
             }
+        }
+    }
+}
+
+
+/**
+ * 左下角的「从哪出声」按钮 —— 大厂的 cast / AirPlay 位置。
+ *
+ * 为什么不写文字：设备一多，一行 chips 会横滚（之前就是这样），
+ * 而且顶部已经有一句状态了，再铺一行看着像重复。一个大厂形状的图标
+ * 用户不用学就知道是"这声音往哪去"。
+ */
+@Composable
+private fun CastButton(
+    label: String?,
+    isLocal: Boolean,
+    onClick: () -> Unit,
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = Spacing.xs, vertical = 2.dp),
+    ) {
+        androidx.compose.foundation.Canvas(Modifier.size(22.dp)) {
+            val w = size.width
+            val h = size.height
+            val stroke = w * 0.085f
+            val c = OnDarkPalette.text
+            // 右下角矩形（屏幕）
+            drawRoundRect(
+                color = c,
+                topLeft = androidx.compose.ui.geometry.Offset(w * 0.30f, h * 0.16f),
+                size = androidx.compose.ui.geometry.Size(w * 0.62f, h * 0.46f),
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(w * 0.06f),
+                style = androidx.compose.ui.graphics.drawscope.Stroke(width = stroke),
+            )
+            // 左下角的同心弧（信号）
+            drawArc(
+                color = c,
+                startAngle = 270f,
+                sweepAngle = 90f,
+                useCenter = false,
+                topLeft = androidx.compose.ui.geometry.Offset(w * 0.06f, h * 0.32f),
+                size = androidx.compose.ui.geometry.Size(w * 0.72f, h * 0.72f),
+                style = androidx.compose.ui.graphics.drawscope.Stroke(width = stroke),
+            )
+            drawArc(
+                color = c,
+                startAngle = 270f,
+                sweepAngle = 90f,
+                useCenter = false,
+                topLeft = androidx.compose.ui.geometry.Offset(w * 0.10f, h * 0.52f),
+                size = androidx.compose.ui.geometry.Size(w * 0.44f, h * 0.44f),
+                style = androidx.compose.ui.graphics.drawscope.Stroke(width = stroke),
+            )
+            drawCircle(
+                color = c,
+                radius = stroke * 0.95f,
+                center = androidx.compose.ui.geometry.Offset(w * 0.16f, h * 0.78f),
+            )
+        }
+        Text(
+            // 有设备名就显示名字（一眼知道投给谁），本机就写「本机」
+            text = when {
+                isLocal -> "本机"
+                label != null -> label.take(6)
+                else -> "设备"
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = OnDarkPalette.muted,
+            maxLines = 1,
+            modifier = Modifier.padding(top = 1.dp),
+        )
+    }
+}
+
+/**
+ * 选目标的一层（临时任务层，`docs/97`）。
+ *
+ * 用 `ModalBottomSheet` 而不是 Dialog：大厂（Spotify / Apple Music / YouTube）
+ * 选输出设备的都是可下拉关闭的 sheet，因为这是"看一眼选一个就走"的动作。
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun TargetSheet(
+    onDismiss: () -> Unit,
+    onPick: (PlaybackOutput) -> Unit,
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val target = io.github.laozhudu.linkplay.console.playback.PlaybackOutputStore.current
+        .collectAsState().value
+    val devices = remember {
+        runCatching {
+            io.github.laozhudu.linkplay.console.session.SessionStore.of(context).savedDevices()
+        }.getOrDefault(emptyList())
+    }
+
+    androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.padding(bottom = Spacing.lg)) {
+            Text(
+                "从哪出声",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+            )
+            // 本机
+            TargetSheetRow(
+                title = "本机",
+                subtitle = "这台手机自己放",
+                selected = target is PlaybackOutput.Local,
+                onClick = { onPick(PlaybackOutput.Local) },
+            )
+            devices.forEach { dev ->
+                TargetSheetRow(
+                    title = dev.name.ifBlank { dev.ip },
+                    subtitle = dev.ip,
+                    selected = (target as? PlaybackOutput.Device)?.ip == dev.ip,
+                    onClick = { onPick(PlaybackOutput.Device(dev.ip, dev.name)) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TargetSheetRow(
+    title: String,
+    subtitle: String?,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            subtitle?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        if (selected) {
+            Text("✓", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
         }
     }
 }
