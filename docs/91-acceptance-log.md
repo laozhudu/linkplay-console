@@ -2881,3 +2881,75 @@ data class Found(val count: Int, val ms: Long, val items: List<SearchHit>)
 | 「投给」统一成播放页那个 cast 形态（用户第 4 条） | 未做 |
 | 真机：搜一首点一下是否真的出声 | **未验** |
 
+## 第六十一轮 · B 站取流（第一块地基）
+
+用户：「b 站源帮我做好并集成进去」。
+
+按 `docs/85` 施工，本轮完成**取流**这一块。
+
+### 新增 `core-protocol/.../bili/BiliClient.kt`
+
+三件事：
+
+| 方法 | 做什么 |
+|---|---|
+| `parseBvid(input)` | 从 BV 号 / 视频链接里认出 BV 号 |
+| `fetchStream(bvid)` | `/x/web-interface/view` 取 cid + 标题 + 时长 |
+| 同上 | `/x/player/playurl?fnval=16` 取 DASH 音轨，**选带宽最大那条** |
+
+依赖是**一个 lambda**（`fetchJson`），所以整个类能跑纯 JVM 单测。
+
+### 一个关键能力边界（`docs/85` §2.4 实测）
+
+**B 站搜索接口有风控，不能搜关键词**：
+
+```
+GET /x/web-interface/search/type?keyword=test  → 返回 HTML 风控页
+GET /x/web-interface/wbi/search/type?...       → {"code":0,"data":{"v_voucher":"…"}} 没有结果
+```
+
+所以这个源在界面上是「**粘 BV 号或链接**」，**不是搜索框**。
+补 buvid + cookie + wbi 签名是另一套工作量，且 ToS 更敏感 —— 不做。
+
+### 测试抓到的第一个坑
+
+第一版把 `cid` / `bandwidth` / `id` 当**字符串**取（`string("cid")`），
+测试立刻抛 `IllegalStateException` —— B 站这几处给的是**数字**。
+
+修法：`JsonValue.Obj.long()` 辅助函数，数字和字符串两边都认
+（B 站不同接口确实两种都出现过）。
+
+### 四条例测试
+
+```
+parseBvid: BV 号 / 完整链接 / 带空格       全过
+parseBvid: 空串 / 中文 / b23 短链          → null（不瞎猜）
+音轨选择: 43k / 102k / 203k 三条            → 选中 203k（30280）
+没有 dash                                → "没有 dash（可能该视频无音轨）"
+```
+
+第二条尤其重要：选错拿到 43kbps 那条，听感会像"网络差"，真机上极难归因。
+
+```bash
+:core-protocol:test       622 用例（+4）
+:app:testDebugUnitTest    1081 用例
+───────────────────────────────
+                          全绿
+```
+
+### 下一步（remux + 接线）
+
+`docs/85` §2.3 实测：B 站给的是 **fMP4 分片**，DOSS 一律 `stop`。所以还差：
+
+| 项 | 内容 |
+|---|---|
+| `Fmp4Remuxer` | Media3 Transformer transmux（要加 `media3-transformer` 依赖，Apache-2.0） |
+| 下载 + 本机 HTTP 提供 | 转完的文件走 `LocalMediaServer`，不直投外网直链 |
+| 内容页接线 | B 站那一行从「未接入」变成「粘 BV 号」输入 |
+
+### 与用户的确认项
+
+用户在上一轮说「b 站一定有，前面有测试」——**测试是真的**（`docs/85` 记了真机验证：
+`ffmpeg -c copy` 重封装后投 doss1，`totlen=212309`、`curpos` 稳定递增）。
+但那验证是**手工用 ffmpeg 做的**，不是代码。本轮从零把取流写成代码。
+
