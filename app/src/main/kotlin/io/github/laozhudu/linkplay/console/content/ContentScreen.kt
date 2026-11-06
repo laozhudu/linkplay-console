@@ -14,6 +14,7 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -80,7 +81,14 @@ internal fun ContentScreen(
 
     var keyword by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf(SourceFilter.All) }
+
+    // 当前播放目标（`docs/96` 模型 A）。内容页必须显示它 ——
+    // 这里是"我要放点什么"的入口，如果不写清"会放到哪"，用户点完才发现投错了设备。
+    val targetState = io.github.laozhudu.linkplay.console.playback.PlaybackOutputStore.current
+        .collectAsState()
+    val target = targetState.value
     // B 站零实现。**画了就不许点着没反应** —— 点一下给一句实话。
+    val context = androidx.compose.ui.platform.LocalContext.current
     var biliHint by remember { mutableStateOf(false) }
 
     // 回调**必须**从外面传进来 —— 上一版这里先写成 onClick = {}，
@@ -97,6 +105,19 @@ internal fun ContentScreen(
         LargeTitle(
             title = "内容",
             subtitle = if (state.saved.isEmpty()) "还没有添加设备" else "${state.saved.count { state.online[it.uuid] != false }} 台在线",
+        )
+        VSpace(Spacing.sm)
+
+        // ---- 投给谁（`docs/96` 模型 A）----
+        //
+        // 大厂都让目标永远可见：Sonos 顶部房间条、Spotify 底部 Connect 图标。
+        // 我们的内容页原来是"点了就投"，投给谁完全不显示 —— 这是"投错设备"的根源。
+        TargetRow(
+            target = target,
+            devices = state.saved,
+            onPick = { out ->
+                io.github.laozhudu.linkplay.console.playback.PlaybackOutputStore.write(context, out)
+            },
         )
         VSpace(Spacing.sm)
 
@@ -373,4 +394,54 @@ internal fun sourceLabelOf(sourceType: String): String = when (sourceType) {
     "subsonic" -> "在线"
     "queue" -> "在线"
     else -> sourceType
+}
+
+/**
+ * 「投给谁」一行 —— 和播放页的「从哪出声」是**同一个真值**（`docs/96` 模型 A）。
+ *
+ * 放在内容页最上面而不是藏进设置，理由就是大厂的做法：
+ * Sonos 的房间条常驻顶部、Spotify 的 Connect 图标常驻播放条 —— 目标是**随时可见、随时可改**的。
+ */
+@Composable
+private fun TargetRow(
+    target: io.github.laozhudu.linkplay.console.playback.PlaybackOutput?,
+    devices: List<io.github.laozhudu.linkplay.protocol.session.SavedDevice>,
+    onPick: (io.github.laozhudu.linkplay.console.playback.PlaybackOutput) -> Unit,
+) {
+    androidx.compose.foundation.layout.Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(vertical = Spacing.xs),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+    ) {
+        Text(
+            "投给",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        val localSelected = target is io.github.laozhudu.linkplay.console.playback.PlaybackOutput.Local
+        FilterChip(
+            selected = localSelected,
+            onClick = { onPick(io.github.laozhudu.linkplay.console.playback.PlaybackOutput.Local) },
+            label = { Text("本机") },
+        )
+        devices.forEach { dev ->
+            val sel = (target as? io.github.laozhudu.linkplay.console.playback.PlaybackOutput.Device)
+                ?.ip == dev.ip
+            FilterChip(
+                selected = sel,
+                onClick = {
+                    onPick(
+                        io.github.laozhudu.linkplay.console.playback.PlaybackOutput.Device(
+                            dev.ip,
+                            dev.name,
+                        ),
+                    )
+                },
+                label = { Text(dev.name.ifBlank { dev.ip }) },
+            )
+        }
+    }
 }

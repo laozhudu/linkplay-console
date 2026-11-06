@@ -66,13 +66,31 @@ object PlaybackOutputStore {
         is PlaybackOutput.Device -> if (output.ip.isEmpty()) "remote" else "device:${output.ip}"
     }
 
+    /**
+     * **唯一真值的广播**（`docs/96` 模型 A）。
+     *
+     * 文件是持久化，这个流是"当前值"。任何一处改目标，所有观察者立刻拿到，
+     * 不需要谁去轮询文件。
+     *
+     * `null` = 还没读过（进程刚起）。用 [prime] 初始化，避免第一帧拿到 null。
+     */
+    private val _current = kotlinx.coroutines.flow.MutableStateFlow<PlaybackOutput?>(null)
+    val current: kotlinx.coroutines.flow.StateFlow<PlaybackOutput?> = _current
+
     fun read(context: Context): PlaybackOutput =
         runCatching { File(context.applicationContext.filesDir, FILE).readText() }
             .getOrNull()
             .let { parse(it) }
 
+    /** 进程启动时读一次，把文件里的值灌进流。幂等。 */
+    fun prime(context: Context) {
+        if (_current.value == null) _current.value = read(context)
+    }
+
     fun write(context: Context, output: PlaybackOutput): Boolean = runCatching {
         File(context.applicationContext.filesDir, FILE).writeText(format(output))
+        // 值没变时 StateFlow 不会发射（不需要手动判重），所以 open() 里再写一次也不会循环
+        _current.value = output
         true
     }.getOrDefault(false)
 }
