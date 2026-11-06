@@ -268,6 +268,7 @@ internal fun ConsoleBody(vm: ConsoleViewModel) {
                     onOpenContent = { sub = SubPage.DeviceContent },
                     onOpenPlayer = { tab = Tab.Player },
                     onOpenDiagnostics = { sub = SubPage.Diagnostics },
+                    onOpenRemote = { tab = Tab.Remote },
                 )
 
                 Tab.Player -> if (state.selectedIp == null) {
@@ -285,15 +286,12 @@ internal fun ConsoleBody(vm: ConsoleViewModel) {
                     )
                 }
 
-                Tab.Lx -> io.github.laozhudu.linkplay.console.lx.LxSearchScreen(
-                    deviceIp = state.selectedIp.orEmpty(),
-                    location = state.selectedLocation,
-                    deviceUuid = state.selectedUuid,
-                    showBack = false,
-                    onOpenScripts = { sub = SubPage.Scripts },
-                )
-
-                Tab.Sources -> SourcesScreen(
+                // 「内容」格 —— 六个源合一格（定稿第 2 屏）。
+                //
+                // 本轮**只做"合并入口"这一层**：真正的内容页（搜索框 + 按源筛选 +
+                // 最近播放）排在下一轮。现在复用 SourcesScreen 当骨架，
+                // 因为它本来就只是"六件事的入口列表"，形状是对的。
+                Tab.Content -> SourcesScreen(
                     state = state,
                     vm = vm,
                     onOpenOnline = { sub = SubPage.Online },
@@ -307,12 +305,31 @@ internal fun ConsoleBody(vm: ConsoleViewModel) {
                     onOpenSearchHub = { sub = SubPage.SearchHub },
                     onGoDevices = { tab = Tab.Devices },
                 )
+
+                // 「遥控」格 —— 红外 / 蓝牙 / WiFi 共用（定稿第 4 屏）。
+                // 键由 RemoteControl.keys() 决定，当前只有一个电源键。
+                Tab.Remote -> io.github.laozhudu.linkplay.console.remote.RemoteScreen()
+
+                // 「我」格 —— 诊断台是第一项（定稿第 5 屏）。
+                Tab.Me -> io.github.laozhudu.linkplay.console.me.MeScreen(
+                    onOpenDiagnostics = { sub = SubPage.Diagnostics },
+                    onOpenSettings = {
+                        if (state.selectedIp == null) tab = Tab.Devices else sub = SubPage.Settings
+                    },
+                    onOpenProvisioning = { sub = SubPage.Provisioning },
+                    onOpenScripts = { sub = SubPage.Scripts },
+                )
             }
         }
     }
 }
 
-/** 底部导航：三个一级页面；播放中时「播放」图标变成 ▶。 */
+/**
+ * 底部导航：**五格**（`docs/93` 定稿）。
+ *
+ * 播放中时「播放」格的字形变成 ▶ —— 唯一一处动态字形，因为
+ * 「现在有没有在放」是一眼就该看到的状态，而不是要点进去才知道。
+ */
 @Composable
 internal fun BottomNav(current: Tab, onSelect: (Tab) -> Unit) {
     val haptics = io.github.laozhudu.linkplay.console.ui.apple.rememberAppHaptics()
