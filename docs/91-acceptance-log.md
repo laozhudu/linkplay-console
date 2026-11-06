@@ -2328,3 +2328,67 @@ python3 scripts/check-output-switch.py                  # 通过（只在播放�
 
 真机：目标切换后，设备页「正在用」、内容页「投给」、播放页「从哪出声」三处是否**同时**变。
 
+## 第五十二轮 · 三个导航 bug（`docs/97` P1 全部修完）
+
+用户：「同意做，先把 ui 理顺」，并指出底部播放条没处理干净（附截图：内容页底部挂着「未在播放 · 第 1/1 首」，还压住最后一行）。
+
+### ① 底部播放条：没在放就不显示（用户截图那条）
+
+原条件是 `queue.nowPlaying != null || queue.running`。
+
+**占位队列**（`QueueRestore` 记着"上次放到第几首"，但内容已失效）两条都满足 ——
+于是没在放的时候底部挂着一条「未在播放」，还挡住内容。
+
+改成三个条件同时成立：
+
+| 条件 | 判据 |
+|---|---|
+| 有当前曲目且**不是占位** | `queue.nowPlaying != null && !QueueRestore.isPlaceholder(current)` |
+| **本机播放也算** | `localUi.hasContent`（投本机时队列是空的，只看 queue 会漏） |
+| 真的在放或暂停中 | `running / deviceOwned / playingNow / hasLocalTrack` |
+
+**大厂不会出现"未在播放"的播放条 —— 没有在放，就没有这条。**
+
+### ② 诊断台返回落到错页（`docs/97` 问题 2）
+
+`onBack` 原来写死 `sub = SubPage.Settings`，但诊断台有**三个入口**。
+从「我」页进去，返回落到「设置」页。
+
+改成记录来路：`diagReturnTo`，三处入口各自传来源，返回时恢复。
+
+### ③ 任何 Tab 按返回都跳设备页（`docs/97` 问题 3）
+
+```kotlin
+// 旧
+BackHandler(enabled = sub != null || tab != Tab.Devices) { ... else -> tab = Tab.Devices }
+// 新
+BackHandler(enabled = sub != null) { sub = null }
+```
+
+Tab 上不再拦截 → 系统默认行为（退出 App）。
+
+| 平台 | Tab 根上按返回 |
+|---|---|
+| Android 标准 / Spotify / Gmail / YouTube | 退出 App |
+| iOS | 无效果 |
+| **我们（改前）** | **跳到设备页** ← 独一无二的反例 |
+
+顺手也不再丢掉当前 Tab 的滚动位置。
+
+### 验证
+
+```bash
+./gradlew :app:compileDebugKotlin / :app:testDebugUnitTest / :app:assembleDebug
+# 全量 1081 用例 0 失败
+python3 scripts/check-*.py     # 全 PASS
+```
+
+### 没验的
+
+| 项 | 状态 |
+|---|---|
+| 真机：内容页底部条是否真的消失 | **未验**（截图反馈的就是这条） |
+| 真机：我 → 诊断台 → 返回是否回「我」 | **未验** |
+| 真机：播放页按返回是否退出 App | **未验** |
+| `docs/97` 的 P2（每 Tab 一个栈） | **未做** |
+

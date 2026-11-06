@@ -97,6 +97,19 @@ internal fun ConsoleBody(vm: ConsoleViewModel) {
     val replayScope = androidx.compose.runtime.rememberCoroutineScope()
     val appContext = androidx.compose.ui.platform.LocalContext.current.applicationContext
     var sub by remember { mutableStateOf<SubPage?>(null) }
+    /**
+     * 诊断台是从哪进来的。
+     *
+     * 原来 `onBack` 写死成"回设置页"，但诊断台有三个入口（设备页 / 我 / 设置页），
+     * 于是**从「我」页进去，返回会落到「设置」页** —— 这是真 bug（`docs/97` 问题 2）。
+     * 记下来路，返回才闭合。
+     */
+    var diagReturnTo by remember { mutableStateOf<SubPage?>(null) }
+    val openDiagnostics: (SubPage?) -> Unit = { from ->
+        diagReturnTo = from
+        sub = SubPage.Diagnostics
+    }
+
 
     // 把"用户此刻在哪"同步到诊断快照。
     // 为什么用 LaunchedEffect 而不是直接在 body 里赋值：Compose 的 body 可能因为
@@ -112,11 +125,21 @@ internal fun ConsoleBody(vm: ConsoleViewModel) {
      * 2. 不在第一个 Tab → 回第一个 Tab；
      * 3. 已在第一个 Tab → 交回系统（退出 App）。
      */
-    BackHandler(enabled = sub != null || tab != Tab.Devices) {
-        when {
-            sub != null -> sub = null
-            else -> tab = Tab.Devices
-        }
+    /**
+     * 返回键：**只在有二级页时拦截**。
+     *
+     * ## 原来错在哪
+     *
+     * 旧逻辑是 `enabled = sub != null || tab != Tab.Devices`，Tab 根上按返回会跳到设备页。
+     * 这违反所有平台的惯例 —— Android 标准、iOS、Spotify / Gmail / YouTube 在 Tab 根上
+     * 按返回都是**退出 App**（iOS 干脆无效果）。
+     *
+     * 而且"跳设备页"还会丢掉当前 Tab 的滚动位置和上下文，用户以为点了后退，其实换了个地方。
+     *
+     * 现在：Tab 上不拦截 → 系统默认行为（退出）；二级页上拦截 → 回 Tab。
+     */
+    BackHandler(enabled = sub != null) {
+        sub = null
     }
 
     val currentSub = sub
@@ -202,14 +225,15 @@ internal fun ConsoleBody(vm: ConsoleViewModel) {
                 state = state,
                 vm = vm,
                 onBack = { sub = null },
-                onOpenDiagnostics = { sub = SubPage.Diagnostics },
+                onOpenDiagnostics = { openDiagnostics(SubPage.Settings) },
             )
 
             // 诊断页：崩溃堆栈 + 每台设备的取数通道 + 运行期问题，可复制/可截图
             SubPage.Diagnostics -> io.github.laozhudu.linkplay.console.diagnostics.DiagnosticsScreen(
                 reportProvider = { vm.diagnosticsReport() },
                 onClear = { vm.clearDiagnostics() },
-                onBack = { sub = SubPage.Settings },
+                // 回来路（不再写死"回设置页"）
+                onBack = { sub = diagReturnTo; diagReturnTo = null },
             )
 
             SubPage.Provisioning -> ProvisioningScreen(
@@ -232,14 +256,36 @@ internal fun ConsoleBody(vm: ConsoleViewModel) {
     Scaffold(
         bottomBar = {
             Column {
-                // 有播放内容时，迷你条常驻在导航之上（Spotify 同款位置）。
-                // **播放页本身不显示**：那里已经有完整控制，再叠一条等于凭空多一层，
-                // 而且它一出现就顶掉播放页的高度 —— 用户说的「点击是多一层」就是这个。
-                if ((queue.nowPlaying != null || queue.running) && tab != Tab.Player) {
-                    val playingNow = state.cards[state.saved.firstOrNull { it.ip == state.selectedIp }?.uuid]?.playing
-                        ?: (state.groupMasterIp?.let { m ->
-                            state.cards[state.saved.firstOrNull { it.ip == m }?.uuid]?.playing
-                        } ?: false)
+                // 迷你条常驻在导航之上（Spotify 同款位置）。**播放页本身不显示**。
+                //
+                // ## 显示条件为什么要这么严
+                //
+                // 原来是 `queue.nowPlaying != null || queue.running`。问题：恢复出来的
+                // **占位队列**（`QueueRestore` 记着"上次放到第几首"但内容已经失效）
+                // 两条都满足，于是没在放的时候底部挂着一条「未在播放 · 第 1/1 首」，
+                // 还挡住了下面最后一行内容。用户截图反馈的就是这个。
+                //
+                // 大厂不会出现"未在播放"的播放条 —— **没有在放，就没有这条**。
+                // 所以三个条件必须同时成立：
+                //   1. 有当前曲目，且**不是占位**
+                //   2. 真的在放或暂停中（自己投流 / 设备持有 / 设备回报在放）
+                //   3. 不在播放页
+                val playingNow = state.cards[state.saved.firstOrNull { it.ip == state.selectedIp }?.uuid]?.playing
+                    ?: (state.groupMasterIp?.let { m ->
+                        state.cards[state.saved.firstOrNull { it.ip == m }?.uuid]?.playing
+                    } ?: false)
+                val currentItem = queue.current
+                val hasRemoteTrack = queue.nowPlaying != null &&
+                    currentItem != null &&
+                    !io.github.laozhudu.linkplay.protocol.playback.QueueRestore.isPlaceholder(currentItem)
+                // **本机播放也要算**：投本机时队列是空的（ExoPlayer 单曲，不持有列表），
+                // 只靠 queue 判断的话「用手机听」这一路上永远没有底部条。
+                val localUi by io.github.laozhudu.linkplay.console.playback.PlaybackRouter
+                    .of(appContext).localState.collectAsState()
+                val hasLocalTrack = localUi.hasContent
+                val actuallyPlaying = queue.running || queue.deviceOwned || playingNow || hasLocalTrack
+                val shouldShowBar = (hasRemoteTrack || hasLocalTrack) && actuallyPlaying && tab != Tab.Player
+                if (shouldShowBar) {
                     MiniPlayerBar(
                         queue = queue,
                         onOpen = { tab = Tab.Player },
@@ -273,7 +319,7 @@ internal fun ConsoleBody(vm: ConsoleViewModel) {
                         sub = SubPage.Settings
                     },
                     onOpenContent = { sub = SubPage.DeviceContent },
-                    onOpenDiagnostics = { sub = SubPage.Diagnostics },
+                    onOpenDiagnostics = { openDiagnostics(null) },
                     onOpenRemote = { tab = Tab.Remote },
                     onOpenPlayer = { tab = Tab.Player },
                 )
@@ -344,7 +390,7 @@ internal fun ConsoleBody(vm: ConsoleViewModel) {
 
                 // 「我」格 —— 诊断台是第一项（定稿第 5 屏）。
                 Tab.Me -> io.github.laozhudu.linkplay.console.me.MeScreen(
-                    onOpenDiagnostics = { sub = SubPage.Diagnostics },
+                    onOpenDiagnostics = { openDiagnostics(null) },
                     onOpenSettings = {
                         if (state.selectedIp == null) tab = Tab.Devices else sub = SubPage.Settings
                     },
