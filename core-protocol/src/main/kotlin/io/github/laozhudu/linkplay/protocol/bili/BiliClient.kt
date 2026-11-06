@@ -39,8 +39,15 @@ class BiliClient(
         /** 音频直链（fMP4，**必须 remux 之后才能投**）。 */
         val audioUrl: String,
         val durationSec: Long,
-        /** 选中的音轨 id（30280 = 免登录最高 203kbps）。 */
+        /** 选中的音轨 id（30280 = 免登录最高 203kbps）；durl 模式为 0。 */
         val audioQualityId: Int,
+        /**
+         * 这份地址要不要先在手机上 remux。
+         *
+         * - `false`（durl 完整 MP4）→ **直接投**，和官方投屏同一条路
+         * - `true`（DASH fMP4）→ 必须走 `Fmp4Remuxer`
+         */
+        val needsRemux: Boolean = true,
     )
 
     /**
@@ -61,7 +68,22 @@ class BiliClient(
         return null
     }
 
-    /** 取 cid / 标题 / 时长（`/x/web-interface/view`，免鉴权）。 */
+    /**
+     * 取播放地址。
+     *
+     * ## 优先走 durl（完整 MP4），不是 DASH
+     *
+     * B 站官方 App 的"投屏到 DLNA 设备"就是把这个 **完整 MP4 直链**交给设备 ——
+     * 用户明确指出这一点，而它正好绕开 fMP4 那个坑：
+     *
+     * | 参数 | 返回 | 能不能直投 |
+     * |---|---|---|
+     * | `fnval=16`（DASH） | 音视频分离的 **fMP4 分片** | ❌ DOSS 一律 stop |
+     * | `fnval=0`（durl） | **完整 MP4**（已封装） | ✅ 理论上能，和官方投屏一致 |
+     *
+     * 所以默认先要 durl。**只有当 durl 拿不到时**才退 DASH + 本地 remux
+     * （`Fmp4Remuxer` 那条路还在，作为兜底）。
+     */
     suspend fun fetchStream(bvid: String): Stream {
         val view = fetchJson("$API_VIEW?bvid=$bvid")
         val data = obj(Json.parse(view), "data") ?: error("B 站没返回 data")
@@ -71,6 +93,27 @@ class BiliClient(
         val title = data.string("title") ?: bvid
         val duration = data.long("duration") ?: 0L
 
+        // ① 先要 durl：完整 MP4，照官方投屏那样直推
+        val durlJson = fetchJson("$API_PLAYURL?bvid=$bvid&cid=$cid&fnval=0&qn=64")
+        val durlData = obj(Json.parse(durlJson), "data")
+        val durl = durlData?.array("durl")?.items.orEmpty()
+            .mapNotNull { it as? JsonValue.Obj }
+            .firstOrNull()
+        val directUrl = durl?.string("url")
+        if (!directUrl.isNullOrBlank()) {
+            return Stream(
+                bvid = bvid,
+                cid = cid,
+                title = title,
+                audioUrl = directUrl,
+                durationSec = duration,
+                audioQualityId = 0,
+                // 完整 MP4：**不需要 remux**，直接投
+                needsRemux = false,
+            )
+        }
+
+        // ② durl 拿不到（有些稿件只给 DASH）→ 退回 DASH + remux
         val playurl = fetchJson("$API_PLAYURL?bvid=$bvid&cid=$cid&fnval=16&fourk=1")
         val dash = obj(Json.parse(playurl), "data")?.obj("dash") ?: error("没有 dash（可能该视频无音轨）")
         val audios = dash.array("audio")?.items.orEmpty()
@@ -91,6 +134,7 @@ class BiliClient(
             audioUrl = url,
             durationSec = duration,
             audioQualityId = qid,
+            needsRemux = true,
         )
     }
 
