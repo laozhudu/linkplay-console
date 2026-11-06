@@ -3084,3 +3084,61 @@ val file = extraFiles[path] ?: resolver.resolve(path)
 第 3 条是真实风险：ffmpeg 和 Media3 都是 transmux，但输出封装细节可能有差异。
 如果真机播不了，第一件事是把转出来的文件拉下来 `ffprobe` 看。
 
+## 第六十四轮 · B 站改走 durl 直投（照官方投屏做法）
+
+用户：「b 站官方本身就可以推直链给任何 upnp 设备，模仿官方推直链即可」。
+
+### 这条纠正了 `docs/85` 的一个默认假设
+
+原文只测了 `fnval=16`（DASH），结论是「fMP4 必须 remux」。
+但官方投屏走的是**另一条**：
+
+| 参数 | 返回 | 能不能直投 |
+|---|---|---|
+| `fnval=16`（DASH） | 音视频分离的 **fMP4 分片** | ❌ DOSS 一律 stop |
+| **`fnval=0`（durl）** | **完整 MP4**（已封装） | ✅ 和官方投屏一致 |
+
+`docs/85` §2.5 其实记过 durl 的存在，但当时判断「带 Referer 也 403」就放下了。
+用户的实际经验是**官方能推** —— 所以优先试 durl 才是对的顺序。
+
+### 改法：先要 durl，拿不到才退 DASH + remux
+
+`BiliClient.fetchStream` 现在：
+
+```
+① fnval=0 → durl[0].url 有值？
+     是 → needsRemux = false，**直接投**（一条命令，不下载不转码）
+     否 → ②
+② fnval=16 → DASH 选最大带宽音轨 → needsRemux = true → Fmp4Remuxer
+```
+
+`Stream` 新增 `needsRemux`，`ConsoleApp` 按它分派：
+
+| needsRemux | 做什么 |
+|---|---|
+| `false` | 直接把地址交给 `playOne` —— 和官方投屏同一条路 |
+| `true` | 下载 → transmux → 本机 HTTP → 投（兜底路径，保留） |
+
+### 为什么保留 remux 那条
+
+有些稿件（尤其音频分离的）只给 DASH。那条路留着，用户点同一个 BV 号不会因为
+"这个稿子没有 durl" 就没法听。**代价是多 5MB 流量和几秒转换，但保住了可用性。**
+
+### 验证
+
+```bash
+:core-protocol:test / :app:compileDebugKotlin / :app:testDebugUnitTest / :app:assembleDebug
+# 全绿
+```
+
+### 没验的
+
+| 项 | 状态 |
+|---|---|
+| **真机：durl 直链投 DOSS 能不能播** | **未验** |
+| durl 需不需要 Referer（`docs/85` 记过 403 的情况） | **未验**；本实现不带任何 Header |
+
+第二条是关键风险：如果 B 站对 durl 要求 Referer，而我们不带，设备那边会 403。
+真出这个现象的话，下一步是「先在本机用带 Referer 的请求把文件拉下来，
+再经本机 HTTP 提供」（比 remux 便宜得多，只是多一次下载）。
+

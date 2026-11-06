@@ -399,20 +399,33 @@ internal fun ConsoleBody(vm: ConsoleViewModel) {
                                 )
                                 val bvid = client.parseBvid(input) ?: error("认不出 BV 号")
                                 val stream = client.fetchStream(bvid)
-                                val file = io.github.laozhudu.linkplay.console.bili.Fmp4Remuxer
-                                    .fetchAndRemux(appContext, stream.audioUrl, bvid)
-                                io.github.laozhudu.linkplay.console.library.LocalMediaRegistry
-                                    .ensureServer(appContext, io.github.laozhudu.linkplay.console.library.LocalMediaRegistry.tracks)
-                                val server = io.github.laozhudu.linkplay.console.library.LocalMediaRegistry
-                                    .mediaServer() ?: error("本机服务没起来")
-                                val path = server.publishFile("/bili/$bvid.mp4", file)
-                                val base = io.github.laozhudu.linkplay.console.library.LocalMediaRegistry
-                                    .baseUrl() ?: error("拿不到本机局域网地址")
                                 val ip = state.selectedIp ?: error("还没选设备")
                                 val dev = state.saved.firstOrNull { it.ip == ip }
+
+                                // 走哪条路由 needsRemux 决定：
+                                // - durl（完整 MP4）→ **直接投**，和官方投屏同一条路
+                                // - DASH（fMP4 分片）→ 先在本机 remux，再经本机 HTTP 提供
+                                val playUrl = if (!stream.needsRemux) {
+                                    stream.audioUrl
+                                } else {
+                                    val file = io.github.laozhudu.linkplay.console.bili.Fmp4Remuxer
+                                        .fetchAndRemux(appContext, stream.audioUrl, bvid)
+                                    io.github.laozhudu.linkplay.console.library.LocalMediaRegistry
+                                        .ensureServer(
+                                            appContext,
+                                            io.github.laozhudu.linkplay.console.library.LocalMediaRegistry.tracks,
+                                        )
+                                    val server = io.github.laozhudu.linkplay.console.library.LocalMediaRegistry
+                                        .mediaServer() ?: error("本机服务没起来")
+                                    val path = server.publishFile("/bili/$bvid.mp4", file)
+                                    val base = io.github.laozhudu.linkplay.console.library.LocalMediaRegistry
+                                        .baseUrl() ?: error("拿不到本机局域网地址")
+                                    "$base$path"
+                                }
+
                                 io.github.laozhudu.linkplay.console.playback.PlaybackRouter
                                     .of(appContext)
-                                    .playOne("$base$path", stream.title, ip, dev?.location, dev?.uuid)
+                                    .playOne(playUrl, stream.title, ip, dev?.location, dev?.uuid)
                             }.onFailure { e ->
                                 android.widget.Toast
                                     .makeText(appContext, "B 站：${e.message}", android.widget.Toast.LENGTH_LONG)
