@@ -1250,3 +1250,62 @@ Android 工厂在 `companion fun from(context)`，是唯一碰 `IrBlaster` 的�
 - **还没接进 UI**（遥控页还没建）—— 本轮只建接口 + 实现 + 测试
 - 蓝牙 / WiFi 实现（接口已就绪，加实现时 UI 零改动）
 
+## 第三十五轮 · 基础设施第二步：`ContentSource` 接口 + 两个实现
+
+用户：「同意」→ 按 `docs/95` 第四节第 2 项。
+
+| 文件 | 动作 |
+|---|---|
+| `content/ContentModels.kt` | **新建**：`SourceId` / `ContentItem` / `Resolved` / `Readiness` |
+| `content/ContentSource.kt` | **新建**：接口 |
+| `content/LocalContentSource.kt` | **新建**：本地曲库 |
+| `content/RadioContentSource.kt` | **新建**：网络电台 |
+| `test/.../ContentSourceTest.kt` | **新建**，**11 个用例** |
+
+### 只实现两个源（刻意）
+
+没一次搬 6 个，而是挑了**差异最大**的两个：本地（数据库、要权限）
+和电台（网络、必须二次解析）。
+
+理由：接口只经过"想"没经过"实现"，八成会返工 ——
+`ToQueueItemsUseCase` 里的 `SourceTrack` 就是这么挂的（造了个不存在的类型）。
+
+两个差异最大的源都装得下，剩下四个才有把握。
+
+### 三处与直觉相反的取舍
+
+**① `browse()` 不进接口**
+
+NAS 是唯一需要逐层下钻的源。塞进接口等于逼本地/电台/洛雪都实现一个用不上的方法。
+
+**NAS 的目录树留在它自己的页面** —— 这不违反"内容统一"，因为"浏览目录"和"搜索"本来就是两件事。
+
+**② `Resolved.NeedsLocalServer(path)` 而不是给地址**
+
+本地文件不能被音箱直接取，要先由 `LocalMediaServer` 转成 HTTP。
+早期版本在这里直接拼 `http://127.0.0.1:PORT/t/ID` 是错的 —— **端口那时还没起**。
+
+所以接口只交路径，由播放编排决定怎么服务它。
+
+**③ 不支持搜索时返回空列表，不抛异常**
+
+一个源不支持搜索，不该让"内容"整屏报错。原因写在 `diagnoseLine()` 里。
+
+### 一个真实的字段修正
+
+我原以为电台条目没有稳定 id，打算用 url 当 id。查了 `RadioStation` 才知道
+`id` 就是 `stationuuid`、还有 `favicon` / `tags` / `country`。
+
+**看了类型定义才改对** —— 又是"没查就写"的教训。
+
+### 验证
+
+```bash
+./gradlew :app:testDebugUnitTest   # 全量 1067 用例 0 失败（新增 11）
+```
+
+### 没做
+
+- 剩下 4 个源（NAS / 在线 / 洛雪 / B站）**还没实现接口**
+- 内容页还没建（本轮只建接口 + 两个实现）
+
