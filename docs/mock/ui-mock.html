@@ -1,7 +1,7 @@
 <!doctype html><html><head><meta charset="utf-8"><style>
 *{margin:0;padding:0;box-sizing:border-box;-webkit-font-smoothing:antialiased}
-body{background:#DFDFE4;font-family:-apple-system,"SF Pro Text","Helvetica Neue","PingFang SC",sans-serif;
-     display:flex;gap:26px;padding:28px;align-items:flex-start}
+body{background:#DFDFE4;font-family:-apple-system,"SF Pro Text","Helvetica Neue","Noto Sans CJK SC","Noto Sans SC","PingFang SC",sans-serif;
+     display:flex;gap:26px;padding:28px;align-items:flex-start;flex-wrap:wrap;width:1290px}
 .phone{width:390px;height:844px;border-radius:44px;overflow:hidden;position:relative;
        background:#F2F2F7;box-shadow:0 12px 40px rgba(0,0,0,.18);flex:none}
 .dark{background:#000}
@@ -44,9 +44,10 @@ h1{font-size:34px;font-weight:700;letter-spacing:.3px;color:#1C1C1E;padding:6px 
 .cover{width:252px;height:252px;border-radius:10px;margin:6px auto 22px;
        background:linear-gradient(150deg,#0C4750,#2E7F6E);display:flex;align-items:center;
        justify-content:center}
-.tt{font-size:19px;color:#fff;text-align:center;font-weight:600;padding:0 24px;white-space:nowrap;
-    overflow:hidden;text-overflow:ellipsis}
-.ar{font-size:13px;color:rgba(255,255,255,.5);text-align:center;margin-top:6px}
+.tt{font-size:17px;color:#F2F2F7;text-align:left;padding:0 14px;line-height:1.35;
+    white-space:nowrap;overflow:hidden;font-weight:400;letter-spacing:.3px;
+    -webkit-font-smoothing:auto;text-rendering:geometricPrecision}
+.ar{font-size:13px;color:rgba(255,255,255,.5);text-align:left;padding:0 14px;margin-top:6px}
 .pbar{margin:28px 10px 7px;height:5px;border-radius:3px;background:rgba(255,255,255,.2);position:relative}
 .pbar i{position:absolute;left:0;top:0;bottom:0;width:74%;border-radius:3px;background:rgba(255,255,255,.9)}
 .time{display:flex;justify-content:space-between;font-size:12px;color:rgba(255,255,255,.5);margin:0 10px}
@@ -74,6 +75,30 @@ h1{font-size:34px;font-weight:700;letter-spacing:.3px;color:#1C1C1E;padding:6px 
 .li .sub{font-size:13px;color:rgba(60,60,67,.5);margin-left:8px;flex:none}
 .badge{font-size:11px;color:#34C759;background:rgba(52,199,89,.12);padding:3px 8px;border-radius:9px;
        margin-left:8px;flex:none}
+
+.scanbar{display:flex;align-items:center;gap:9px;background:rgba(0,122,255,.1);border-radius:10px;
+         padding:11px 14px;font-size:14px;color:#007AFF;margin-bottom:4px}
+.addbtn{font-size:14px;font-weight:600;color:#007AFF;background:rgba(0,122,255,.12);
+        padding:6px 14px;border-radius:15px;margin-left:8px;flex:none}
+.hint{font-size:12.5px;color:rgba(60,60,67,.45);padding:12px 6px;line-height:1.5}
+.navrow{display:flex;align-items:center;gap:4px;padding:2px 0 6px;font-size:17px}
+.remote{padding:2px 0 6px}
+.rpow{width:100%;height:52px;border-radius:12px;background:#fff;display:flex;align-items:center;
+      justify-content:center;margin-bottom:14px;border:.5px solid rgba(60,60,67,.1)}
+.rrow{display:flex;gap:14px}
+.rbtn{flex:1;height:52px;border-radius:12px;background:#fff;display:flex;align-items:center;
+      justify-content:center;border:.5px solid rgba(60,60,67,.1)}
+.pad{display:flex;justify-content:center;margin-top:16px}
+.ring{position:relative;width:210px;height:210px;border-radius:50%;background:#fff;
+      border:.5px solid rgba(60,60,67,.1)}
+.ring .u,.ring .l,.ring .r,.ring .d{position:absolute;font-size:15px;color:rgba(60,60,67,.45)}
+.ring .u{top:12px;left:50%;transform:translateX(-50%)}
+.ring .d{bottom:12px;left:50%;transform:translateX(-50%)}
+.ring .l{left:12px;top:50%;transform:translateY(-50%)}
+.ring .r{right:12px;top:50%;transform:translateY(-50%)}
+.ring .ok{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:78px;height:78px;
+          border-radius:50%;background:rgba(0,122,255,.1);color:#007AFF;font-size:15px;
+          font-weight:600;display:flex;align-items:center;justify-content:center}
 </style></head><body>
 
 <!-- ================= 1 设备 ================= -->
@@ -115,6 +140,14 @@ h1{font-size:34px;font-weight:700;letter-spacing:.3px;color:#1C1C1E;padding:6px 
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#007AFF" stroke-width="1.9"><path d="M12 3v18M7 7l10 10M17 7L7 17" stroke-linecap="round"/></svg></div>
         <div class="tx" style="flex:1;font-size:16px;color:#1C1C1E">添加蓝牙设备</div>
         <div class="sub" style="font-size:13px;color:rgba(60,60,67,.5)">遥控 · 耳机</div>
+        <div class="chev">›</div></div>
+    </div>
+    <div class="group" style="margin-top:14px">
+      <div class="row">
+        <div class="ico" style="background:rgba(52,199,89,.12)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#34C759" stroke-width="2"><circle cx="12" cy="12" r="3.2"/><path d="M6.8 17.2a7.4 7.4 0 010-10.4M17.2 6.8a7.4 7.4 0 010 10.4" stroke-linecap="round"/></svg></div>
+        <div class="tx" style="flex:1;font-size:17px;color:#1C1C1E">扫描附近设备</div>
+        <div class="sub" style="font-size:13px;color:#34C759">发现 2 台</div>
         <div class="chev">›</div></div>
     </div>
   </div>
@@ -278,6 +311,105 @@ h1{font-size:34px;font-weight:700;letter-spacing:.3px;color:#1C1C1E;padding:6px 
     <div class="tab act">
       <svg width="24" height="24" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
       我</div>
+  </div>
+</div>
+
+
+<!-- ================= 5 扫描发现 ================= -->
+<div class="phone">
+  <div class="status"><span>20:45</span><span style="letter-spacing:1px">●●● ⌁ ▮</span></div>
+  <div class="body">
+    <h1>扫描</h1>
+    <div class="scanbar">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#007AFF" stroke-width="2"><circle cx="12" cy="12" r="3.2"/><path d="M6.8 17.2a7.4 7.4 0 010-10.4M17.2 6.8a7.4 7.4 0 010 10.4" stroke-linecap="round"/></svg>
+      <span>正在扫描局域网…</span><span style="margin-left:auto;color:rgba(60,60,67,.4)">8s</span>
+    </div>
+    <div class="gtitle">发现 2 台新设备</div>
+    <div class="group">
+      <div class="row">
+        <div class="dot on"></div>
+        <div style="flex:1">
+          <div style="font-size:16px;color:#1C1C1E">DOSS DS-1831</div>
+          <div style="font-size:12px;color:rgba(60,60,67,.5)">192.168.99.190 · 音箱</div>
+        </div>
+        <div class="addbtn">添加</div>
+      </div>
+      <div class="row">
+        <div class="dot on"></div>
+        <div style="flex:1">
+          <div style="font-size:16px;color:#1C1C1E">E900V22C-175</div>
+          <div style="font-size:12px;color:rgba(60,60,67,.5)">192.168.99.175 · 播放器</div>
+        </div>
+        <div class="addbtn">添加</div>
+      </div>
+    </div>
+    <div class="gtitle">已添加</div>
+    <div class="group">
+      <div class="row"><div class="dot on"></div>
+        <div style="flex:1"><div style="font-size:16px;color:rgba(60,60,67,.45)">doss1</div>
+          <div style="font-size:12px;color:rgba(60,60,67,.35)">192.168.99.164</div></div>
+        <div class="sub" style="font-size:13px;color:rgba(60,60,67,.4)">已添加</div></div>
+      <div class="row"><div class="dot on"></div>
+        <div style="flex:1"><div style="font-size:16px;color:rgba(60,60,67,.45)">doss2</div>
+          <div style="font-size:12px;color:rgba(60,60,67,.35)">192.168.99.181</div></div>
+        <div class="sub" style="font-size:13px;color:rgba(60,60,67,.4)">已添加</div></div>
+    </div>
+    <div class="hint">扫不到？确认手机和音箱在同一个 WiFi，或直接填 IP。</div>
+  </div>
+  <div class="tabbar">
+    <div class="tab act">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.2"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>
+      设备</div>
+    <div class="tab"><svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>播放</div>
+    <div class="tab"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="10.5" cy="10.5" r="6.2"/><path d="M15.2 15.2L20 20" stroke-linecap="round"/></svg>内容</div>
+    <div class="tab"><svg width="24" height="24" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>我</div>
+  </div>
+</div>
+
+<!-- ================= 6 红外遥控器 ================= -->
+<div class="phone">
+  <div class="status"><span>20:45</span><span style="letter-spacing:1px">●●● ⌁ ▮</span></div>
+  <div class="body">
+    <div class="navrow"><span class="chev" style="transform:scaleX(-1);color:#007AFF">›</span>
+      <span style="color:#007AFF;font-size:17px">设备</span>
+      <span style="margin-left:auto;color:#007AFF;font-size:17px">编辑</span></div>
+    <h1 style="font-size:28px">电视</h1>
+    <div class="remote">
+      <div class="rpow">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#FF3B30" stroke-width="2.1"><path d="M12 3.5v8" stroke-linecap="round"/><path d="M6.5 6.8a8 8 0 1011 0" stroke-linecap="round"/></svg>
+      </div>
+      <div class="rrow">
+        <div class="rbtn"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1C1C1E" stroke-width="2"><path d="M4 15.5L12 7l8 8.5" stroke-linecap="round"/></svg></div>
+        <div class="rbtn"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1C1C1E" stroke-width="2"><path d="M4 8.5L12 17l8-8.5" stroke-linecap="round"/></svg></div>
+      </div>
+      <div class="pad">
+        <div class="ring">
+          <div class="u">▲</div><div class="l">◀</div><div class="ok">OK</div>
+          <div class="r">▶</div><div class="d">▼</div>
+        </div>
+      </div>
+      <div class="rrow" style="margin-top:18px">
+        <div class="rbtn"><span style="font-size:12px;color:#1C1C1E">返回</span></div>
+        <div class="rbtn"><span style="font-size:12px;color:#1C1C1E">菜单</span></div>
+      </div>
+      <div class="rrow" style="margin-top:14px">
+        <div class="rbtn"><span style="font-size:12px;color:#1C1C1E">音量 −</span></div>
+        <div class="rbtn"><span style="font-size:12px;color:#1C1C1E">音量 +</span></div>
+      </div>
+    </div>
+    <div class="group" style="margin-top:8px">
+      <div class="row"><div class="tx" style="flex:1;font-size:16px;color:#1C1C1E">更多按键</div>
+        <div class="sub" style="font-size:13px;color:rgba(60,60,67,.5)">18 个</div><div class="chev">›</div></div>
+    </div>
+    <div class="hint">手机需有红外发射器。没有的话，可用 WiFi / 蓝牙遥控。</div>
+  </div>
+  <div class="tabbar">
+    <div class="tab act">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.2"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>
+      设备</div>
+    <div class="tab"><svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>播放</div>
+    <div class="tab"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="10.5" cy="10.5" r="6.2"/><path d="M15.2 15.2L20 20" stroke-linecap="round"/></svg>内容</div>
+    <div class="tab"><svg width="24" height="24" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>我</div>
   </div>
 </div>
 
