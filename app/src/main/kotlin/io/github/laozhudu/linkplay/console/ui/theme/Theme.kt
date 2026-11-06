@@ -314,6 +314,19 @@ fun LinkPlayTheme(
                 window.statusBarColor = scheme.background.toArgb()
                 window.navigationBarColor = scheme.background.toArgb()
             }
+            /*
+             * 窗口底色也要跟着。
+             *
+             * 为什么：`targetSdk = 35` 起强制 edge-to-edge，状态栏透明，
+             * 露出来的就是 **window background**。而 `values` / `values-night` 里的那份
+             * 是**按系统深色**选的 —— 用户手动选了「浅色」但系统是深色时，
+             * 那条就会是深色，和 App 的浅色背景撞出边界。
+             *
+             * 所以手动主题必须在这一层覆盖掉它。
+             */
+            window.setBackgroundDrawable(
+                android.graphics.drawable.ColorDrawable(scheme.background.toArgb()),
+            )
         }
     }
 

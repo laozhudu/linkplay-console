@@ -2,13 +2,18 @@ package io.github.laozhudu.linkplay.console.me
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import io.github.laozhudu.linkplay.console.ui.apple.InsetGroup
@@ -40,6 +45,8 @@ internal fun MeScreen(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    var showTheme by remember { mutableStateOf(false) }
+    val themeMode by io.github.laozhudu.linkplay.console.ui.theme.ThemePrefs.mode.collectAsState()
     val version = remember(context) {
         runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }
             .getOrNull() ?: "?"
@@ -60,6 +67,17 @@ internal fun MeScreen(
                 subtitle = "崩溃记录 · 每台设备的取数通道 · 指令流水",
                 showChevron = true,
                 onClick = onOpenDiagnostics,
+                showDivider = false,
+            )
+        }
+
+        VSpace(Spacing.md)
+        InsetGroup(title = "外观") {
+            ListRow(
+                title = "主题",
+                subtitle = themeMode.label,
+                showChevron = true,
+                onClick = { showTheme = true },
                 showDivider = false,
             )
         }
@@ -103,5 +121,35 @@ internal fun MeScreen(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         VSpace(Spacing.xl)
+    }
+
+    if (showTheme) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showTheme = false },
+            title = { Text("主题") },
+            text = {
+                Column {
+                    io.github.laozhudu.linkplay.console.ui.theme.ThemeMode.entries.forEach { m ->
+                        androidx.compose.material3.TextButton(
+                            onClick = {
+                                io.github.laozhudu.linkplay.console.ui.theme.ThemePrefs.set(context, m)
+                                showTheme = false
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                // 选中的那个打勾，其余留空格 —— 不用 RadioButton，
+                                // 一行文字按钮比一行单选圈更接近苹果的写法
+                                (if (m == themeMode) "✓  " else "     ") + m.label,
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { showTheme = false }) { Text("取消") }
+            },
+        )
     }
 }

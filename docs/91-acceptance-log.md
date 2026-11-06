@@ -2069,3 +2069,73 @@ color/app_background
 | 真机深色模式（图标是否变浅、系统组件是否跟着深） | **未验** |
 | Android 15 上 edge-to-edge 的实际观感 | **未验**（targetSdk 35 会强制） |
 
+## 第四十八轮 · 「我」页加主题切换（跟随系统 / 浅色 / 深色）
+
+用户：「在设置里就按通用软件加个主题切换」。
+
+### ① `ui/theme/ThemePrefs.kt`（新建）
+
+```kotlin
+enum class ThemeMode(val id: String, val label: String) {
+    System("system", "跟随系统"),
+    Light("light", "浅色"),
+    Dark("dark", "深色"),
+}
+```
+
+默认 **跟随系统**。理由：绝大多数人只在系统里设一次深浅，App 跟着走就对了；
+给一个固定默认值等于让用户在两处各设一次，还可能互相矛盾。
+
+用 `SharedPreferences` 而不是数据库：这是一行配置，读写频率低，
+而且**首帧就要用**（`setContent` 之前），数据库首次打开可能慢到能看见白屏。
+
+暴露 `StateFlow<ThemeMode>`：切主题要**立刻生效**（包括状态栏图标），
+改一处整棵树重绘，不需要任何页面自己去通知别处刷新。
+
+### ② 「我」页加「外观」组
+
+```
+外观
+  主题    跟随系统   ›
+```
+
+点开是三选一（选中项前面打勾，不用 RadioButton —— 一行文字比一行单选圈更接近苹果的写法）。
+
+### ③ 一个必须处理的边角：手动主题 vs `values-night`
+
+`targetSdk = 35` 起强制 edge-to-edge，状态栏透明，**露出来的是 window background**。
+而 `values/` 和 `values-night/` 里的那份是**按系统深色**选的。
+
+于是会出现：用户手动选「浅色」、但系统是深色 → 状态栏那条仍是深色，和 App 的浅色背景撞出边界。
+
+修法是在 `LinkPlayTheme` 的 `SideEffect` 里覆盖掉：
+
+```kotlin
+window.setBackgroundDrawable(ColorDrawable(scheme.background.toArgb()))
+```
+
+**顺手把上一轮的隐患补严**：现在手动主题也保证三处同色（Compose 背景 / 系统栏 / 窗口底色）。
+
+### ④ 测试锁住的两条规则
+
+| 规则 | 写反了会怎样 |
+|---|---|
+| 「跟随系统」真跟随 | 系统切深色 App 不变 |
+| 手动选择能压过系统 | "我明明选了深色还是白的" |
+
+第二条**只在用户系统设置正好相反时才会暴露**，极难复现 —— 所以必须有测试。
+
+### 验证
+
+```bash
+./gradlew :app:testDebugUnitTest / :app:assembleDebug
+# 全量 1081 用例 0 失败（+3）
+```
+
+### 没验的
+
+| 项 | 状态 |
+|---|---|
+| 真机切主题（浅色 ↔ 深色 ↔ 跟随系统，状态栏图标是否跟着变） | **未验** |
+| 手动浅色 + 系统深色时状态栏那条是否真同色 | **未验** |
+
