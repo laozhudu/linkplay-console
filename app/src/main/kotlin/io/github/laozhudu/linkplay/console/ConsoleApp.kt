@@ -273,7 +273,6 @@ internal fun ConsoleBody(vm: ConsoleViewModel) {
                         sub = SubPage.Settings
                     },
                     onOpenContent = { sub = SubPage.DeviceContent },
-                    onOpenPlayer = { tab = Tab.Player },
                     onOpenDiagnostics = { sub = SubPage.Diagnostics },
                     onOpenRemote = { tab = Tab.Remote },
                 )

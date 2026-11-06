@@ -88,6 +88,10 @@ internal fun DeviceRowApple(
     val density = LocalDensity.current
     // 从"滑过 100dp 走满 0..100"换算出每像素的步进，屏宽不同也一致
     val stepPerPx = remember(density) { with(density) { 100f / 220.dp.toPx() } }
+    // 离线设备：不显示音量数字、也不响应左右拖。
+    // 原来离线也画「0」并且能拖 —— 那个 0 是"没读到"不是"音量是 0"，
+    // 更糟的是拖了会往一台关着的音箱发命令。
+    val interactive = online != false
 
     Column(modifier = modifier.fillMaxWidth()) {
         Row(
@@ -97,7 +101,8 @@ internal fun DeviceRowApple(
                     onClick = { haptics.tap(); onClick() },
                     onLongClick = { haptics.impact(); onLongClick() },
                 )
-                .pointerInput(volume) {
+                .pointerInput(volume, interactive) {
+                    if (!interactive) return@pointerInput
                     detectHorizontalDragGestures(
                         onDragEnd = {
                             draft?.let { onVolumeCommit(it) }
@@ -133,13 +138,16 @@ internal fun DeviceRowApple(
                     ),
             )
             Spacer(Modifier.width(10.dp))
+            // 名字**不写死宽度**。原来 76dp 把「DOSS DS-1831」截成「DOSS…」、
+            // 「E900V22C-175」截成「E900…」—— 用户自己起的名字被截断是最难认的。
+            // 改成按比例分：名字占 45%，状态占剩下的，两边都能伸缩。
             Text(
                 name,
                 fontSize = 17.sp,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.width(76.dp),
+                modifier = Modifier.weight(0.45f),
             )
             Text(
                 statusText,
@@ -151,12 +159,14 @@ internal fun DeviceRowApple(
             )
             Spacer(Modifier.width(8.dp))
             Text(
-                shown.toString(),
+                // 离线显示「—」而不是 0：0 会被读成"音量是零"，那是另一回事
+                if (!interactive) "—" else shown.toString(),
                 fontSize = if (draft != null) 20.sp else 15.sp,
                 fontWeight = if (draft != null) FontWeight.SemiBold else FontWeight.Normal,
                 color = if (draft != null) MaterialTheme.colorScheme.primary
                 else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                modifier = Modifier.width(30.dp),
+                textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                modifier = Modifier.width(34.dp),
             )
             Text(
                 "›",
