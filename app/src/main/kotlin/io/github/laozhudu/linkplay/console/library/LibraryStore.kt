@@ -37,7 +37,7 @@ class LibraryStore private constructor(context: Context) : SQLiteOpenHelper(
                  dedupe_key text unique,
                  playuri text, title text, album text, creator text, artist text,
                  albumarturi text, duration long, folder_name text, source_type text,
-                 song_id long, first_played_time long)""",
+                 song_id long, first_played_time long, device_ip text)""",
         )
         db.execSQL(
             """create table if not exists tb_net_radio(
@@ -52,6 +52,12 @@ class LibraryStore private constructor(context: Context) : SQLiteOpenHelper(
         // 这些表都是「可重建的索引数据」，不做迁移，直接重建（收藏会丢，所以只在结构变更时手动升级）
         if (oldVersion < 2) {
             db.execSQL("alter table tb_net_radio add column invalid integer default 0")
+        }
+        // v3：最近播放要记「当时投给了哪台设备」（定稿「接着听」那一行显示 doss1）。
+        // **加列不重建**：tb_last_played 里是用户的历史，drop 掉等于清空他的记忆。
+        // 旧行这一列是 null，读的时候降级成"不显示设备名"，不会崩。
+        if (oldVersion < 3) {
+            db.execSQL("alter table tb_last_played add column device_ip text")
         }
     }
 
@@ -89,6 +95,35 @@ class LibraryStore private constructor(context: Context) : SQLiteOpenHelper(
             "tb_last_played", null, null, null, null, null,
             "first_played_time desc", limit.toString(),
         ).use { c -> buildList { while (c.moveToNext()) add(c.toTrack(playedAtColumn = "first_played_time")) } }
+
+        override fun recentWithDevice(limit: Int): List<io.github.laozhudu.linkplay.protocol.library.RecentPlay> =
+            readableDatabase.query(
+                "tb_last_played", null, null, null, null, null,
+                "first_played_time desc", limit.toString(),
+            ).use { c ->
+                buildList {
+                    while (c.moveToNext()) {
+                        val ipIdx = c.getColumnIndex("device_ip")
+                        add(
+                            io.github.laozhudu.linkplay.protocol.library.RecentPlay(
+                                track = c.toTrack(playedAtColumn = "first_played_time"),
+                                deviceIp = if (ipIdx >= 0) c.getString(ipIdx) else null,
+                                playedAt = c.getLong(c.getColumnIndexOrThrow("first_played_time")),
+                            ),
+                        )
+                    }
+                }
+            }
+
+        override fun recordWithDevice(track: TrackRecord, playedAt: Long, deviceIp: String?) {
+            val values = track.toValues(withDedupe = true).apply {
+                put("first_played_time", playedAt)
+                put("device_ip", deviceIp)
+            }
+            writableDatabase.insertWithOnConflict(
+                "tb_last_played", null, values, SQLiteDatabase.CONFLICT_REPLACE,
+            )
+        }
 
         override fun record(track: TrackRecord, playedAt: Long) {
             val values = track.toValues(withDedupe = true).apply {
@@ -188,7 +223,7 @@ class LibraryStore private constructor(context: Context) : SQLiteOpenHelper(
 
     companion object {
         private const val DB_NAME = "linkplay_console.db"
-        private const val DB_VERSION = 2
+        private const val DB_VERSION = 3
 
         @Volatile
         private var instance: LibraryStore? = null

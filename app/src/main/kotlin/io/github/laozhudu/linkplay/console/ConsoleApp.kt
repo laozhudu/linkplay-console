@@ -49,6 +49,7 @@ import io.github.laozhudu.linkplay.console.ui.components.AppShapesExpressive
 import io.github.laozhudu.linkplay.console.ui.components.EmptyState
 import io.github.laozhudu.linkplay.console.ui.components.VSpace
 import io.github.laozhudu.linkplay.console.ui.theme.Spacing
+import kotlinx.coroutines.launch
 
 @Composable
 fun ConsoleApp(vm: ConsoleViewModel = viewModel()) {
@@ -92,6 +93,9 @@ internal fun ConsoleBody(vm: ConsoleViewModel) {
     var tab by remember { mutableStateOf(Tab.Devices) }
     // 内容页搜索框 → 统一搜索页。带一个种子词过去，省掉重新输入。
     var searchSeed by remember { mutableStateOf("") }
+    // 「接着听」点一行 = 再投一次，是个挂起调用
+    val replayScope = androidx.compose.runtime.rememberCoroutineScope()
+    val appContext = androidx.compose.ui.platform.LocalContext.current.applicationContext
     var sub by remember { mutableStateOf<SubPage?>(null) }
 
     // 把"用户此刻在哪"同步到诊断快照。
@@ -306,6 +310,30 @@ internal fun ConsoleBody(vm: ConsoleViewModel) {
                     onOpenLibrary = { sub = SubPage.Library },
                     onOpenScripts = { sub = SubPage.Scripts },
                     onGoDevices = { tab = Tab.Devices },
+                    // 再投一次：优先投给**当时那台**（这是「接着听」的本意），
+                    // 旧记录没记设备就投当前选中的那台。
+                    onReplay = { play ->
+                        val ip = play.deviceIp ?: state.selectedIp
+                        if (ip == null) {
+                            tab = Tab.Devices
+                        } else {
+                            replayScope.launch {
+                                io.github.laozhudu.linkplay.console.playback.PlaybackRouter
+                                    .of(appContext)
+                                    .playOne(
+                                        url = play.track.playUri,
+                                        title = play.track.title,
+                                        deviceIp = ip,
+                                        location = state.saved.firstOrNull { it.ip == ip }?.location,
+                                        deviceUuid = state.saved.firstOrNull { it.ip == ip }?.uuid,
+                                    )
+                            }
+                        }
+                    },
+                    // 最近加入：电台去电台页，歌单去音乐库
+                    onOpenRecentAdd = { add ->
+                        sub = if (add.kind == "电台") SubPage.Radio else SubPage.Library
+                    },
                 )
 
                 // 「遥控」格 —— 红外 / 蓝牙 / WiFi 共用（定稿第 4 屏）。

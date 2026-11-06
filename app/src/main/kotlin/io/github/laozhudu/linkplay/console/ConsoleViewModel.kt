@@ -145,6 +145,21 @@ data class DeviceCard(
     val answered: Set<DeviceSnapshot.Channel> = emptySet(),
 )
 
+/**
+ * 「最近加入」一条。
+ *
+ * 这里刻意用 app 层的简单结构而不是 protocol 的类型：
+ * 它拼的是**两个不同的源**（电台 / 歌单），protocol 里没有、也不该有一个
+ * 把两者混在一起的类型。
+ */
+data class RecentAdd(
+    val title: String,
+    /** 「电台」「歌单」这类来源标签，界面上直接显示。 */
+    val kind: String,
+    /** 附注，例如「12 首」。没有就给 null。 */
+    val detail: String?,
+) 
+
 data class ConsoleUiState(
     val scanning: Boolean = false,
     /** 本次扫描新找到、且**尚未保存**的设备（只含 LinkPlay 系，见 LinkPlayIdentity）。 */
@@ -212,6 +227,19 @@ data class ConsoleUiState(
     val nasServerCount: Int = 0,
     val favoriteCount: Int = 0,
     val recentCount: Int = 0,
+    /**
+     * 「接着听」的条目（定稿内容页第一组）。
+     *
+     * 只取 3 条：这一组是**快捷入口**不是列表页，多了会把下面的源入口挤出首屏。
+     * 完整历史在「音乐库 → 最近」里。
+     */
+    val recentPlays: List<io.github.laozhudu.linkplay.protocol.library.RecentPlay> = emptyList(),
+    /**
+     * 「最近加入」的条目（定稿内容页第二组）：新收藏的电台 + 新改的歌单。
+     *
+     * 同样只取 3 条。没有时间戳的数据源（老电台行）按插入顺序倒序近似。
+     */
+    val recentAdds: List<RecentAdd> = emptyList(),
     /** 歌单数（原厂「全部歌单」，存在独立的 linkplay_playlist.db）。 */
     val playlistCount: Int = 0,
     /** 电台数（内置台 + 用户自己粘的流地址）。 */
@@ -1101,6 +1129,29 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
             val recent = withContext(Dispatchers.IO) {
                 runCatching { LibraryStore.get(app).recents.recent(200).size }.getOrDefault(0)
             }
+            // 「接着听」：带设备的读法（定稿那行要显示「投给了哪台」）
+            val recentPlays = withContext(Dispatchers.IO) {
+                runCatching { LibraryStore.get(app).recents.recentWithDevice(3) }.getOrDefault(emptyList())
+            }
+            // 「最近加入」：新收藏的电台 + 新改的歌单，各取几条拼一起。
+            val recentAdds = withContext(Dispatchers.IO) {
+                runCatching {
+                    val radios = LibraryStore.get(app).radios.all()
+                        .asReversed()
+                        .take(2)
+                        .map { RecentAdd(title = it.name, kind = "电台", detail = null) }
+                    val lists = PlaylistStore.get(app).lists()
+                        .take(2)
+                        .map {
+                            RecentAdd(
+                                title = it.name,
+                                kind = "歌单",
+                                detail = "${it.tracks.size} 首",
+                            )
+                        }
+                    (radios + lists).take(3)
+                }.getOrDefault(emptyList())
+            }
             val radios = withContext(Dispatchers.IO) {
                 runCatching { LibraryStore.get(app).radios.all().size }.getOrDefault(0)
             }
@@ -1132,6 +1183,8 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                     nasServerCount = nas,
                     favoriteCount = fav,
                     recentCount = recent,
+                    recentPlays = recentPlays,
+                    recentAdds = recentAdds,
                     radioCount = radios,
                     onlineConfigured = online,
                     playlistCount = lists,

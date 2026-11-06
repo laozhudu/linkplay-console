@@ -31,17 +31,29 @@ object PlayJournal {
      *
      * @return 是否写入成功（false 表示可能是 IO/权限问题，调用方可以记日志但不该中断播放）
      */
-    fun record(context: Context, item: QueueItem, playedAtMs: Long = System.currentTimeMillis()): Boolean =
+    fun record(
+        context: Context,
+        item: QueueItem,
+        playedAtMs: Long = System.currentTimeMillis(),
+        deviceIp: String? = null,
+    ): Boolean =
         runCatching {
             val store = LibraryStore.get(context)
-            store.recents.record(item.toRecord(), playedAtMs)
+            // 带设备写：定稿「接着听」那一行要显示「这首是在哪台设备上放的」。
+            // deviceIp 为 null 表示投本机（本机不需要设备名）。
+            store.recents.recordWithDevice(item.toRecord(), playedAtMs, deviceIp)
             true
         }.getOrDefault(false)
 
     /** 批量记（例如「全部播放」一次起播一整个歌单时，只记当前这一首）。 */
-    fun recordCurrent(context: Context, items: List<QueueItem>, index: Int): Boolean {
+    fun recordCurrent(
+        context: Context,
+        items: List<QueueItem>,
+        index: Int,
+        deviceIp: String? = null,
+    ): Boolean {
         val item = items.getOrNull(index) ?: return false
-        return record(context, item)
+        return record(context, item, deviceIp = deviceIp)
     }
 
     /**

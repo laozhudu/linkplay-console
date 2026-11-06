@@ -75,7 +75,7 @@ suspend fun startQueueOnDevice(
         )
         log(upstream.detail + "（设备侧队列 · 原厂 PlayQueue）")
         // 最近播放：起播之后才记（设备拒收时不算听过）
-        io.github.laozhudu.linkplay.console.library.PlayJournal.recordCurrent(context, items, index)
+        io.github.laozhudu.linkplay.console.library.PlayJournal.recordCurrent(context, items, index, deviceIp)
         return true
     }
     log("PlayQueue 未接受：${upstream.detail}")
@@ -99,7 +99,7 @@ suspend fun startQueueOnDevice(
         )
         QueueBus.markDeviceOwned(pushed.offset)
         log(pushed.detail + "（设备侧队列）")
-        io.github.laozhudu.linkplay.console.library.PlayJournal.recordCurrent(context, items, index)
+        io.github.laozhudu.linkplay.console.library.PlayJournal.recordCurrent(context, items, index, deviceIp)
         return true
     }
 
@@ -107,7 +107,7 @@ suspend fun startQueueOnDevice(
     log("设备未接收整列表：${pushed.detail} —— 退回客户端逐首投流")
     QueueBus.setOwner(deviceIp)
     withContext(Dispatchers.IO) { QueuePlaybackService.start(context, location, session) }
-    io.github.laozhudu.linkplay.console.library.PlayJournal.recordCurrent(context, items, index)
+    io.github.laozhudu.linkplay.console.library.PlayJournal.recordCurrent(context, items, index, deviceIp)
     return true
 }
 
