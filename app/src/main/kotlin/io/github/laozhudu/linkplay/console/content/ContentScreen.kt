@@ -22,6 +22,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import io.github.laozhudu.linkplay.console.ConsoleUiState
+import io.github.laozhudu.linkplay.console.RecentAdd
 import io.github.laozhudu.linkplay.console.ui.apple.InsetGroup
 import io.github.laozhudu.linkplay.console.ui.apple.LargeTitle
 import io.github.laozhudu.linkplay.console.ui.apple.ListRow
@@ -68,6 +69,9 @@ internal fun ContentScreen(
     onOpenLibrary: () -> Unit,
     onOpenScripts: () -> Unit,
     onGoDevices: () -> Unit,
+    /** 点「接着听」里的一行：再投一次。**不是**打开详情。 */
+    onReplay: (io.github.laozhudu.linkplay.protocol.library.RecentPlay) -> Unit,
+    onOpenRecentAdd: (RecentAdd) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     // 进页面刷一次：数量会随「刚导入的歌 / 刚连的 NAS / 刚建的歌单」变化，
@@ -144,47 +148,81 @@ internal fun ContentScreen(
 
         VSpace(Spacing.md)
 
-        // ---- 分组：我的音乐 / 音源 ----
-        // 空组不显示（与设备页同一条规矩：不画点了没东西的入口）。
-        val mine = shown.filter { it.group == ContentGroup.Mine }
-        val sources = shown.filter { it.group == ContentGroup.Source }
-
-        if (mine.isNotEmpty()) {
-            InsetGroup(title = "我的音乐") {
-                mine.forEachIndexed { i, row ->
+        // ---- 「接着听」：定稿内容页第一组 ----
+        //
+        // 快捷入口，不是列表页：只放 3 条，多了会把下面挤出首屏。
+        // 右侧两列回答「多久」和「投给谁」—— 定稿图里就是 `7:45  doss1`。
+        val listening = state.recentPlays
+        if (listening.isNotEmpty()) {
+            InsetGroup(title = "接着听") {
+                listening.forEachIndexed { i, play ->
+                    val deviceName = play.deviceIp?.let { ip ->
+                        state.saved.firstOrNull { it.ip == ip }?.name ?: ip
+                    }
                     ListRow(
-                        title = row.title,
-                        subtitle = row.subtitle,
-                        showChevron = true,
-                        onClick = row.onClick,
-                        showDivider = i != mine.lastIndex,
+                        title = play.track.title,
+                        subtitle = play.track.displayArtist,
+                        trailing = {
+                            Text(
+                                text = listOfNotNull(
+                                    formatDuration(play.track.durationSec),
+                                    deviceName ?: sourceLabelOf(play.track.sourceType),
+                                ).joinToString("   "),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        },
+                        showDivider = i != listening.lastIndex,
+                        // 点一行 = 再投一次。这是「接着听」最该做的事，不是"看详情"。
+                        onClick = { onReplay(play) },
                     )
                 }
             }
             VSpace(Spacing.md)
         }
 
-        if (sources.isNotEmpty()) {
-            InsetGroup(title = "音源") {
-                sources.forEachIndexed { i, row ->
+        // ---- 「最近加入」：定稿内容页第二组 ----
+        val adds = state.recentAdds
+        if (adds.isNotEmpty()) {
+            InsetGroup(title = "最近加入") {
+                adds.forEachIndexed { i, add ->
                     ListRow(
-                        title = row.title,
-                        subtitle = row.subtitle,
-                        showChevron = true,
-                        onClick = row.onClick,
-                        showDivider = i != sources.lastIndex,
+                        title = add.title,
+                        subtitle = add.kind,
+                        trailing = add.detail?.let { d ->
+                            {
+                                Text(
+                                    text = d,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        },
+                        showDivider = i != adds.lastIndex,
+                        onClick = { onOpenRecentAdd(add) },
                     )
                 }
             }
             VSpace(Spacing.md)
         }
 
-        if (shown.isEmpty()) {
-            Text(
-                text = "这个源下面暂时没有可放的内容。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        // ---- 源入口 ----
+        //
+        // ⚠️ 定稿图里**没有这一组**（它只画了 搜索 + 筛选 + 接着听 + 最近加入）。
+        // 但删掉就没地方进 NAS / 本地曲库 / 歌单 —— 筛选条只能筛列表，不能当导航。
+        // 所以保留、压到最后一组、标题统一成「全部来源」。**这条偏差已记在 docs/91。**
+        if (shown.isNotEmpty()) {
+            InsetGroup(title = "全部来源") {
+                shown.forEachIndexed { i, row ->
+                    ListRow(
+                        title = row.title,
+                        subtitle = row.subtitle,
+                        showChevron = true,
+                        onClick = row.onClick,
+                        showDivider = i != shown.lastIndex,
+                    )
+                }
+            }
             VSpace(Spacing.md)
         }
 
@@ -320,4 +358,19 @@ private fun buildRows(
             onClick = onOpenBili,
         ),
     )
+}
+
+/** 秒 → `7:45`。0 或负数返回 null —— 不显示 `0:00`，那看起来像卡住。 */
+internal fun formatDuration(sec: Long): String? {
+    if (sec <= 0) return null
+    return "%d:%02d".format(sec / 60, sec % 60)
+}
+
+/** 来源标识 → 界面文案。只在**投本机 / 旧数据没记设备**时用作第三列。 */
+internal fun sourceLabelOf(sourceType: String): String = when (sourceType) {
+    "local" -> "本地"
+    "radio" -> "电台"
+    "subsonic" -> "在线"
+    "queue" -> "在线"
+    else -> sourceType
 }

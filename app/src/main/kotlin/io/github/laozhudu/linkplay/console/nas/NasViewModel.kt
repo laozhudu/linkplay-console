@@ -430,7 +430,7 @@ class NasViewModel(
         val start = startIndex.coerceIn(0, items.lastIndex)
         log("开始推送 ${items.size} 首（从第 ${start + 1} 首起）到 $rendererIp")
         // 最近播放：NAS 目录起播也要记（以前只有音乐库那页记，从 NAS 点过的歌进不了最近播放）
-        PlayJournal.recordCurrent(getApplication(), items, start)
+        PlayJournal.recordCurrent(getApplication(), items, start, rendererIp)
 
         // 走**全 App 唯一**的投送入口。
         //

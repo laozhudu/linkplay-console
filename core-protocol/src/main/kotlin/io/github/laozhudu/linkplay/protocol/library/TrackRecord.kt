@@ -54,6 +54,20 @@ interface FavoriteStore {
 }
 
 /**
+ * 一条「最近播放」事件：放了什么、投给谁、什么时候。
+ *
+ * 刻意独立于 [TrackRecord]：曲目是曲目，播放事件是播放事件。
+ * 合并成一个类会让"这首歌的时长"和"这次投给了谁"放在同一层，
+ * 以后加"投给音箱还是本机"又要往里塞字段。
+ */
+data class RecentPlay(
+    val track: TrackRecord,
+    /** 当时投给的设备 IP；投本机或旧数据为 null。 */
+    val deviceIp: String?,
+    val playedAt: Long,
+)
+
+/**
  * 最近播放（对应原厂 `tb_last_played`，原厂限制 100 条）。
  *
  * 语义：同一首歌重复播放只更新 `playedAt` 并前置，不产生重复条目——
@@ -63,6 +77,27 @@ interface RecentStore {
     fun recent(limit: Int = DEFAULT_LIMIT): List<TrackRecord>
     fun record(track: TrackRecord, playedAt: Long)
     fun clear()
+
+    /**
+     * 带「投给了哪台设备」的读法（定稿「接着听」那一行要显示 `doss1`）。
+     *
+     * **默认实现降级成 [recent]**，设备字段为空 —— 这样纯内存实现和旧实现
+     * 不用改就能编译，只有真正持久化的那份（[LibraryStore]）覆盖它。
+     *
+     * 为什么设备不放进 [TrackRecord]：那个类的契约是「与设备无关的曲目记录」，
+     * 一台歌投给谁播属于**播放事件**的属性，不是曲目自身的属性。
+     */
+    fun recentWithDevice(limit: Int = DEFAULT_LIMIT): List<RecentPlay> =
+        recent(limit).map { RecentPlay(track = it, deviceIp = null, playedAt = it.firstPlayedAt) }
+
+    /**
+     * 带设备地记一条。
+     *
+     * 默认降级成 [record] —— 同样是为了不让旧实现必须改。
+     */
+    fun recordWithDevice(track: TrackRecord, playedAt: Long, deviceIp: String?) {
+        record(track, playedAt)
+    }
 
     companion object {
         const val DEFAULT_LIMIT = 100

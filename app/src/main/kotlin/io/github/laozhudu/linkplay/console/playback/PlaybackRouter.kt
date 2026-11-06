@@ -130,6 +130,16 @@ class PlaybackRouter(
                 // 被启动/绑定之后才持有会话）。失败不影响出声，所以吞掉。
                 startLocalService()
                 local.play(url, title)
+                // 本机播放也记最近 —— 否则「用手机听」这件事从不进历史，
+                // 定稿「接着听」里就永远只有投给音箱的那几首。
+                // deviceIp 传 null：本机不属于任何一台设备。
+                runCatching {
+                    io.github.laozhudu.linkplay.console.library.PlayJournal.record(
+                        app,
+                        io.github.laozhudu.linkplay.protocol.queue.QueueItem(url = url, title = title ?: url),
+                        deviceIp = null,
+                    )
+                }
                 true
             }
             is PlaybackOutput.Device -> startQueueOnDevice(
