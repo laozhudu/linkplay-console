@@ -1969,3 +1969,103 @@ python3 scripts/check-*.py     # 5 个关键的全 PASS
 | 设备行右侧 chevron `›` | 定稿有，保留 |
 | **改完的效果未真机验收** | 待用户装机确认 |
 
+## 第四十七轮 · 状态栏图标随主题自动变深/变浅（用户截图指出的白底白字）
+
+用户指出：白色背景下最上方的时间/电量被盖住了，问有没有通用办法。
+
+### 根因是**两件事**凑在一起
+
+| # | 问题 | 位置 |
+|---|---|---|
+| 1 | 系统主题写死 `android:Theme.Material.Light.NoActionBar` —— 不随深色模式变 | `res/values/themes.xml` |
+| 2 | 代码里**从来没设过** `isAppearanceLightStatusBars`，系统按主题默认给**浅色图标** | 全项目零处 |
+
+后果：App 自己是白底（`#F7F9FC`），顶上那排也是白的 —— 白底白字。
+
+另外还发现一个没人提但真实存在的：**没有 `values-night`**，所以深色模式下
+系统自己的东西（键盘、权限弹窗、启动白闪）仍然是浅色。
+
+### 修法：三处，全是标准做法
+
+#### ① `LinkPlayTheme` 里按主题设图标明暗
+
+```kotlin
+SideEffect {
+    val window = view.context.findActivity()?.window ?: return@SideEffect
+    val controller = WindowCompat.getInsetsController(window, view)
+    controller.isAppearanceLightStatusBars = !darkTheme      // 浅色背景 → 深色图标
+    controller.isAppearanceLightNavigationBars = !darkTheme
+    window.statusBarColor = scheme.background.toArgb()
+    window.navigationBarColor = scheme.background.toArgb()
+}
+```
+
+**这就是业界通用做法**，不是我自己想的：Android 从 API 23 起给
+`SYSTEM_UI_FLAG_LIGHT_STATUS_BAR`，现在统一走 AndroidX 的
+`WindowInsetsControllerCompat.isAppearanceLightStatusBars`（true = 背景浅、图标深）。
+所有正规 App 都是这么做的 —— 不需要按厂商/机型写分支。
+
+放在**主题层**而不是 `MainActivity`：它是主题的属性。以后加"浅色 / 深色 / 跟随系统"
+手动切换时，这里一行不用改就会跟着变。
+
+#### ② 加 `values-night/` 一套
+
+`themes.xml` + `colors.xml` 各有 night 版本，父主题换成 `android:Theme.Material.NoActionBar`。
+解决深色模式下系统组件仍是浅色、启动闪白的问题。
+
+#### ③ 背景色三处对齐
+
+| 位置 | 浅色 | 深色 |
+|---|---|---|
+| `LightColors/DarkColors.background`（Compose） | `#F7F9FC` | `#0A0C11` |
+| `values/colors.xml` → `app_background` | `#F7F9FC` | `#0A0C11` |
+
+**为什么必须对齐**：`targetSdk = 35`，Android 15 起**强制 edge-to-edge**，
+状态栏透明，露出来的就是 window background。不同色的话顶上会有一条色差带
+（用户截图里那条浅灰就是这么来的），启动瞬间也能看到。
+
+### 一个顺带修掉的坑
+
+`findActivity()` 用 `tailrec` 沿 `baseContext` 往上找，而不是 `view.context as? Activity`。
+
+Compose 的 View 上下文常被 `ContextThemeWrapper` 包一层，直接强转会拿到 null，
+于是状态栏设置**静默失效** —— 界面看着正常、就是颜色不对，很难查。
+
+### 我自己踩的一个坑（如实记）
+
+写 `values/colors.xml` 时**直接覆盖了整个文件**，把原有的
+`ic_launcher_background` 弄丢了，`processDebugResources` 报：
+
+```
+AAPT: error: resource color/ic_launcher_background not found
+（mipmap-anydpi-v26/ic_launcher.xml / ic_launcher_round.xml）
+```
+
+教训：**改 XML 资源前先看原文件内容**，哪怕只加一行。
+
+### 验证：用 aapt2 确认资源真的进了包
+
+```bash
+aapt2 dump resources app-debug.apk | grep -A6 'style/Theme.LinkPlayConsole'
+```
+
+```
+()      (style) size=3 parent=0x01030241   ← Material.Light.NoActionBar
+(night) (style) size=3 parent=0x0103022e   ← Material.NoActionBar
+        0x01010054 = @color/app_background
+
+color/app_background
+()      #fff7f9fc
+(night) #ff0a0c11
+```
+
+两条配置都在、父主题按 night 正确切换、windowBackground 指向我们的颜色。
+
+### 没验的
+
+| 项 | 状态 |
+|---|---|
+| 真机浅色模式（图标是否真的变黑） | **未验** |
+| 真机深色模式（图标是否变浅、系统组件是否跟着深） | **未验** |
+| Android 15 上 edge-to-edge 的实际观感 | **未验**（targetSdk 35 会强制） |
+

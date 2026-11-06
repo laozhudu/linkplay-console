@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 深色模式：和 `ui/theme/Theme.kt` 的 DarkColors.background（#0A0C11）一致 -->
+    <color name="app_background">#FF0A0C11</color>
+</resources>

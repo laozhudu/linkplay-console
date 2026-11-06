@@ -1,4 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.LinkPlayConsole" parent="android:Theme.Material.Light.NoActionBar" />
+    <!--
+        主主题。为什么要显式给 windowBackground：
+
+        targetSdk 是 35，Android 15 起**强制 edge-to-edge**，状态栏是透明的，
+        露出来的就是 window background。默认值是系统灰/白，和 App 自己的
+        `LightColors.background`（#F7F9FC）不一致，顶上会出现一条色差带。
+        启动那一瞬间也能看到它，所以必须和 Compose 的背景同色。
+
+        状态栏图标深浅**不在这里管** —— 那是 `LinkPlayTheme` 里
+        `isAppearanceLightStatusBars` 的事（跟着深色模式走）。
+    -->
+    <style name="Theme.LinkPlayConsole" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/app_background</item>
+        <!-- 状态栏/导航栏透明，由 Compose 背景透上来（各系统版本表现一致） -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
 </resources>

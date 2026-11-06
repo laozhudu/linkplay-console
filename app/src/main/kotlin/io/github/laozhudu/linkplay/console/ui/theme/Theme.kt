@@ -8,13 +8,18 @@ import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
+import android.app.Activity
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
 import androidx.compose.ui.unit.sp
 import kotlin.math.absoluteValue
 
@@ -269,12 +274,69 @@ fun LinkPlayTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit,
 ) {
+    val scheme = if (darkTheme) DarkColors else LightColors
+
+    /*
+     * ---- 状态栏 / 导航栏：图标颜色必须跟着主题走 ----
+     *
+     * ## 之前为什么看不见
+     *
+     * 两件事凑在一起：
+     *
+     * 1. `themes.xml` 里是 `android:Theme.Material.Light.NoActionBar` —— **写死浅色**，
+     *    不随系统深色模式变；
+     * 2. 代码里从来没设过 `isAppearanceLightStatusBars`，于是系统按主题默认给**浅色图标**。
+     *
+     * 结果：App 自己是白底，顶上那排（时间 / 电量 / 信号）也是白的 —— 白底白字。
+     *
+     * ## 这就是业界通用做法
+     *
+     * Android 从 API 23 起给了 `SYSTEM_UI_FLAG_LIGHT_STATUS_BAR`，
+     * 现在统一走 AndroidX 的 [`WindowInsetsControllerCompat.isAppearanceLightStatusBars`]：
+     * **true = 背景是浅色、图标用深色**。所有正规 App 都是这么做的，
+     * 不需要为每种机型写分支，也不用判断厂商。
+     *
+     * 放在主题这一层而不是 `MainActivity`，是因为它是**主题的属性**：
+     * 以后加手动切主题（浅色/深色/跟随系统）时，这里一行都不用改就会跟着变。
+     */
+    val view = LocalView.current
+    if (!view.isInEditMode) {
+        SideEffect {
+            val window = view.context.findActivity()?.window ?: return@SideEffect
+            val controller = WindowCompat.getInsetsController(window, view)
+            // 浅色背景 → 深色图标；深色背景 → 浅色图标
+            controller.isAppearanceLightStatusBars = !darkTheme
+            controller.isAppearanceLightNavigationBars = !darkTheme
+            // 系统栏背景取 App 自己的背景色。
+            // 不这么做的后果：状态栏是系统默认灰、App 是纯白，顶上一条色差带（截图里就有）。
+            @Suppress("DEPRECATION")
+            run {
+                window.statusBarColor = scheme.background.toArgb()
+                window.navigationBarColor = scheme.background.toArgb()
+            }
+        }
+    }
+
     CompositionLocalProvider(LocalExtraColors provides if (darkTheme) DarkExtras else LightExtras) {
         MaterialTheme(
-            colorScheme = if (darkTheme) DarkColors else LightColors,
+            colorScheme = scheme,
             typography = AppTypography,
             shapes = AppShapes,
             content = content,
         )
     }
+}
+
+/**
+ * 从任意 Context 往上找 Activity。
+ *
+ * 为什么不能写 `view.context as? Activity`：Compose 的 View 上下文常常被
+ * `ContextThemeWrapper` 包一层（主题覆盖、Dialog 里都这样），直接强转拿到 null，
+ * 于是状态栏设置**静默失效** —— 界面看着正常，就是图标颜色不对，很难查。
+ * 一路沿着 `baseContext` 往上找是标准做法。
+ */
+private tailrec fun android.content.Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is android.content.ContextWrapper -> baseContext.findActivity()
+    else -> null
 }
