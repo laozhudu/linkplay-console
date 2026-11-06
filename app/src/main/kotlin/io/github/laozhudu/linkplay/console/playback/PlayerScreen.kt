@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -51,6 +52,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.window.Dialog
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
@@ -136,6 +140,8 @@ import io.github.laozhudu.linkplay.protocol.upnp.TransportState
 fun PlayerScreen(
     deviceIp: String,
     deviceLocation: String?,
+    /** 设备名（定稿投送状态行要显示 `doss1` 而不是 IP）。 */
+    deviceName: String? = null,
     /** 设备 uuid：用于按它恢复上次的播放列表。 */
     deviceUuid: String? = null,
     /** 一级页面时不显示返回箭头（底部 Tab 换页）。 */
@@ -182,8 +188,8 @@ fun PlayerScreen(
 
     var scrubDraft by remember { mutableStateOf<Float?>(null) }
     var volDraft by remember { mutableStateOf<Float?>(null) }
-    /** 底部内容区显示哪一块。false = 播放列表，true = 投流与日志。 */
-    var showAdvanced by remember { mutableStateOf(false) }
+    /** 全屏播放列表是否打开（定稿里它是从一行入口点开的一层）。 */
+    var showPlaylist by remember { mutableStateOf(false) }
 
     // ---- 语音：一条顶栏提示 + 一个麦克风按钮，不引入任何浮层 ----
     var voiceNote by remember { mutableStateOf<String?>(null) }
@@ -483,103 +489,39 @@ fun PlayerScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
 
-            // ---------- 中部：播放列表（全屏唯一的滚动区）----------
-            // 用户要的是「列表在封面下方、整个界面中部」：所以列表拿到一块独立的 weight，
-            // 它上面的封面/曲名和下面的控制区都不滚，只有这块滚。
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .padding(top = Spacing.xs),
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = Spacing.xs),
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    SegmentChip(
-                        text = if (queue.items.isEmpty()) "播放列表" else "播放列表 ${queue.items.size}",
-                        selected = !showAdvanced,
-                        onClick = { showAdvanced = false },
+            // ---------- 投送状态（定稿：`doss1 · 投送中`）----------
+            //
+            // 这一行回答 **"声音现在往哪走"**，是播放页最该先说清的一件事：
+            // 用户最常见的困惑不是"没有播放按钮"，而是"按了播放却没声音"
+            // —— 因为声音投到了另一台设备。把这个信息从顶栏的小字提到标题正下方。
+            Text(
+                text = buildString {
+                    append(deviceName ?: deviceIp)
+                    append(" · ")
+                    append(
+                        when {
+                            state.error != null -> "出错了"
+                            playing -> "投送中"
+                            queue.running -> "已暂停"
+                            else -> "待播放"
+                        },
                     )
-                    SegmentChip(text = "投流与日志", selected = showAdvanced, onClick = { showAdvanced = true })
-                    Spacer(Modifier.weight(1f))
-                    // 与设备同步的直观证据：设备自己握着 N 首、现在第几首。
-                    // 用户反馈「列表没从设备同步」，所以这里把设备的真值直接写出来。
-                    if (state.deviceQueueCount > 0) {
-                        Text(
-                            if (state.deviceQueueIndex >= 0) "设备 ${state.deviceQueueCount} 首 · 第 ${state.deviceQueueIndex + 1} 首"
-                            else "设备 ${state.deviceQueueCount} 首",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = StatusColors.ok,
-                            maxLines = 1,
-                        )
-                    } else if (!showAdvanced && !queue.sourceNote.isNullOrBlank()) {
-                        Text(
-                            queue.sourceNote.orEmpty(),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (queue.deviceOwned) StatusColors.ok else OnDarkPalette.muted,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
+                },
+                style = MaterialTheme.typography.labelMedium,
+                color = OnDarkPalette.muted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
+            )
 
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(OnDarkPalette.chip),
-                ) {
-                    if (showAdvanced) {
-                        CastPanel(
-                            state = state,
-                            vm = vm,
-                            onOpenNas = onOpenNas,
-                            onOpenLocalQueue = onOpenLocalQueue,
-                        )
-                    } else if (queue.items.isEmpty()) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(Spacing.md),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center,
-                        ) {
-                            Text(
-                                "队列是空的",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = OnDarkPalette.text,
-                            )
-                            Spacer(Modifier.height(Spacing.sm))
-                            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                                TextButton(onClick = onOpenNas) { Text("NAS 音乐") }
-                                TextButton(onClick = onOpenLocalQueue) { Text("手机音乐") }
-                                TextButton(onClick = onOpenLibrary) { Text("音乐库") }
-                            }
-                        }
-                    } else {
-                        LazyColumn(
-                            modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(vertical = Spacing.xs),
-                        ) {
-                            itemsIndexed(queue.items) { index, item ->
-                                PlaylistRow(
-                                    index = index,
-                                    item = item,
-                                    playing = index == queue.index && queue.running,
-                                    current = index == queue.index,
-                                    onClick = { vm.playQueueItem(index) },
-                                    onRemove = if (QueueRestore.isPlaceholder(item)) null else ({ vm.removeQueueItem(index) }),
-                                )
-                            }
-                        }
-                    }
-                }
-            }
+            // ---------- 弹性空隙 ----------
+            //
+            // 定稿把「播放列表」从**页面中部常驻**收成了下方一行入口
+            // （点开才是全屏列表）。中部因此空出来 —— 用 weight 撑开，
+            // 让封面/标题靠上、控制区靠下，和定稿的疏密一致。
+            Spacer(Modifier.weight(1f))
+
 
             // ---------- 底部控制区：进度 → 音量 → 输入源 → 播放整行（压在最下）----------
 
@@ -677,7 +619,12 @@ fun PlayerScreen(
                 )
             }
 
-            // 主控整行：压在屏幕最下方，永远可点
+            // 主控整行：压在屏幕最下方，永远可点。
+            //
+            // **只留三个键**（上一首 / 播放暂停 / 下一首）—— 定稿就是这三个。
+            // 原来还有「循环」和「停止」，都挪进了全屏播放列表页：
+            // 一页摆五个平级按钮，每次都要想一下点哪个；
+            // 而"停止"和"暂停"在没有外部场景时其实是同一件事。
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -685,17 +632,6 @@ fun PlayerScreen(
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                CircleIcon(
-                    // 循环模式只有设备侧有（本机播放器的 repeatMode 不在本轮范围）
-                    onClick = { actionScope.launch { dispatcher.dispatch(PlayIntent.LoopNext) } },
-                    size = 44.dp,
-                ) {
-                    LoopGlyph(
-                        color = if (state.loopMode == LoopMode.OFF) OnDarkPalette.muted else palette.accent,
-                        mode = state.loopMode.wire,
-                        modifier = Modifier.size(GlyphSize.medium),
-                    )
-                }
                 // 能力位决定这个按钮能不能用（docs/86 不变量 I3）。
                 //
                 // 通用 DLNA 渲染器（电视盒子）没有设备侧队列 → supportsNextPrev = false。
@@ -745,14 +681,59 @@ fun PlayerScreen(
                         modifier = Modifier.size(28.dp),
                     )
                 }
-                CircleIcon(
-                    onClick = { actionScope.launch { dispatcher.dispatch(PlayIntent.Stop) } },
-                    size = 44.dp,
-                ) {
-                    Text("■", style = MaterialTheme.typography.titleSmall, color = OnDarkPalette.muted)
-                }
+            }
+
+            // ---------- 播放列表入口（定稿：`播放列表 · 100 首 · 第 8 首  ›`）----------
+            //
+            // 从"页面中部常驻一个列表"改成"一行入口 + 全屏列表"。
+            // 理由：这一页是**遥控器**，不是文件管理器 —— 一眼要看封面、进度、三个键；
+            // 选第几首是低频动作，值得多一次点击。
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .clickable { showPlaylist = true }
+                    .padding(horizontal = Spacing.xs, vertical = Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = buildString {
+                        append("播放列表")
+                        if (queue.items.isNotEmpty()) {
+                            append(" · ${queue.items.size} 首")
+                            if (queue.index >= 0) append(" · 第 ${queue.index + 1} 首")
+                        } else {
+                            append(" · 空")
+                        }
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = OnDarkPalette.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    "›",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = OnDarkPalette.muted.copy(alpha = 0.6f),
+                )
             }
         }
+    }
+
+    // ---------- 全屏播放列表（从入口行打开）----------
+    if (showPlaylist) {
+        PlaylistSheet(
+            queue = queue,
+            state = state,
+            vm = vm,
+            onOpenNas = onOpenNas,
+            onOpenLocalQueue = onOpenLocalQueue,
+            onOpenLibrary = onOpenLibrary,
+            onClose = { showPlaylist = false },
+            actionScope = actionScope,
+            dispatcher = dispatcher,
+        )
     }
 }
 
@@ -1048,3 +1029,173 @@ private fun OutputSwitchRow() {
 /** 设备缺能力时的提示。**说清是设备做不到**，不是"操作失败"。 */
 private const val NOT_SUPPORTED_NEXT = "这台设备没有「下一首」（它不持有播放列表）"
 private const val NOT_SUPPORTED_PREV = "这台设备没有「上一首」（它不持有播放列表）"
+
+
+/**
+ * 全屏播放列表（定稿里从「播放列表 · N 首 · 第 M 首 ›」这一行点开）。
+ *
+ * ## 为什么从"页内常驻"改成"一层全屏"
+ *
+ * 播放页的主角是**遥控**（封面 / 进度 / 三个键），不是文件管理器。
+ * 原来列表占掉中部一整块 weight，导致封面被压小、控制区被压到底边，
+ * 一屏里三件事（看 / 选 / 控）互相抢空间。
+ *
+ * ## 循环与停止搬到这里
+ *
+ * 定稿主控只有三个键。原来那排有五个（多了循环、停止）。
+ * 这两个都是**低频且容易误触**的：循环要连点三下才回到"不循环"，
+ * 停止和暂停在没有外部输入的场景下几乎同义。放到列表页底部，需要时才找得到。
+ */
+@Composable
+private fun PlaylistSheet(
+    queue: QueueRunState,
+    state: PlaybackUiState,
+    vm: PlaybackViewModel,
+    onOpenNas: () -> Unit,
+    onOpenLocalQueue: () -> Unit,
+    onOpenLibrary: () -> Unit,
+    onClose: () -> Unit,
+    actionScope: kotlinx.coroutines.CoroutineScope,
+    dispatcher: PlaybackDispatcher,
+) {
+    var showAdvanced by remember { mutableStateOf(false) }
+
+    Dialog(
+        onDismissRequest = onClose,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(OnDarkPalette.panel)
+                .windowInsetsPadding(WindowInsets.systemBars)
+                .padding(horizontal = Spacing.lg),
+        ) {
+            // 顶部：标题 + 关闭
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "播放列表",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = OnDarkPalette.text,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onClose) { Text("完成") }
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = Spacing.xs),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                SegmentChip(
+                    text = if (queue.items.isEmpty()) "播放列表" else "播放列表 ${queue.items.size}",
+                    selected = !showAdvanced,
+                    onClick = { showAdvanced = false },
+                )
+                SegmentChip(text = "投流与日志", selected = showAdvanced, onClick = { showAdvanced = true })
+                Spacer(Modifier.weight(1f))
+                if (state.deviceQueueCount > 0) {
+                    Text(
+                        if (state.deviceQueueIndex >= 0) {
+                            "设备 ${state.deviceQueueCount} 首 · 第 ${state.deviceQueueIndex + 1} 首"
+                        } else {
+                            "设备 ${state.deviceQueueCount} 首"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = StatusColors.ok,
+                        maxLines = 1,
+                    )
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(OnDarkPalette.chip),
+            ) {
+                if (showAdvanced) {
+                    CastPanel(
+                        state = state,
+                        vm = vm,
+                        onOpenNas = onOpenNas,
+                        onOpenLocalQueue = onOpenLocalQueue,
+                    )
+                } else if (queue.items.isEmpty()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(Spacing.md),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        Text(
+                            "队列是空的",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = OnDarkPalette.text,
+                        )
+                        Spacer(Modifier.height(Spacing.sm))
+                        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                            TextButton(onClick = onOpenNas) { Text("NAS 音乐") }
+                            TextButton(onClick = onOpenLocalQueue) { Text("手机音乐") }
+                            TextButton(onClick = onOpenLibrary) { Text("音乐库") }
+                        }
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(vertical = Spacing.xs),
+                    ) {
+                        itemsIndexed(queue.items) { index, item ->
+                            PlaylistRow(
+                                index = index,
+                                item = item,
+                                playing = index == queue.index && queue.running,
+                                current = index == queue.index,
+                                onClick = { vm.playQueueItem(index) },
+                                onRemove = if (QueueRestore.isPlaceholder(item)) null
+                                else ({ vm.removeQueueItem(index) }),
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 底部：循环 + 停止（定稿主控里没有这两个，搬到这里）
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = Spacing.sm),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(onClick = {
+                    actionScope.launch { dispatcher.dispatch(PlayIntent.LoopNext) }
+                }) {
+                    Text(
+                        "循环：" + when (state.loopMode) {
+                            LoopMode.OFF -> "关"
+                            LoopMode.ONE -> "单曲"
+                            LoopMode.SHUFFLE -> "随机"
+                            LoopMode.SEQUENCE -> "列表"
+                        },
+                    )
+                }
+                Spacer(Modifier.width(Spacing.md))
+                TextButton(onClick = {
+                    actionScope.launch { dispatcher.dispatch(PlayIntent.Stop) }
+                }) {
+                    Text("停止")
+                }
+            }
+        }
+    }
+}
