@@ -71,7 +71,7 @@ fun WpsGuideScreen(
         elapsed = 0L
         baseline = state.devices.size
         while (true) {
-            delay(2_000)
+            delay(io.github.laozhudu.linkplay.console.util.PollCadence.WPS_GUIDE_MS)
             elapsed = System.currentTimeMillis() - startedAt
             onRescan()
             if (WpsGuide.tick(elapsed, (state.devices.size - baseline).coerceAtLeast(0)) != WpsStep.Waiting) break

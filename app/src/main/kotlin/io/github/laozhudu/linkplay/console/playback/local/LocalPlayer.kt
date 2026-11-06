@@ -61,7 +61,7 @@ class LocalPlayer(context: Context) {
         player.addListener(listener)
         ticker.launch {
             while (true) {
-                delay(500)
+                delay(io.github.laozhudu.linkplay.console.util.PollCadence.LOCAL_PROGRESS_MS)
                 if (player.isPlaying) publish()
             }
         }

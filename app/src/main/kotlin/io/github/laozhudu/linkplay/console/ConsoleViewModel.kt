@@ -1339,7 +1339,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         // 首页多房间卡片的低频心跳：不在播放页时也能跟上设备侧/遥控器的音量变化
         safeLaunch("groupVolumeHeartbeat") {
             while (true) {
-                delay(2500)
+                delay(io.github.laozhudu.linkplay.console.util.PollCadence.GROUP_VOLUME_MS)
                 val masterIp = _state.value.groupMasterIp ?: continue
                 withContext(Dispatchers.IO) {
                     runCatching {
@@ -1356,7 +1356,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         // 用户想退也点不到（卡片上"退出同步"按 inGroup 决定显示与否）。
         safeLaunch("groupTopology") {
             while (true) {
-                delay(3_000)
+                delay(io.github.laozhudu.linkplay.console.util.PollCadence.GROUP_TOPOLOGY_MS)
                 if (_state.value.saved.isEmpty()) continue
                 refreshGroupTopology()
             }
@@ -1365,7 +1365,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         // 为什么不用 1 秒：卡片信息变化慢，3 秒够了；设备只有 2 台，但别把老固件打爆。
         safeLaunch("cardHeartbeat") {
             while (true) {
-                delay(3_000)
+                delay(io.github.laozhudu.linkplay.console.util.PollCadence.CARD_HEARTBEAT_MS)
                 val saved = _state.value.saved
                 if (saved.isEmpty()) continue
                 for (d in saved) {
@@ -1388,7 +1388,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         // 定时关闭的时钟：每秒推进一次，到点下发停止。
         safeLaunch("sleepTimerTick") {
             while (true) {
-                delay(1_000)
+                delay(io.github.laozhudu.linkplay.console.util.PollCadence.SLEEP_TICK_MS)
                 val now = System.currentTimeMillis()
                 val timer = _state.value.sleepTimer
                 if (now - _state.value.nowMs < 900 && !timer.active) continue

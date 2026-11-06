@@ -902,7 +902,8 @@ class PlaybackViewModel(
     }
 
     companion object {
-        const val POLL_INTERVAL_MS = 1_000L
+        /** 播放页刷新节奏。**定义在 `PollCadence`** —— 所有周期在一处，调手感只改那里。 */
+        val POLL_INTERVAL_MS: Long = io.github.laozhudu.linkplay.console.util.PollCadence.PLAYER_SCREEN_MS
 
         fun format(seconds: Long): String = PositionInfo.formatTime(seconds)
     }
