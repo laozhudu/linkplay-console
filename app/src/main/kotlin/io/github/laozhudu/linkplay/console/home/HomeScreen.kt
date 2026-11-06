@@ -306,29 +306,22 @@ internal fun HomeScreen(
                 if (groupDevices.isEmpty()) return@forEach
                 item(key = "hdr-${group.name}") { DeviceGroupHeader(group) }
                 items(groupDevices, key = { it.uuid }) { device ->
-                DeviceCardRow(
-                    device = device,
-                    online = state.online[device.uuid],
-                    groupedUnder = state.groupedUnder[UuidMatch.key(device.uuid)],
-                    card = state.cards[device.uuid],
-                    // 主机自己也算"在组里"（它的 slave_list 非空）
-                    inGroup = state.groupedUnder[UuidMatch.key(device.uuid)] != null ||
-                        (state.groupMasterIp != null && device.ip == state.groupMasterIp),
-                    isMaster = state.groupMasterIp != null && device.ip == state.groupMasterIp,
-                    masked = UuidMatch.find(device.uuid, state.groupMembers) { it.uuid }?.masked == true,
-                    profile = state.cards[device.uuid]?.profile
-                        ?: io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile.UNKNOWN,
-                    capabilities = state.cards[device.uuid]?.capabilities
-                        ?: io.github.laozhudu.linkplay.protocol.dlna.DeviceCapabilities.LINKPLAY,
-                    onOpen = { onOpenDevice(device) },
-                    onSettings = { onOpenSettings(device) },
-                    onVolume = { vm.setCardVolume(device, it) },
-                    onSetChannel = { ch -> vm.setCardChannel(device, ch) },
-                    onUngroup = { vm.ungroupCard(device) },
-                    onMask = { vm.toggleMask(device) },
-                    onTogglePlay = { vm.toggleDevicePlay(device) },
-                    onRename = { menuTarget = device },
-                )
+                    val card = state.cards[device.uuid]
+                    val isOnline = state.online[device.uuid]
+                    val inGroup = state.groupedUnder[UuidMatch.key(device.uuid)] != null ||
+                        (state.groupMasterIp != null && device.ip == state.groupMasterIp)
+                    // 一行只放三件事：在不在 / 在放什么 / 音量。
+                    // 电量、固件、声道、预设全部进长按菜单或详情页（用户原话：
+                    // 「用户不需要知道全部设备信息，只需要能用、好用、简单状态就够」）。
+                    DeviceRowApple(
+                        name = device.name.ifBlank { device.ip },
+                        online = isOnline,
+                        statusText = deviceStatusText(card?.title, card?.playing, isOnline, inGroup, card?.battery),
+                        volume = card?.volume ?: 0,
+                        onClick = { onOpenDevice(device) },
+                        onVolumeCommit = { vm.setCardVolume(device, it) },
+                        onLongClick = { menuTarget = device },
+                    )
                 }
             }
 
@@ -549,6 +542,28 @@ internal fun HomeScreen(
                             },
                         )
                     }
+                    // 以下四项原来在卡片上，现在收进长按菜单（苹果的 context menu）
+                    val card = state.cards[target.uuid]
+                    TextButton(onClick = {
+                        vm.toggleDevicePlay(target)
+                        menuTarget = null
+                    }) { Text(if (card?.playing == true) "暂停这台" else "播放这台") }
+                    TextButton(onClick = {
+                        vm.setCardChannel(target, nextChannel(state.cards[target.uuid]?.channel ?: 0))
+                        menuTarget = null
+                    }) {
+                        Text("声道：${channelLabel(card?.channel ?: 0)}")
+                    }
+                    TextButton(onClick = {
+                        vm.toggleMask(target)
+                        menuTarget = null
+                    }) { Text("遮罩（本机静音，不改设备）") }
+                    if (state.groupedUnder[UuidMatch.key(target.uuid)] != null) {
+                        TextButton(onClick = {
+                            vm.ungroupCard(target)
+                            menuTarget = null
+                        }) { Text("退出同步") }
+                    }
                     TextButton(onClick = { onOpenSettings(target); menuTarget = null }) { Text("设备信息 / 设置") }
                 }
             },
@@ -664,4 +679,39 @@ private fun DeviceGroupHeader(group: io.github.laozhudu.linkplay.protocol.dlna.D
             .fillMaxWidth()
             .padding(top = Spacing.md, bottom = Spacing.xs),
     )
+}
+
+/**
+ * 一行状态文案。
+ *
+ * 只有三档信息：在不在 / 在放什么 / 电量（离线时才值得说）。
+ * **不写"能组网""支持 xx 协议"** —— 那些是排查信息，进详情页。
+ */
+private fun deviceStatusText(
+    title: String?,
+    playing: Boolean?,
+    online: Boolean?,
+    inGroup: Boolean,
+    battery: Int?,
+): String = when {
+    online == false -> "离线"
+    inGroup && title.isNullOrBlank() -> "同步中"
+    !title.isNullOrBlank() && playing == true -> "在放《$title》"
+    !title.isNullOrBlank() -> "暂停 · $title"
+    inGroup -> "同步中"
+    battery != null && battery <= 20 -> "待播放 · 电量 $battery%"
+    else -> "待播放"
+}
+
+/** 声道三档循环：立体声 → 仅左 → 仅右 → 立体声。 */
+private fun nextChannel(current: Int): Int = when (current) {
+    0 -> 1
+    1 -> 2
+    else -> 0
+}
+
+private fun channelLabel(channel: Int): String = when (channel) {
+    1 -> "仅左"
+    2 -> "仅右"
+    else -> "立体声"
 }
