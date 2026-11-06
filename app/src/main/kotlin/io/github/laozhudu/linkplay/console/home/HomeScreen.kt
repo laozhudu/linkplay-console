@@ -90,6 +90,8 @@ internal fun HomeScreen(
 
     // 齿轮点开的设备操作菜单（改名 / 删除 / 进设置）
     var menuTarget by remember { mutableStateOf<SavedDevice?>(null) }
+    // 「遥控设备」两组都是占位（码库未接 / 蓝牙未实现），点了给一句实话。
+    var remoteHint by remember { mutableStateOf<String?>(null) }
     var sleepMenu by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<SavedDevice?>(null) }
     var deleteTarget by remember { mutableStateOf<SavedDevice?>(null) }
@@ -337,6 +339,49 @@ internal fun HomeScreen(
                         )
                         Text(if (showAdd) "−" else "+", style = MaterialTheme.typography.titleLarge)
                     }
+                }
+            }
+
+            // ---- 「遥控设备」分组（docs/93 屏 1）----
+            //
+            // **这是占位。** 红外码库没接（`IrRemoteControl` 只有一条探测码）、蓝牙零代码。
+            // 为什么还是画出来：用户明确要求「红外、蓝牙、wifi 等遥控要体现在 UI 上」，
+            // 而结构位置本身是信息 —— 他知道以后在哪。
+            //
+            // 底线是**不骗人**：副标题直写「未接入」，点了给一句实话，
+            // 而不是画一个按下去没反应的遥控器（那是本项目最忌的失败模式）。
+            item {
+                InsetGroup(title = "遥控设备") {
+                    ListRow(
+                        title = "添加红外设备",
+                        subtitle = "码库未接入（电视 / 空调）",
+                        leading = {
+                            Box(Modifier.size(30.dp), contentAlignment = Alignment.Center) {
+                                Text("⌁", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        },
+                        showChevron = true,
+                        onClick = {
+                            remoteHint = "红外码库（Flipper-IRDB，30 万条）还没接进来。\n" +
+                                "现在只有一个探测键，用来试「这台手机能不能发红外」。\n" +
+                                "接好之后这里会变成「选品牌 → 选型号」。"
+                        },
+                    )
+                    ListRow(
+                        title = "添加蓝牙设备",
+                        subtitle = "未实现（遥控 / 耳机）",
+                        leading = {
+                            Box(Modifier.size(30.dp), contentAlignment = Alignment.Center) {
+                                Text("ᛒ", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        },
+                        showChevron = true,
+                        onClick = {
+                            remoteHint = "蓝牙遥控还是零代码（docs/84 只有调研）。\n" +
+                                "接口层已经建好（RemoteControl），加实现时遥控页不用改。"
+                        },
+                        showDivider = false,
+                    )
                 }
             }
 
@@ -593,6 +638,16 @@ internal fun HomeScreen(
                 }
             },
             confirmButton = { TextButton(onClick = { menuTarget = null }) { Text("关闭") } },
+        )
+    }
+
+    // 「遥控设备」占位说明 —— 说清为什么现在还不能用，而不是让用户猜
+    remoteHint?.let { hint ->
+        AlertDialog(
+            onDismissRequest = { remoteHint = null },
+            title = { Text("还没接好") },
+            text = { Text(hint) },
+            confirmButton = { TextButton(onClick = { remoteHint = null }) { Text("知道了") } },
         )
     }
 
