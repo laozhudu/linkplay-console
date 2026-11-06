@@ -110,7 +110,7 @@
 
 | # | 问题 | 现状 | 目标 |
 |---|---|---|---|
-| 1 | **音量两套实现** | `setVolume`（定值）+ `setVolumeLive`（实时），两条下发链 | 一个 `SetVolumeUseCase`（`docs/90` S3.1 未做） |
+| 1 | ~~音量两套实现~~ → **缺共同入口** | 设备音量两条通道（拖动走合并 60ms / 按键直发）**语义不同、都该留**；但"先写 VolumeBus 再选通道"这件事被复制了 4 份 | 已建 `SetVolumeUseCase`（第三十六轮）收共同步骤，**不合并两种语义** |
 | 2 | **循环模式三份存储** | 播放页 / NAS / 队列各记一份 | 一份，跟输出口走 |
 | 3 | **界面按钮仍直连 VM** | `PlayerScreen` 十几处 `vm.xxx()`，没走 `Dispatcher` | 全走 `Dispatcher`（S1.3 剩余） |
 | 4 | **`QueueItem(` 还有 6 处手写** | 已收 2 处 | 全走 `ToQueueItemsUseCase` |

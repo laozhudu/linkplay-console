@@ -104,6 +104,30 @@ internal class DeviceControl(private val host: ConsoleHost) {
      *
      * 步长按手机惯例 15 档换算成 0-100：每按一下 5，长按连续按也不至于跳变。
      */
+    /**
+     * 音量的唯一入口（`docs/95` 第 3 项）。
+     *
+     * 两条通道的**语义不同**，这里收的是"共同步骤"而不是"合并语义"：
+     * 拖动走合并、按键走直发 —— 都先写 `VolumeBus`，再走各自的通道。
+     *
+     * 为什么必须收：现在有 4 个地方想改音量，每个自己写一遍这三步，
+     * 就会有某个漏掉"先写 VolumeBus"，表现是**界面 60、设备 40**（真机撞过）。
+     */
+    private val volumeUseCase = io.github.laozhudu.linkplay.console.usecase.SetVolumeUseCase(
+        publish = { ip, v -> VolumeBus.publishVolume(ip, v) },
+        sendMerged = { ip, v -> host.pushDeviceVolume(ip, v) },
+        sendNow = { ip, v ->
+            host.launch("volumeKey") {
+                withContext(Dispatchers.IO) {
+                    val result = transport.dispatch(ip, RemoteCommand.SetVolume(v))
+                    if (result is DispatchResult.Failed) {
+                        host.log("音量下发失败：${result.failure.describe()}")
+                    }
+                }
+            }
+        },
+    )
+
     fun adjustVolumeByKey(delta: Int): Int? {
         val ip = host.state.value.selectedIp ?: return null
         if (host.state.value.online[ip] == false) return null
@@ -112,7 +136,8 @@ internal class DeviceControl(private val host: ConsoleHost) {
             ?: return null
         if (!VolumeStep.shouldConsume(current, delta)) return null
         val next = VolumeStep.next(current, delta) ?: return null
-        VolumeBus.publishVolume(ip, next)
+        // 按键是离散事件：写 VolumeBus + **立刻下发**（不走合并通道）
+        volumeUseCase.discrete(ip, next)
         // 音量键这条路**不走去抖通道**：用户按一下就要立刻听到变化，
         // 合并通道是为拖动设计的，按键本来就是离散事件，多一次 60ms 等待只会显得钝。
         host.launch("volumeKey") {
@@ -158,9 +183,8 @@ internal class DeviceControl(private val host: ConsoleHost) {
      * 每个都发一次 HTTP 会把老固件压垮，合并只保留最新值。
      */
     fun setCardVolume(device: SavedDevice, volume: Int) {
-        val ip = device.ip
-        VolumeBus.publishVolume(ip, volume)
-        host.pushDeviceVolume(ip, volume.coerceIn(0, 100))
+        // 拖动是连续事件：写 VolumeBus + 走**合并通道**（否则一秒几十次 HTTP 会压垮老固件）
+        volumeUseCase.duringDrag(device.ip, volume)
     }
 
     // ---- 勾选式分组（Sonos Grouping 菜单）----
