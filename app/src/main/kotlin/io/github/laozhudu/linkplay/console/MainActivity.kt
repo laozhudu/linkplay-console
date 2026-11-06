@@ -5,6 +5,8 @@ import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import io.github.laozhudu.linkplay.console.playback.VolumeBus
 import io.github.laozhudu.linkplay.console.playback.VolumeOsd
 import io.github.laozhudu.linkplay.console.ui.theme.LinkPlayTheme
@@ -28,8 +30,17 @@ class MainActivity : ComponentActivity() {
                 "选中=${st.selectedIp ?: "无"} 组主机=${st.groupMasterIp ?: "无"} " +
                 "卡片=${st.cards.size}"
         }
+        // 主题要在第一帧之前读出来，否则会先白一下再变深
+        io.github.laozhudu.linkplay.console.ui.theme.ThemePrefs.init(this)
+
         setContent {
-            LinkPlayTheme {
+            val mode by io.github.laozhudu.linkplay.console.ui.theme.ThemePrefs.mode
+                .collectAsState()
+            val dark = io.github.laozhudu.linkplay.console.ui.theme.ThemePrefs.resolve(
+                mode = mode,
+                systemDark = androidx.compose.foundation.isSystemInDarkTheme(),
+            )
+            LinkPlayTheme(darkTheme = dark) {
                 ConsoleApp(consoleVm)
             }
         }
