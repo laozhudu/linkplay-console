@@ -28,6 +28,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -35,6 +36,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -82,6 +84,8 @@ internal fun HomeScreen(
     /** 诊断页（顶栏 ◔ / 崩溃横幅都进这里）。 */
     onOpenDiagnostics: () -> Unit = {},
     onOpenRemote: () -> Unit = {},
+    /** 点「本机」行后进播放页（那里才有本机播放的完整控制）。 */
+    onOpenPlayer: () -> Unit = {},
 ) {
     val extras = LocalExtraColors.current
     var showAdd by remember { mutableStateOf(false) }
@@ -90,7 +94,16 @@ internal fun HomeScreen(
     // 齿轮点开的设备操作菜单（改名 / 删除 / 进设置）
     var menuTarget by remember { mutableStateOf<SavedDevice?>(null) }
     // 「遥控设备」两组都是占位（码库未接 / 蓝牙未实现），点了给一句实话。
+    val context = LocalContext.current
     var remoteHint by remember { mutableStateOf<String?>(null) }
+
+    // 当前播放目标（`docs/96` 模型 A：唯一真值）。设备页每一行据此标「正在用」。
+    val targetFlow = io.github.laozhudu.linkplay.console.playback.PlaybackOutputStore.current
+        .collectAsState()
+    val target = targetFlow.value
+    val targetIsLocal = target is io.github.laozhudu.linkplay.console.playback.PlaybackOutput.Local
+    val targetIp = (target as? io.github.laozhudu.linkplay.console.playback.PlaybackOutput.Device)
+        ?.ip?.takeIf { it.isNotEmpty() }
     var sleepMenu by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<SavedDevice?>(null) }
     var deleteTarget by remember { mutableStateOf<SavedDevice?>(null) }
@@ -215,6 +228,39 @@ internal fun HomeScreen(
             io.github.laozhudu.linkplay.protocol.dlna.DeviceGroup.entries.forEach { group ->
                 val groupDevices = byGroup[group].orEmpty()
                 if (groupDevices.isEmpty()) return@forEach
+                // ---- 「本机」行（`docs/96` 模型 A）----
+                //
+                // 大厂都把本机当成目标列表里**平等的一项**（Spotify 的 "This phone"、
+                // AirPlay 的 "This iPhone"）。我们原来没有 —— 本机只存在于输出口枚举里，
+                // 设备页根本看不到"手机自己放"这个选项。
+                //
+                // 插在第一组之前：它不属于"我的音箱"也不属于"其它播放设备"。
+                // 「本机」只插一次 —— 在**第一个非空分组**之前
+                val firstNonEmpty = io.github.laozhudu.linkplay.protocol.dlna.DeviceGroup.entries
+                    .firstOrNull { !byGroup[it].isNullOrEmpty() }
+                if (group == firstNonEmpty) {
+                    item(key = "local-output") {
+                        DeviceRowApple(
+                            name = "本机",
+                            online = true,
+                            statusText = "这台手机自己放",
+                            volume = 0,
+                            inUse = targetIsLocal,
+                            onClick = {
+                                io.github.laozhudu.linkplay.console.playback.PlaybackOutputStore.write(
+                                    context,
+                                    io.github.laozhudu.linkplay.console.playback.PlaybackOutput.Local,
+                                )
+                                io.github.laozhudu.linkplay.console.playback.PlaybackService
+                                    .restart(context)
+                                onOpenPlayer()
+                            },
+                            onVolumeCommit = {},
+                            onLongClick = {},
+                        )
+                    }
+                }
+
                 item(key = "hdr-${group.name}") { DeviceGroupHeader(group) }
                 items(groupDevices, key = { it.uuid }) { device ->
                     val card = state.cards[device.uuid]
@@ -232,6 +278,7 @@ internal fun HomeScreen(
                         onClick = { onOpenDevice(device) },
                         onVolumeCommit = { vm.setCardVolume(device, it) },
                         onLongClick = { menuTarget = device },
+                        inUse = targetIp == device.ip,
                     )
                 }
             }

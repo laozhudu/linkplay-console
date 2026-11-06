@@ -45,6 +45,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.async
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -684,6 +685,17 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                 status = null,
             )
         }
+        // **点设备 = 同时把它设成播放目标**（`docs/96` 模型 A）。
+        //
+        // 大厂（Sonos 的房间、Spotify 的 Connect）都只有一个目标真值；
+        // 我们原来是"选中的设备"和"输出口"两套，于是会出现
+        // 「设备页点了 doss2，声音却从 doss1 出来」。这一行就是在拆掉那个分裂。
+        runCatching {
+            io.github.laozhudu.linkplay.console.playback.PlaybackOutputStore.write(
+                getApplication(),
+                io.github.laozhudu.linkplay.console.playback.PlaybackOutput.Device(device.ip, device.name),
+            )
+        }
         runCatching { store.saveLastDevice(device.uuid, device.ip) }
         refreshStatus()
     }
@@ -842,6 +854,13 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         val location = _state.value.devices.firstOrNull { it.ip == ip }?.location
         _state.update {
             it.copy(selectedIp = ip, selectedLocation = location, status = null)
+        }
+        // 同 [open]：选中即目标
+        runCatching {
+            io.github.laozhudu.linkplay.console.playback.PlaybackOutputStore.write(
+                getApplication(),
+                io.github.laozhudu.linkplay.console.playback.PlaybackOutput.Device(ip),
+            )
         }
         refreshStatus()
     }
@@ -1382,6 +1401,22 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
             val crash = CrashGuard.lastReport(app)
             if (crash != null) _state.update { it.copy(lastCrashAtStart = crash) }
         }
+        // 目标（本机/设备）是唯一真值：别的页面把它改到某台设备时，这里跟着切过去。
+        // 反方向由 open()/select() 负责 —— 两个方向都收敛到同一个值，不会再出现
+        // 「选中 doss2 但投给 doss1」。
+        runCatching { io.github.laozhudu.linkplay.console.playback.PlaybackOutputStore.prime(getApplication()) }
+        safeLaunch("observePlaybackTarget") {
+            io.github.laozhudu.linkplay.console.playback.PlaybackOutputStore.current
+                .filterNotNull()
+                .collect { target ->
+                    val ip = (target as? io.github.laozhudu.linkplay.console.playback.PlaybackOutput.Device)
+                        ?.ip?.takeIf { it.isNotEmpty() } ?: return@collect
+                    if (_state.value.selectedIp == ip) return@collect
+                    val dev = _state.value.saved.firstOrNull { it.ip == ip } ?: return@collect
+                    open(dev)
+                }
+        }
+
         // 首页一进来就有内容：读已保存设备，并后台探活（不清空界面、不阻塞）
         reloadSaved()
         probeSaved()

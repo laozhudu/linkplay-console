@@ -275,6 +275,7 @@ internal fun ConsoleBody(vm: ConsoleViewModel) {
                     onOpenContent = { sub = SubPage.DeviceContent },
                     onOpenDiagnostics = { sub = SubPage.Diagnostics },
                     onOpenRemote = { tab = Tab.Remote },
+                    onOpenPlayer = { tab = Tab.Player },
                 )
 
                 Tab.Player -> if (state.selectedIp == null) {

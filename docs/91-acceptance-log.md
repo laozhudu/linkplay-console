@@ -2198,3 +2198,79 @@ python3 scripts/check-*.py     # 5 个关键全 PASS
 | 全屏列表打开/关闭手感 | **未验** |
 | 循环按钮搬走后状态是否还正确下发 | 逻辑未动，但**未真机验** |
 
+## 第五十轮 · 模型 A 落地：单一播放目标（本机 + 设备）
+
+用户拍板「按 A 做」。`docs/96` 的调研结论变成代码。
+
+### ① 唯一真值
+
+`PlaybackOutputStore` 本来只有"读文件"，现在多了一条流：
+
+```kotlin
+private val _current = MutableStateFlow<PlaybackOutput?>(null)
+val current: StateFlow<PlaybackOutput?>
+fun prime(context)      // 进程启动读一次
+fun write(...)          // 写文件 + 更新流（值相同时 StateFlow 不发射，所以不会循环）
+```
+
+任何一处改目标，所有观察者立刻拿到，不用轮询文件。
+
+### ② 双向同步（这是拆掉"两套状态"的关键）
+
+| 方向 | 谁做 | 做法 |
+|---|---|---|
+| 点设备 → 设为目标 | `open()` / `select()` | 顺带 `write(Device(ip, name))` |
+| 目标改成设备 → 切过去 | `ConsoleViewModel.init` | collect `current`，IP 变了就 `open(那台)` |
+
+两个方向收敛到同一个值，**不会再出现「选中 doss2 但投给 doss1」**。
+
+`_state.value.selectedIp == ip` 时直接 return —— 这是防循环的那道闸。
+
+### ③ 设备页加「本机」
+
+大厂都把本机当成目标列表里**平等的一项**（Spotify "This phone"、AirPlay "This iPhone"）。
+
+```
+本机        这台手机自己放                     ← 插在第一个非空分组之前
+我的音箱
+  ● doss1  暂停  正在用  56  ›
+```
+
+点「本机」= 设目标为本机 + 进播放页。
+
+`DeviceRowApple` 新增 `inUse` 参数：**当前目标那行右侧显示「正在用」**。
+
+### ④ 内容页加「投给」
+
+```
+内容
+投给   [本机] [doss1] [doss2] [doss3]     ← 新增，横向可滚
+[🔍 歌名、歌手，或「周杰伦」]
+```
+
+和播放页的「从哪出声」是**同一个真值**。内容页原来是"点了就投，投给谁不显示"——那正是"投错设备"的根源。
+
+### 与定稿的偏差（如实记）
+
+`docs/93` 定稿的**内容页没有「投给」这一行**（设备页也没有「本机」行）。
+这两处是本轮按 `docs/96` 调研新增的，用户已明确要求按模型 A 做。
+
+已记入本节，定稿图未同步更新。
+
+### 验证
+
+```bash
+./gradlew :app:compileDebugKotlin / :app:testDebugUnitTest / :app:assembleDebug
+# 全量 1081 用例 0 失败
+python3 scripts/check-*.py     # 5 个关键全 PASS
+```
+
+### 没做的 / 没验的
+
+| 项 | 状态 |
+|---|---|
+| **播放页按大厂重排（A4）** | **未做**，下一轮 |
+| 目标离线时的拦截 | **未做** —— 现在照投，失败靠现有错误提示 |
+| 老数据 `remote`（跟随选中）迁移 | **未做** —— 仍保留"跟随"中间态 |
+| 真机（本机行 / 正在用标记 / 投给 chips） | **未验** |
+

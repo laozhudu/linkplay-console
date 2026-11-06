@@ -80,6 +80,13 @@ internal fun DeviceRowApple(
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier,
     showDivider: Boolean = true,
+    /**
+     * 这台是不是**当前的播放目标**（`docs/96` 模型 A）。
+     *
+     * 为什么必须有：大厂（Sonos 房间 / Spotify Connect）都让"现在投给谁"永远可见。
+     * 我们的目标原来是播放页里一个看不见的开关，用户只能靠听。
+     */
+    inUse: Boolean = false,
 ) {
     val haptics = rememberAppHaptics()
     // 拖动中的临时值。null = 没在拖，显示真实音量
@@ -149,6 +156,15 @@ internal fun DeviceRowApple(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(0.45f),
             )
+            if (inUse) {
+                Text(
+                    "正在用",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(end = 4.dp),
+                )
+            }
             Text(
                 statusText,
                 fontSize = 13.sp,
