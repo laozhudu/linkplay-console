@@ -1366,3 +1366,47 @@ NAS 是唯一需要逐层下钻的源。塞进接口等于逼本地/电台/洛�
 播放页那两个音量方法（`setVolume` / `setVolumeLive`）走的是 `PlaybackEngine`，
 和设备侧的 `RemoteTransport` 是两条不同的链路 —— **本轮没动**，需要单独一轮（风险评估不同）。
 
+## 第三十七轮 · 基础设施第四步：界面按钮走唯一执行点（**用户可感**）
+
+| 位置 | 前 | 后 |
+|---|---|---|
+| 上一首 / 下一首 | `vm::previous` / `vm::next` | `dispatcher.dispatch(...)` + **能力位判断** |
+| 播放/暂停大按钮 | `if (playing) vm.pause() else vm.play()` | `dispatch(PlayIntent.TogglePlay)` |
+| 停止 | `vm::stop` | `dispatch(PlayIntent.Stop)` |
+| 静音 | `vm::toggleMute` | `dispatch(PlayIntent.Mute)` |
+| 循环模式 | `vm::cycleLoopMode` | `dispatch(PlayIntent.LoopNext)` |
+
+**这两个手势保留直连**（刻意的）：`seekTo`（拖进度）和 `setVolumeLive`（拖音量）。
+它们是连续手势，每次拖动都走一次 `dispatch` 会创建几十个协程，没必要。
+
+### 用户能看到的变化
+
+投通用 DLNA 渲染器（电视盒子）时，**上一首/下一首变成灰的**，
+点一下会提示「这台设备没有「下一首」（它不持有播放列表）」。
+
+以前是画出来、按下去毫无反应 —— 用户以为 App 坏了。
+
+### 一处文案的讲究
+
+提示不是"操作失败"，是"**这台设备没有这个能力**"，而且带了原因（不持有播放列表）。
+
+说"失败"会让用户去查网络；说清是设备限制，他才会明白要换台设备。
+
+### 顺带改名
+
+`voiceScope` → `actionScope`。它现在服务语音、按钮、切歌三个来源，旧名字会误导后来人。
+
+### 验证
+
+```bash
+./gradlew :app:assembleDebug / :app:testDebugUnitTest   # 全量 1073 用例 0 失败
+```
+
+### 没做的
+
+- 投流那 4 个（`setCastUrl` / `setCastNeedsHeaders` / `setCastReferer` / `cast`）
+  **没走 dispatch** —— `PlayIntent` 里没有 `Cast`。要不要加是下一轮的决定
+  （加了会让"投任意 URL"进意图层，不一定合适）。
+- 本机播放时 `can(Next)` 恒为 true —— 本地播放器目前只播单首，那个"下一首"
+  点了会走到 `ExoPlayer.seekToNextMediaItem()`，但队列里没有下一首。**已知限制，未改。**
+
