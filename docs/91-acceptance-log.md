@@ -2802,3 +2802,82 @@ ConnectException: Failed to connect to /192.168.99.175:80
 # 1081 用例 0 失败
 ```
 
+## 第六十轮 · 内容页搜索直接出结果、能直接点（用户四条中的 3）
+
+用户：「内容 tab 搜索不合理，搜索的结果应直接出现全部结果。能直接点，而不是点了进去以后还要再重新搜索一遍」。
+
+### 根因：搜索结果只留数量，条目被丢掉
+
+```kotlin
+// 旧
+data class Found(val count: Int, val ms: Long)
+```
+
+`SearchHubViewModel.probe()` 明明拿到了条目（`value.tracks` / `list` / `matched`），
+却**只留了 size**。所以搜索页只能显示「洛雪 5 条」，用户点进去还得再搜一遍。
+
+### 改法：数据层带条目出来
+
+```kotlin
+data class SearchHit(
+    val title: String,
+    val subtitle: String?,
+    val source: SourceId,
+    val url: String? = null,        // 电台现成
+    val lxTrack: LxTrack? = null,   // 洛雪要拿脚本现解析
+    val localId: Long? = null,      // 本地要走本机 HTTP 服务
+    val durationSec: Long = 0,
+)
+
+data class Found(val count: Int, val ms: Long, val items: List<SearchHit>)
+```
+
+三个源各取前 5 条填进去。
+
+### 内容页：搜完就地出结果
+
+```
+内容
+投给  [本机][doss1]…
+[🔍 周杰伦          ]
+
+洛雪音乐
+  晴天    周杰伦        ← 点一下就播
+  稻香    周杰伦
+  …
+
+网络电台
+  …
+手机本地
+  …
+```
+
+- 有搜索词时，**「接着听 / 最近加入 / 全部来源」全部让位**（避免两套内容抢屏）
+- 按源分组，不合并排序（NAS 的《晴天》和洛雪的《晴天》不是同一份东西）
+- 没结果的源也给一行「没有结果 + 原因 + 去那边」，不是空白
+
+### 三类的播放方式收敛在一个地方
+
+| 源 | 怎么播 |
+|---|---|
+| 电台 | 地址现成，直接 `playOne(url)` |
+| 本地 | `LocalMediaRegistry.baseUrl() + "/t/{id}"`（要走本机 HTTP 服务） |
+| 洛雪 | 拿启用脚本 → `LxSession.userApi` → `musicUrl()` 现解析 → `playOne` |
+
+界面只调 `onPlayHit(hit)`，**不判断源** —— 和"输出目标"一样，分派只在一个地方。
+
+### 验证
+
+```bash
+./gradlew :app:compileDebugKotlin / :app:testDebugUnitTest / :app:assembleDebug
+# 1081 用例 0 失败
+```
+
+### 没做的
+
+| 项 | 状态 |
+|---|---|
+| B 站源 | **仓库里只有 `docs/85` 施工文档 + 真机验证结论，没有代码** |
+| 「投给」统一成播放页那个 cast 形态（用户第 4 条） | 未做 |
+| 真机：搜一首点一下是否真的出声 | **未验** |
+

@@ -386,6 +386,55 @@ internal fun ConsoleBody(vm: ConsoleViewModel) {
                     onOpenRecentAdd = { add ->
                         sub = if (add.kind == "电台") SubPage.Radio else SubPage.Library
                     },
+                    // 搜索结果直接播（用户要求"能直接点"）。
+                    // 三类源的播放方式不同，收敛到这里 —— 界面不判断源。
+                    onPlayHit = { hit ->
+                        replayScope.launch {
+                            val ip = state.selectedIp
+                            val dev = state.saved.firstOrNull { it.ip == ip }
+                            when {
+                                // 电台：地址现成，直接投
+                                hit.url != null && hit.source == io.github.laozhudu.linkplay.console.search.SourceId.Radio -> {
+                                    if (ip != null) {
+                                        io.github.laozhudu.linkplay.console.playback.PlaybackRouter
+                                            .of(appContext)
+                                            .playOne(hit.url, hit.title, ip, dev?.location, dev?.uuid)
+                                    }
+                                }
+                                // 本地：要本机 HTTP 服务地址（`baseUrl/t/{id}`），服务没起就先起
+                                hit.localId != null -> {
+                                    val base = runCatching {
+                                        io.github.laozhudu.linkplay.console.library.LocalMediaRegistry.baseUrl()
+                                    }.getOrNull()
+                                    if (base != null && ip != null) {
+                                        io.github.laozhudu.linkplay.console.playback.PlaybackRouter
+                                            .of(appContext)
+                                            .playOne("$base/t/${hit.localId}", hit.title, ip, dev?.location, dev?.uuid)
+                                    }
+                                }
+                                // 洛雪：直链要拿脚本现解析
+                                hit.lxTrack != null -> {
+                                    runCatching {
+                                        val repo = io.github.laozhudu.linkplay.console.lx.ScriptLibrary
+                                            .repository(appContext)
+                                        val active = repo.active() ?: error("没有启用的脚本")
+                                        val text = repo.textOf(active.fileName) ?: error("脚本读不出来")
+                                        val info = io.github.laozhudu.linkplay.lx.LxScriptInfo.parse(text)
+                                            ?: error("脚本头解析不出来")
+                                        val api = io.github.laozhudu.linkplay.console.lx.LxSession
+                                            .userApi(appContext, text, info)
+                                        val r = api.musicUrl(hit.lxTrack.source, hit.lxTrack.toMusicInfoJson())
+                                        val url = r.value ?: error(r.error ?: "脚本没给地址")
+                                        if (ip != null) {
+                                            io.github.laozhudu.linkplay.console.playback.PlaybackRouter
+                                                .of(appContext)
+                                                .playOne(url, hit.title, ip, dev?.location, dev?.uuid)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
                 )
 
                 // 「遥控」格 —— 红外 / 蓝牙 / WiFi 共用（定稿第 4 屏）。
