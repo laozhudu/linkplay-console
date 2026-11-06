@@ -68,7 +68,8 @@ fun AppCard(
 ) {
     // 触感统一放在这里：AppCard 是全 App 唯一的标准卡片（19 处使用），
     // 在各页面自己加必然漏，而且漏掉的那几处会显得"点了没反应"。
-    val haptics = LocalHapticFeedback.current
+    // 走 AppHaptics 封装而不是 Compose 的两档枚举 —— 后面成功/失败要分得更细。
+    val haptics = io.github.laozhudu.linkplay.console.ui.apple.rememberAppHaptics()
     val base = modifier
         .fillMaxWidth()
         .clip(AppShapesExpressive.squircle)
@@ -82,8 +83,8 @@ fun AppCard(
     Box(
         if (onClick != null) {
             base.clickable {
-                // TextHandleMove 是最轻的一档：只是"我收到这一下了"，不是震动提醒
-                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                // tap = 最轻一档：只是"我收到这一下了"，不是震动提醒
+                haptics.tap()
                 onClick()
             }
         } else {

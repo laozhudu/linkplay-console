@@ -315,7 +315,7 @@ internal fun ConsoleBody(vm: ConsoleViewModel) {
 /** 底部导航：三个一级页面；播放中时「播放」图标变成 ▶。 */
 @Composable
 internal fun BottomNav(current: Tab, onSelect: (Tab) -> Unit) {
-    val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val haptics = io.github.laozhudu.linkplay.console.ui.apple.rememberAppHaptics()
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -337,7 +337,7 @@ internal fun BottomNav(current: Tab, onSelect: (Tab) -> Unit) {
                 modifier = Modifier
                     .clip(AppShapesExpressive.squircle)
                     .clickable {
-                        haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                        haptics.tap()
                         onSelect(t)
                     }
                     .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
