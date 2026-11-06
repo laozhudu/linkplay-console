@@ -2753,3 +2753,52 @@ ConnectException: Failed to connect to /192.168.99.175:80
 | 3 | 内容页搜索**直接出结果**，不要点进去再搜一遍 | **未做**，下一轮 |
 | 4 | 内容页「投给」与播放页 cast **同一形态、直通**；内容页作为首页 | **未做**，下一轮 |
 
+## 第五十九轮 · 默认进内容页 + 通用 UPnP 设备不再报错
+
+用户：「通用 upnp 的 80 端口没开放，所以永远报错。默认进内容页。而且内容页里 b 站源我做好模块没接进来」。
+
+### ① 默认进「内容」页
+
+`var tab by remember { mutableStateOf(Tab.Content) }`
+
+理由：打开 App 第一件事通常是"我想听点什么"，不是"我先看看设备"。
+设备页是排查/管理用的低频页，内容页才是入口。
+
+### ② 通用 UPnP 设备探活失败不再甩错误
+
+用户已经诊断出原因：**那台设备的 80 端口没开**，所以每次探活必然 ConnectException。
+
+对这种设备，**离线状态本身就是完整信息** —— 再甩一条
+`ConnectException: Failed to connect to /192.168.99.175:80` 只是噪音，
+而且会让人以为整个 App 坏了。
+
+修法：错误归属判断里，`DeviceGroup.OtherPlayer`（通用渲染器）**不显示错误文本**，只显示「离线」。
+
+> 顺带核实了一下 URL 拼接：`DeviceDescription.resolve()` 用的是
+> `java.net.URI.resolve()`，会正确保留 base 的端口，**没有硬编码 80**。
+> 所以那个 `:80` 是设备的 LOCATION 本身（或手动添加时没带端口）导致的，
+> 不是我们拼错。真要修得去查 SSDP 通告里它报的 LOCATION 是什么。
+
+### ③ B 站：仓库里只有文档，没有代码
+
+查了全仓库：
+
+| 位置 | 内容 |
+|---|---|
+| `docs/85-bilibili-source.md`（分支 `docs/bilibili-source`） | 319 行施工文档 |
+| 代码模块 | **没有** —— `settings.gradle.kts` 里没有 `core-bili` 之类的模块 |
+| 任何 `.kt` 里 | 只有 `DeviceCapabilities` 等词的误匹配 |
+
+也就是说：**方案写了，模块没做**。
+
+要继续的话有两个选择：
+1. 按 `docs/85` 从零实现一个 `core-bili` 模块（工作量：单模块 + 取流 + 搜索 + 接线）
+2. 先在内容页把 B 站那一行接通"能搜到、能播"，再补细节
+
+### 验证
+
+```bash
+./gradlew :app:compileDebugKotlin / :app:testDebugUnitTest / :app:assembleDebug
+# 1081 用例 0 失败
+```
+

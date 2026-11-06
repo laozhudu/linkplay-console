@@ -288,7 +288,16 @@ internal fun HomeScreen(
                         onVolumeCommit = { vm.setCardVolume(device, it) },
                         onLongClick = { menuTarget = device },
                         inUse = targetIp == device.ip,
-                        errorText = state.error?.takeIf { state.errorIp == device.ip },
+                        // 通用 UPnP 渲染器（电视盒子）常关着，或它的控制端口没开 ——
+                        // 那属于**正常状态**，不是故障。用户原话：
+                        // 「通用 upnp 的 80 端口没开放，所以永远报错」。
+                        // 所以这类设备只在**离线**就够了，不再甩一条 ConnectException 上去。
+                        errorText = state.error
+                            ?.takeIf { state.errorIp == device.ip }
+                            ?.takeIf {
+                                state.cards[device.uuid]?.capabilities?.group !=
+                                    io.github.laozhudu.linkplay.protocol.dlna.DeviceGroup.OtherPlayer
+                            },
                     )
                 }
             }

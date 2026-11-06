@@ -90,7 +90,11 @@ internal fun ConsoleBody(vm: ConsoleViewModel) {
     val state by vm.state.collectAsState()
     val queue by QueueBus.state.collectAsState()
 
-    var tab by remember { mutableStateOf(Tab.Devices) }
+    // 默认进「内容」页（用户 2026-11-06 指定）。
+    //
+    // 打开 App 的第一件事通常是"我想听点什么"，不是"我先看看设备"。
+    // 设备页是**排查/管理**用的低频页，内容页才是入口。
+    var tab by remember { mutableStateOf(Tab.Content) }
     // 内容页搜索框 → 统一搜索页。带一个种子词过去，省掉重新输入。
     var searchSeed by remember { mutableStateOf("") }
     // 「接着听」点一行 = 再投一次，是个挂起调用
