@@ -87,6 +87,13 @@ internal fun DeviceRowApple(
      * 我们的目标原来是播放页里一个看不见的开关，用户只能靠听。
      */
     inUse: Boolean = false,
+    /**
+     * 这台设备自己的错误（连不上之类）。
+     *
+     * **错误跟着设备走**：一条属于 E900V22C 的 `ConnectException` 不该挂在页面顶部，
+     * 那会让用户以为整个 App 坏了，而且切到别的设备它还赖着不走。
+     */
+    errorText: String? = null,
 ) {
     val haptics = rememberAppHaptics()
     // 拖动中的临时值。null = 没在拖，显示真实音量
@@ -166,9 +173,13 @@ internal fun DeviceRowApple(
                 )
             }
             Text(
-                statusText,
+                errorText ?: statusText,
                 fontSize = 13.sp,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                color = if (errorText != null) {
+                    io.github.laozhudu.linkplay.console.ui.theme.StatusColors.error
+                } else {
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                },
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),

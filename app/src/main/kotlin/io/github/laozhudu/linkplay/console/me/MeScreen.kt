@@ -35,11 +35,14 @@ import io.github.laozhudu.linkplay.console.ui.theme.Spacing
  *
  * `docs/52` 铁律四 §4.4：每台设备的配置必须跟着那台设备走（点设备进详情），
  * 不许塞进这个全局页 —— 否则换个设备要重新找一遍。
+ *
+ * **用户 2026-11-06 明确指出**：「这个 tab 应该改为全局通用设置，里面的项目也应该是」。
+ * 原来这里有一条「音箱设置 · 当前选中那台的网络 / 名字 / 固件」—— 那是每台设备的，
+ * 已移除；要改某台的网络/名字/固件，去设备页点那台进详情。
  */
 @Composable
 internal fun MeScreen(
     onOpenDiagnostics: () -> Unit,
-    onOpenSettings: () -> Unit,
     onOpenProvisioning: () -> Unit,
     onOpenScripts: () -> Unit,
     modifier: Modifier = Modifier,
@@ -58,7 +61,7 @@ internal fun MeScreen(
             .verticalScroll(rememberScrollState())
             .padding(horizontal = Spacing.lg),
     ) {
-        LargeTitle(title = "我")
+        LargeTitle(title = "设置", subtitle = "这里的每一项都**对所有设备生效**")
         VSpace(Spacing.md)
 
         InsetGroup(title = "出问题了先看这里") {
@@ -84,12 +87,6 @@ internal fun MeScreen(
 
         VSpace(Spacing.md)
         InsetGroup(title = "配置") {
-            ListRow(
-                title = "音箱设置",
-                subtitle = "当前选中那台的网络 / 名字 / 固件",
-                showChevron = true,
-                onClick = onOpenSettings,
-            )
             ListRow(
                 title = "音源脚本",
                 subtitle = "洛雪脚本装了什么 / 哪支在用",

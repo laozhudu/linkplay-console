@@ -391,9 +391,6 @@ internal fun ConsoleBody(vm: ConsoleViewModel) {
                 // 「我」格 —— 诊断台是第一项（定稿第 5 屏）。
                 Tab.Me -> io.github.laozhudu.linkplay.console.me.MeScreen(
                     onOpenDiagnostics = { openDiagnostics(null) },
-                    onOpenSettings = {
-                        if (state.selectedIp == null) tab = Tab.Devices else sub = SubPage.Settings
-                    },
                     onOpenProvisioning = { sub = SubPage.Provisioning },
                     onOpenScripts = { sub = SubPage.Scripts },
                 )
