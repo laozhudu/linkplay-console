@@ -1,8 +1,9 @@
 package io.github.laozhudu.linkplay.console.playback
 
 import androidx.media3.session.MediaSession
-import kotlinx.coroutines.launch
 import androidx.media3.session.MediaSessionService
+import io.github.laozhudu.linkplay.console.diagnostics.AppDiagnostics
+import kotlinx.coroutines.launch
 
 /**
  * 播放的前台服务 —— **通知栏媒体控件、耳机键、锁屏曲名全靠它**。
@@ -38,7 +39,34 @@ class PlaybackService : MediaSessionService() {
             stopSelf()
             return
         }
-        session = MediaSession.Builder(this, player).build()
+        /*
+         * **构建 session 必须包住异常。**
+         *
+         * 真机崩溃（0.9.193 报告）：
+         *   `Unable to create service PlaybackService:
+         *    IllegalArgumentException: Empty playlist only allowed in STATE_IDLE or STATE_ENDED`
+         *
+         * 来自 media3：`MediaSession.Builder` 会去读 player 的当前项，
+         * 如果 player 处于 READY 但列表是空的（`clearMediaItems()` 之后、或
+         * 本地播放器还没装任何东西），ExoPlayer 就抛这个。
+         *
+         * 关键是：**这是在 Service.onCreate 里抛的，没人接就等于整个 App 崩**
+         * （Android 报 `Unable to create service`）。一个"通知栏控件建不起来"
+         * 的问题不该升级成闪退 —— 建不起来就不建，本地播放照样出声。
+         */
+        session = runCatching { MediaSession.Builder(this, player).build() }.getOrNull()
+        if (session == null) {
+            // 建不出会话：不要留一个点了没反应的控件，也不要崩
+            diagnostics("通知栏控件没建起来（player 状态不允许建会话），本次不显示媒体控件")
+            stopSelf()
+        }
+    }
+
+    /** 记一条到 logcat（`adb logcat -s LinkPlayDiag` 能读到），方便下次排"为什么没有控件"。 */
+    private fun diagnostics(msg: String) {
+        runCatching {
+            android.util.Log.i(AppDiagnostics.TAG, "[播放服务] $msg")
+        }
     }
 
     /**
@@ -53,7 +81,22 @@ class PlaybackService : MediaSessionService() {
     private fun currentPlayer(): androidx.media3.common.Player? {
         val router = PlaybackRouter.of(this)
         return when (router.output()) {
-            PlaybackOutput.Local -> router.local.raw()
+            PlaybackOutput.Local -> {
+                val p = router.local.raw()
+                /*
+                 * 只有"列表非空"或"还在 IDLE"时才交出 player。
+                 *
+                 * media3 的限制：`MediaSession.Builder` 会读 player 的当前项，
+                 * **处在 READY/PAUSED 但没有媒体的 player 会抛**
+                 * `IllegalArgumentException: Empty playlist only allowed in STATE_IDLE or STATE_ENDED`。
+                 *
+                 * 真机上就是这么崩的（0.9.193 报告）。这里提前判断，比事后 catch 更干净 ——
+                 * catch 只防崩，判断能保证不进那条路。
+                 */
+                if (p.mediaItemCount > 0 ||
+                    p.playbackState == androidx.media3.common.Player.STATE_IDLE
+                ) p else null
+            }
             // 投设备：没有播放页打开过就拿不到设备状态，此时不建会话 ——
             // 空会话会显示一个点了没反应的控件，比没有更糟
             is PlaybackOutput.Device -> buildUpnpPlayer()

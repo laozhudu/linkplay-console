@@ -2567,3 +2567,64 @@ python3 scripts/check-*.py     # 全 PASS
 | 播放列表 sheet 里的说明是否显示 | **未验** |
 | 占位列表点第 N 首是否真的让音箱跳过去 | **未验** |
 
+## 第五十六轮 · 修真机崩溃：PlaybackService 创建失败
+
+用户贴了 0.9.193 的诊断报告，第一条就是崩溃：
+
+```
+java.lang.RuntimeException: Unable to create service PlaybackService:
+  java.lang.IllegalArgumentException: Empty playlist only allowed in STATE_IDLE or STATE_ENDED
+线程：main
+```
+
+### 根因
+
+`MediaSession.Builder(this, player).build()` —— media3 在构建会话时会去读 player 的当前项。
+**处在 READY / PAUSED 但媒体列表为空的 player 会直接抛这个异常。**
+
+这是在 `Service.onCreate` 里抛的 → 没人接 → Android 报 `Unable to create service` → **整个 App 崩**。
+
+一个"通知栏控件建不起来"的小问题，被放大成了闪退。
+
+### 两层修法
+
+**① 前置判断（从根上不进那条路）**
+
+```kotlin
+PlaybackOutput.Local -> {
+    val p = router.local.raw()
+    if (p.mediaItemCount > 0 || p.playbackState == STATE_IDLE) p else null
+}
+```
+
+列表空且不在 IDLE → 不交出 player → 上层 `player == null` 分支走 `stopSelf()`，不建会话。
+
+**② 兜底 catch（防同类问题再升级成闪退）**
+
+```kotlin
+session = runCatching { MediaSession.Builder(this, player).build() }.getOrNull()
+if (session == null) { diagnostics("..."); stopSelf() }
+```
+
+建不出会话只影响通知栏控件，**本地播放照样出声**，不该闪退。
+
+失败路径按 `docs/52` 铁律一记一条（进 logcat `LinkPlayDiag`）。
+
+### 报告里另外两个值得注意的
+
+| 观察 | 说明 |
+|---|---|
+| 5 台设备里 4 台「未探测 / 全部未应答」 | 报告只跑了 2 秒，`probeSaved()` 还没跑完就出报告了 —— **不是设备离线** |
+| `[启动恢复] 来源=本地快照` 但 `[队列] 来源=设备上有 100 首…占位` | **两处不一致，说明恢复出的快照后来被轮询覆盖成了占位** —— 单独一轮查 |
+
+第二条是新发现的问题：既然本地有 100 首的快照（长度和设备报的 100 一致），
+`QueueRestore.plan` 的 `snapshotMatches` 就该成立、用真实歌名。现在却退化成占位，
+说明第二次调用时 `snapshot` 传的是 null。**下一轮处理。**
+
+### 验证
+
+```bash
+./gradlew :app:compileDebugKotlin / :app:testDebugUnitTest / :app:assembleDebug
+# 1081 用例 0 失败
+```
+
