@@ -174,9 +174,34 @@ class PlaybackViewModel(
      * → 重新建通道 → 重新从新设备读回状态与列表。
      */
     fun switchTo(ip: String, newLocation: String?, uuid: String?) {
-        // 同一台设备、且描述地址没有从 null 补成真实值 → 什么都不做
+        // 同一台设备、且描述地址没有从 null 补成真实值 → 不重连
         // （首次组合时 LaunchedEffect 一定会调到这里，不能白白重连一次）
-        if (ip == deviceIp && (newLocation == null || newLocation == location)) return
+        if (ip == deviceIp && (newLocation == null || newLocation == location)) {
+            /*
+             * **地址没变不等于什么都没变：uuid 必须补上。**
+             *
+             * 真机 bug（0.9.193 报告里的矛盾）：
+             *   `[启动恢复] 队列=100 首 · 来源=本地快照`
+             *   `[队列]     来源=设备上有 100 首…本机没存到这份曲目单`
+             *
+             * 同一份 100 首，一处说有快照、一处说没有。
+             *
+             * 根因就在这一行：VM 构造时 `selectedUuid` 往往还没就绪（启动瞬间是 null），
+             * 随后 `switchTo(相同 ip, null, 真实 uuid)` 走到这里 —— **ip 相同、location 是 null
+             * → 直接 return，uuid 永远没写进来**。
+             *
+             * 于是后面读快照时 `PlaybackKey.candidates(null, ip)` 只试 `ip:…` 这个键，
+             * 而推送队列时存的是 **uuid** 键 → 读不到 → 退化成「设备上的第 N 首」占位。
+             * 表现就是用户说的「播放列表没跟进」。
+             *
+             * 修法：地址没变时不重连，但**把 uuid 补上**。uuid 只影响"读哪份快照"，
+             * 不影响连接，所以补它不需要 bump generation / 重开轮询。
+             */
+            if (uuid != null && uuid != deviceUuid) {
+                deviceUuid = uuid
+            }
+            return
+        }
 
         generation.bump()
         pollJob?.cancel()

@@ -2628,3 +2628,75 @@ if (session == null) { diagnostics("..."); stopSelf() }
 # 1081 用例 0 失败
 ```
 
+## 第五十七轮 · 「播放列表没跟进」的真根因：switchTo 早退吞掉了 uuid
+
+`docs/91` 第五十六轮留下的矛盾，本轮定位并修掉。
+
+### 症状（真机报告）
+
+```
+[启动恢复]  队列=100 首 · 第 30 首 · 来源=本地快照
+[队列]      来源=设备上有 100 首正在播，但本机没存到这份曲目单（只显示顺序）
+```
+
+**同一份 100 首，一处说"有快照"，一处说"没存到"。**
+
+### 根因在 `PlaybackViewModel.switchTo` 的第一行
+
+```kotlin
+// 旧
+if (ip == deviceIp && (newLocation == null || newLocation == location)) return
+```
+
+启动时序：
+
+1. VM 构造时 `selectedUuid` 还没就绪（启动瞬间是 null）→ `deviceIp = .164`, `deviceUuid = null`
+2. `SessionRestore` 恢复完后 `LaunchedEffect` 调 `switchTo(相同 ip, null, 真实 uuid)`
+3. **ip 相同、location 是 null → 直接 return，uuid 永远没写进来**
+
+于是后面读快照时：
+
+```kotlin
+PlaybackKey.candidates(null, "192.168.99.164")  →  ["ip:192.168.99.164"]
+```
+
+而推送队列时存的是 **uuid** 键 → **读不到快照** → `QueueRestore.plan` 退化成
+「设备上的第 N 首」占位。
+
+**这就是「播放列表没跟进」的真身**：数据一直都在，只是读的键算错了。
+
+### 修法
+
+地址没变时**不重连，但补 uuid**：
+
+```kotlin
+if (ip == deviceIp && (newLocation == null || newLocation == location)) {
+    if (uuid != null && uuid != deviceUuid) deviceUuid = uuid   // ← 补上
+    return
+}
+```
+
+为什么补 uuid 不用 bump generation / 重开轮询：**uuid 只影响"读哪份快照"，
+不影响连接本身**。补完之后下一轮轮询（每秒一次）就会用正确的键读到快照，
+列表自动从占位变回真实歌名。
+
+### 这一轮的教训
+
+「提前 return」是最容易吞掉附加逻辑的写法。原来那句注释写的是"什么都不做"，
+但**实际上地址相同不代表什么都相同** —— 这次吞掉的是 uuid，
+上次（`docs/91` 第四十轮）吞掉的是 5 个字段。
+
+### 验证
+
+```bash
+./gradlew :app:testDebugUnitTest / :app:assembleDebug
+# 1081 用例 0 失败
+```
+
+### 没验的
+
+| 项 | 状态 |
+|---|---|
+| 真机：重开 App 后播放列表是否显示真实歌名而不是"设备上的第 N 首" | **未验** |
+| 真机：`[队列]` 段的「来源」是否变成「设备列表 N 首 · 与本地快照一致」 | **未验** |
+
