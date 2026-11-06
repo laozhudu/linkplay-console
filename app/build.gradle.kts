@@ -149,6 +149,8 @@ dependencies {
     implementation(libs.androidx.media3.common)
     // MediaSession：通知栏/耳机键/锁屏都靠它，docs/83 清单第 1 项
     implementation(libs.androidx.media3.session)
+    // B 站音频是 fMP4，DOSS 播不了，必须本地 transmux（docs/85 §2.3 真机实测）
+    implementation(libs.androidx.media3.transformer)
 
     // 封面加载（Apache-2.0）：DLNA 的 albumArtURI 是普通 http 图，Coil 一句 AsyncImage 就够
     implementation(libs.coil.compose)

@@ -2953,3 +2953,54 @@ parseBvid: 空串 / 中文 / b23 短链          → null（不瞎猜）
 `ffmpeg -c copy` 重封装后投 doss1，`totlen=212309`、`curpos` 稳定递增）。
 但那验证是**手工用 ffmpeg 做的**，不是代码。本轮从零把取流写成代码。
 
+## 第六十二轮 · B 站 fMP4 remux（第二块地基）
+
+用户：「继续」（做 remux）。
+
+### 加了依赖
+
+`media3-transformer:1.5.1`（Apache-2.0，与现有 media3 同版本）。
+**先验证能拉到再动代码** —— 用 `:app:dependencies` 确认 `1.5.1` 进图、无冲突，
+因为 compose-bom 那次就是没先验证撞了墙。
+
+### 新增 `app/.../bili/Fmp4Remuxer.kt`
+
+| 步 | 做什么 | 为什么 |
+|---|---|---|
+| 1 | 下载直链到 `cacheDir/bili_remux/{key}.fmp4` | B 站直链有效期 120 分钟且是分片流，直接喂 Transformer 任何一次读超时都会让整个转换失败，且失败点难归因 |
+| 2 | `Transformer` transmux → `.mp4` | 音轨格式不变时官方自动走 transmux（copy samples，不重编码） |
+| 3 | 删掉中间 `.fmp4` | 每首 5MB 上下，留着只占空间 |
+
+几个具体决定：
+
+- **已转好的直接复用**：同一首反复点不重复下载；直链过期也不影响已转好的文件
+- **`suspendCancellableCoroutine` 包回调 API**：调用方能顺序写「取流 → 下载 → 转换 → 投送」
+- **`Transformer` 必须在主线程驱动**（内部要 Looper），所以 `withContext(Dispatchers.Main)`
+- **取消时 `transformer.cancel()`**：用户切走不该留一个后台转换在跑
+- **`clear()`** 给设置页留了「清空 B 站缓存」
+
+### 编译验证
+
+```bash
+./gradlew :app:compileDebugKotlin   # 通过（2m35s，首次拉依赖）
+./gradlew :app:testDebugUnitTest / :app:assembleDebug   # 1081 用例 0 失败
+```
+
+### 还差最后一环
+
+| 项 | 内容 |
+|---|---|
+| **本地文件服务** | `LocalMediaServer.publishText` 只支持**内存文本**；5MB 音频要加 `publishFile`（流式读），不能整份塞内存 |
+| **内容页接线** | B 站那行从「未接入」变成「粘 BV 号 → 取流 → remux → 投」 |
+
+### 进度小结
+
+```
+BiliClient   取流（认 BV 号 / 取 cid / 选最大带宽音轨）   ✅ 622 用例
+Fmp4Remuxer  下载 + transmux + 复用                    ✅ 编译通过
+文件服务     把 .mp4 提供给音箱                          ⬜
+界面接线     粘 BV 号就能播                              ⬜
+```
+
+前两块（最容易写错、最需要测试的部分）已经落地；剩下的两块是接线，风险低但必须一次打通才谈得上"能用"。
+
