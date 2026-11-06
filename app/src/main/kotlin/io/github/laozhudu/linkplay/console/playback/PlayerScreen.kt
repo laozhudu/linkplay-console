@@ -1101,6 +1101,39 @@ private fun PlaylistSheet(
                 TextButton(onClick = onClose) { Text("完成") }
             }
 
+            // 这份列表是哪来的 —— **必须说出来**。
+            //
+            // 设备侧队列时，LinkPlay **不返回曲目清单**（协议里只有 `setPlayerCmd:playlist`
+            // 没有读取命令），所以我们只能造「设备上的第 N 首」占位。
+            // 不说清楚的话，用户看到 100 行同名占位会以为 App 坏了 —— 这属于
+            // 「UI 有了但看起来没用」，比不画更糟。
+            queue.sourceNote?.takeIf { it.isNotBlank() }?.let { note ->
+                Text(
+                    note,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (queue.deviceOwned) StatusColors.ok else OnDarkPalette.muted,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = Spacing.xs),
+                )
+            }
+            // 占位列表再补一句"为什么只有序号"
+            if (queue.items.isNotEmpty() &&
+                io.github.laozhudu.linkplay.protocol.playback.QueueRestore.isPlaceholder(queue.items.first())
+            ) {
+                Text(
+                    "音箱自己握着这份列表，但它不告诉我们每首是什么。" +
+                        "想看到歌名，从 NAS / 曲库 / 洛雪那边自己投一次 —— 那样列表就是我们的。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = OnDarkPalette.muted,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = Spacing.xs),
+                )
+            }
+
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
