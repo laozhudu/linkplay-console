@@ -191,7 +191,9 @@ fun PlayerScreen(
     val voice = remember { VoiceController(appContext) }
     // 语音入口也走唯一执行点（S1.3）：识别出来的意图和界面按钮按下去必须是同一条路，
     // 否则迟早出现"按按钮能切歌、说话切不了"这种不一致。
-    val voiceScope = rememberCoroutineScope()
+    // 所有界面动作共用的作用域。语音、按钮、切歌都走它 ——
+    // 名字从 voiceScope 改过来，因为它现在不只服务语音。
+    val actionScope = rememberCoroutineScope()
     val dispatcher = remember { PlaybackDispatcher(appContext) }
     // 页面销毁时必须取消会话，否则 SpeechRecognizer 会继续占着麦克风
     DisposableEffect(Unit) { onDispose { voice.cancel() } }
@@ -206,7 +208,7 @@ fun PlayerScreen(
                 // 只记最后那句提示的话，"没匹配到意图"和"执行失败"就分不开了
                 VoiceSourceStatus.heard(text)
                 val intent = IntentRouter.route(text)
-                voiceScope.launch {
+                actionScope.launch {
                     val note = handleVoiceIntent(intent, dispatcher)
                     VoiceSourceStatus.routed(
                         intent = voiceIntentName(intent),
@@ -254,6 +256,10 @@ fun PlayerScreen(
     val routerRef = remember { PlaybackRouter.of(appContext) }
     val localUi by routerRef.localState.collectAsState()
     val isLocalOutput = routerRef.output() is PlaybackOutput.Local
+    // 能力位：这台的设备支不支持切歌（电视盒子不支持）。每次重组算一次，很便宜（读缓存）。
+    val canPrev = dispatcher.can(PlayIntent.Previous)
+    val canNext = dispatcher.can(PlayIntent.Next)
+
     val duration = if (isLocalOutput) {
         localUi.durationMs / 1000L
     } else {
@@ -607,7 +613,10 @@ fun PlayerScreen(
 
             // 音量（拖动跟手）
             Row(verticalAlignment = Alignment.CenterVertically) {
-                CircleIcon(onClick = vm::toggleMute, size = 32.dp) {
+                CircleIcon(
+                    onClick = { actionScope.launch { dispatcher.dispatch(PlayIntent.Mute) } },
+                    size = 32.dp,
+                ) {
                     VolumeGlyph(
                         color = if (state.mute) OnDarkPalette.muted else OnDarkPalette.text,
                         muted = state.mute,
@@ -676,31 +685,70 @@ fun PlayerScreen(
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                CircleIcon(onClick = vm::cycleLoopMode, size = 44.dp) {
+                CircleIcon(
+                    // 循环模式只有设备侧有（本机播放器的 repeatMode 不在本轮范围）
+                    onClick = { actionScope.launch { dispatcher.dispatch(PlayIntent.LoopNext) } },
+                    size = 44.dp,
+                ) {
                     LoopGlyph(
                         color = if (state.loopMode == LoopMode.OFF) OnDarkPalette.muted else palette.accent,
                         mode = state.loopMode.wire,
                         modifier = Modifier.size(GlyphSize.medium),
                     )
                 }
-                CircleIcon(onClick = vm::previous, size = 48.dp) {
-                    SkipGlyph(OnDarkPalette.text, forward = false, modifier = Modifier.size(28.dp))
+                // 能力位决定这个按钮能不能用（docs/86 不变量 I3）。
+                //
+                // 通用 DLNA 渲染器（电视盒子）没有设备侧队列 → supportsNextPrev = false。
+                // 以前照样画出来，按下去毫无反应；现在**灰掉并给一句原因**，
+                // 而不是静默失败（悬浮窗踩过那个坑）。
+                CircleIcon(
+                    onClick = {
+                        if (canPrev) {
+                            actionScope.launch { dispatcher.dispatch(PlayIntent.Previous) }
+                        } else {
+                            voiceNote = NOT_SUPPORTED_PREV
+                        }
+                    },
+                    size = 48.dp,
+                ) {
+                    SkipGlyph(
+                        if (canPrev) OnDarkPalette.text else OnDarkPalette.text.copy(alpha = 0.28f),
+                        forward = false,
+                        modifier = Modifier.size(28.dp),
+                    )
                 }
                 Box(
                     modifier = Modifier
                         .size(68.dp)
                         .clip(CircleShape)
                         .background(OnDarkPalette.text)
-                        .clickable { if (playing) vm.pause() else vm.play() },
+                        // 走唯一执行点：TogglePlay 内部按设备回报的状态决定播还是停
+                        .clickable { actionScope.launch { dispatcher.dispatch(PlayIntent.TogglePlay) } },
                     contentAlignment = Alignment.Center,
                 ) {
                     if (playing) PauseGlyph(palette.top, Modifier.size(28.dp))
                     else PlayGlyph(palette.top, Modifier.size(28.dp))
                 }
-                CircleIcon(onClick = vm::next, size = 48.dp) {
-                    SkipGlyph(OnDarkPalette.text, forward = true, modifier = Modifier.size(28.dp))
+                CircleIcon(
+                    onClick = {
+                        if (canNext) {
+                            actionScope.launch { dispatcher.dispatch(PlayIntent.Next) }
+                        } else {
+                            voiceNote = NOT_SUPPORTED_NEXT
+                        }
+                    },
+                    size = 48.dp,
+                ) {
+                    SkipGlyph(
+                        if (canNext) OnDarkPalette.text else OnDarkPalette.text.copy(alpha = 0.28f),
+                        forward = true,
+                        modifier = Modifier.size(28.dp),
+                    )
                 }
-                CircleIcon(onClick = vm::stop, size = 44.dp) {
+                CircleIcon(
+                    onClick = { actionScope.launch { dispatcher.dispatch(PlayIntent.Stop) } },
+                    size = 44.dp,
+                ) {
                     Text("■", style = MaterialTheme.typography.titleSmall, color = OnDarkPalette.muted)
                 }
             }
@@ -996,3 +1044,7 @@ private fun OutputSwitchRow() {
         }
     }
 }
+
+/** 设备缺能力时的提示。**说清是设备做不到**，不是"操作失败"。 */
+private const val NOT_SUPPORTED_NEXT = "这台设备没有「下一首」（它不持有播放列表）"
+private const val NOT_SUPPORTED_PREV = "这台设备没有「上一首」（它不持有播放列表）"
