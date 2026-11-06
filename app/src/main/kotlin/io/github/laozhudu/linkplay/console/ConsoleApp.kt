@@ -388,6 +388,38 @@ internal fun ConsoleBody(vm: ConsoleViewModel) {
                     },
                     // 搜索结果直接播（用户要求"能直接点"）。
                     // 三类源的播放方式不同，收敛到这里 —— 界面不判断源。
+                    // B 站：粘 BV 号 → 取流 → remux → 本机 HTTP → 投（docs/85 的完整链路）
+                    onPlayBili = { input ->
+                        replayScope.launch {
+                            runCatching {
+                                val client = io.github.laozhudu.linkplay.protocol.bili.BiliClient(
+                                    fetchJson = { url ->
+                                        io.github.laozhudu.linkplay.console.bili.httpGetText(url)
+                                    },
+                                )
+                                val bvid = client.parseBvid(input) ?: error("认不出 BV 号")
+                                val stream = client.fetchStream(bvid)
+                                val file = io.github.laozhudu.linkplay.console.bili.Fmp4Remuxer
+                                    .fetchAndRemux(appContext, stream.audioUrl, bvid)
+                                io.github.laozhudu.linkplay.console.library.LocalMediaRegistry
+                                    .ensureServer(appContext, io.github.laozhudu.linkplay.console.library.LocalMediaRegistry.tracks)
+                                val server = io.github.laozhudu.linkplay.console.library.LocalMediaRegistry
+                                    .mediaServer() ?: error("本机服务没起来")
+                                val path = server.publishFile("/bili/$bvid.mp4", file)
+                                val base = io.github.laozhudu.linkplay.console.library.LocalMediaRegistry
+                                    .baseUrl() ?: error("拿不到本机局域网地址")
+                                val ip = state.selectedIp ?: error("还没选设备")
+                                val dev = state.saved.firstOrNull { it.ip == ip }
+                                io.github.laozhudu.linkplay.console.playback.PlaybackRouter
+                                    .of(appContext)
+                                    .playOne("$base$path", stream.title, ip, dev?.location, dev?.uuid)
+                            }.onFailure { e ->
+                                android.widget.Toast
+                                    .makeText(appContext, "B 站：${e.message}", android.widget.Toast.LENGTH_LONG)
+                                    .show()
+                            }
+                        }
+                    },
                     onPlayHit = { hit ->
                         replayScope.launch {
                             val ip = state.selectedIp

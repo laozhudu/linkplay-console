@@ -48,6 +48,16 @@ class LocalMediaServer(
      */
     private val virtuals = java.util.concurrent.ConcurrentHashMap<String, VirtualFile>()
 
+    /**
+     * 直接对外提供**磁盘上的文件**（路径 → 文件）。
+     *
+     * 和 [virtuals] 的区别：那一个把内容整个放内存（适合几百字节的 m3u），
+     * 而 B 站转出来的音频有 5MB 上下 —— 整份塞内存既浪费又可能 OOM。
+     * 这里只记路径，响应时走下面那条**带 Range 的文件流式分支**，
+     * 顺带白拿了断点续传能力（音箱请求时会带 `Range`）。
+     */
+    private val extraFiles = java.util.concurrent.ConcurrentHashMap<String, java.io.File>()
+
     private data class VirtualFile(val body: ByteArray, val contentType: String)
 
     private var serverSocket: ServerSocket? = null
@@ -82,7 +92,25 @@ class LocalMediaServer(
         return normalized
     }
 
+    /**
+     * 登记一个磁盘文件，返回**相对路径**（调用方自己拼 [baseUrl]）。
+     *
+     * ⚠️ **`path` 的后缀决定 `Content-Type`**（`.mp4` → `audio/mp4`），
+     * 所以对外的路径要带上正确扩展名，哪怕真实文件名不是那样。
+     */
+    fun publishFile(path: String, file: java.io.File): String {
+        val normalized = if (path.startsWith("/")) path else "/$path"
+        require(file.isFile) { "publishFile: 不是文件 ${file.absolutePath}" }
+        extraFiles[normalized] = file
+        return normalized
+    }
+
+    fun unpublishFile(path: String) {
+        extraFiles.remove(if (path.startsWith("/")) path else "/$path")
+    }
+
     fun unpublish(path: String) {
+        extraFiles.remove(if (path.startsWith("/")) path else "/$path")
         virtuals.remove(if (path.startsWith("/")) path else "/$path")
     }
 
@@ -157,7 +185,7 @@ class LocalMediaServer(
                 return
             }
 
-            val file = resolver.resolve(path)
+            val file = extraFiles[path] ?: resolver.resolve(path)
             if (file == null || !file.isFile) {
                 return respond(output, 404, "Not Found", null)
             }

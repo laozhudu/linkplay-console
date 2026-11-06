@@ -3004,3 +3004,83 @@ Fmp4Remuxer  下载 + transmux + 复用                    ✅ 编译通过
 
 前两块（最容易写错、最需要测试的部分）已经落地；剩下的两块是接线，风险低但必须一次打通才谈得上"能用"。
 
+## 第六十三轮 · B 站链路打通（第三块：文件服务 + 界面接线）
+
+用户：「继续」。这是 `docs/85` 的最后两步。
+
+### ① `LocalMediaServer.publishFile`
+
+原来的 `publishText` 把内容**整个放内存**（适合几百字节的 m3u）。
+B 站转出来的音频有 5MB 上下，整份塞内存既浪费也可能 OOM。
+
+新增：
+
+```kotlin
+fun publishFile(path: String, file: File): String
+```
+
+只记路径，响应时**复用下面那条带 Range 的文件流式分支** —— 顺带白拿了断点续传
+（音箱请求时会带 `Range`，这条分支本来就支持）。
+
+一行改动把它接进去：
+
+```kotlin
+val file = extraFiles[path] ?: resolver.resolve(path)
+```
+
+⚠️ `path` 的后缀决定 `Content-Type`（`.mp4` → `audio/mp4`），所以对外路径要带正确扩展名。
+
+### ② 内容页 B 站：从「未接入」变成「粘 BV 号」
+
+```
+全部来源
+  ...
+  哔哩哔哩    粘 BV 号播放   ›
+```
+
+点开是输入框，说明里直接写明限制：
+
+> B 站的搜索接口有风控，搜不了关键词 —— 只能按 BV 号取。
+> 例如 BV1GJ411x7h7，或视频页链接。
+> 音频是 fMP4 分片，音箱播不了，会先在手机上转一遍（几秒）。
+
+### ③ 完整链路（`ConsoleApp` 里 30 行）
+
+```
+粘 BV 号
+  → BiliClient.parseBvid        认出 BV
+  → BiliClient.fetchStream      取 cid + 选最大带宽音轨
+  → Fmp4Remuxer.fetchAndRemux   下载 → transmux → .mp4（已转好的直接复用）
+  → LocalMediaRegistry.ensureServer + publishFile
+  
+  → http://<手机IP>:<port>/bili/<bvid>.mp4
+  → PlaybackRouter.playOne      投给当前目标
+```
+
+失败一律 `Toast` 说原因（不静默）。
+
+### 一个刻意的设计：内容页不碰网络
+
+`ContentScreen` 只负责"收集用户输入 + 调 `onPlayBili(input)`"。
+取流、下载、转换、发布全在 `ConsoleApp` 那一层 —— 和"输出目标分派"同一个原则：
+**界面不判断流程，只表达意图。**
+
+### 验证
+
+```bash
+./gradlew :app:compileDebugKotlin / :app:testDebugUnitTest / :app:assembleDebug
+# 1081 用例 0 失败，文档引用 98 篇通过
+```
+
+### 没验的（诚实说）
+
+| 项 | 状态 |
+|---|---|
+| **真机：粘一个真 BV 号，能不能真的出声** | **未验** |
+| Transformer transmux 在真机上的耗时 | **未验**（文档说 0.5 秒级，那是 ffmpeg；Media3 可能不同） |
+| 音箱能不能播转出来的 mp4 | **未验**（`docs/85` 验的是 ffmpeg 产物，不是 Media3 产物） |
+| b23 短链 | **不支持**（`parseBvid` 只认 BV 号，短链要展开，需要额外一次 HTTP） |
+
+第 3 条是真实风险：ffmpeg 和 Media3 都是 transmux，但输出封装细节可能有差异。
+如果真机播不了，第一件事是把转出来的文件拉下来 `ffprobe` 看。
+

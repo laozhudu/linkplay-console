@@ -9,6 +9,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
@@ -80,6 +83,8 @@ internal fun ContentScreen(
      * 内容页只负责"把结果列出来、点了调这个"。
      */
     onPlayHit: (io.github.laozhudu.linkplay.console.search.SearchHit) -> Unit,
+    /** 粘了 BV 号 / 链接之后交给外面去取流 + remux + 投（内容页不碰网络）。 */
+    onPlayBili: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     // 进页面刷一次：数量会随「刚导入的歌 / 刚连的 NAS / 刚建的歌单」变化，
@@ -88,6 +93,10 @@ internal fun ContentScreen(
 
     var keyword by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf(SourceFilter.All) }
+
+    // B 站：输入 BV 号 / 链接（docs/85 §2.4：搜索接口有风控，搜不了关键词）
+    var showBili by remember { mutableStateOf(false) }
+    var biliInput by remember { mutableStateOf("") }
 
     // 当前播放目标（`docs/96` 模型 A）。内容页必须显示它 ——
     // 这里是"我要放点什么"的入口，如果不写清"会放到哪"，用户点完才发现投错了设备。
@@ -109,11 +118,10 @@ internal fun ContentScreen(
         )
     val searchState by searchVm.state.collectAsState()
     val searching = searchState.keyword.isNotBlank()
-    var biliHint by remember { mutableStateOf(false) }
 
     // 回调**必须**从外面传进来 —— 上一版这里先写成 onClick = {}，
     // 编译能过、界面能看，但点了什么都不会发生。那正是本项目最忌的失败模式。
-    val rows = buildRows(state, onOpenLocal, onOpenNas, onOpenPlaylists, onOpenRecent, onOpenOnline, onOpenRadio, onOpenScripts) { biliHint = true }
+    val rows = buildRows(state, onOpenLocal, onOpenNas, onOpenPlaylists, onOpenRecent, onOpenOnline, onOpenRadio, onOpenScripts) { showBili = true }
     val shown = rows.filter { filter.accepts(it.source) }
 
     Column(
@@ -290,19 +298,45 @@ internal fun ContentScreen(
         VSpace(Spacing.xl)
     }
 
-    if (biliHint) {
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { biliHint = false },
-            title = { Text("还没接") },
+    if (showBili) {
+        AlertDialog(
+            onDismissRequest = { showBili = false },
+            title = { Text("粘 B 站 BV 号或链接") },
             text = {
-                Text(
-                    "哔哩哔哩只做了筛选位，取流那套（解析音视频分轨 + 拿直链）还没写。\n" +
-                        "定稿图里留了位置，是因为它确实会做 —— 但现在点进去是空的，不如直说。",
-                )
+                Column {
+                    Text(
+                        "B 站的搜索接口有风控，搜不了关键词 —— 只能按 BV 号取。\n" +
+                            "例如 BV1GJ411x7h7，或视频页链接。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    VSpace(Spacing.sm)
+                    OutlinedTextField(
+                        value = biliInput,
+                        onValueChange = { biliInput = it },
+                        singleLine = true,
+                        placeholder = { Text("BV1GJ411x7h7") },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        "音频是 fMP4 分片，音箱播不了，会先在手机上转一遍（几秒）。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             },
             confirmButton = {
-                androidx.compose.material3.TextButton(onClick = { biliHint = false }) { Text("知道了") }
+                TextButton(
+                    onClick = {
+                        val v = biliInput.trim()
+                        if (v.isNotEmpty()) {
+                            showBili = false
+                            onPlayBili(v)
+                        }
+                    },
+                ) { Text("播放") }
             },
+            dismissButton = { TextButton(onClick = { showBili = false }) { Text("取消") } },
         )
     }
 }
@@ -413,7 +447,7 @@ private fun buildRows(
         ),
         ContentRow(
             title = "哔哩哔哩",
-            subtitle = "未接入",
+            subtitle = "粘 BV 号播放",
             group = ContentGroup.Source,
             source = SourceFilter.Bili,
             onClick = onOpenBili,
