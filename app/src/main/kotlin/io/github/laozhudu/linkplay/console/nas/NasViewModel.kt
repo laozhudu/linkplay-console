@@ -61,7 +61,6 @@ data class NasUiState(
     val playing: Boolean = false,
     val nowPlaying: String? = null,
     val playedCount: Int = 0,
-    val loopMode: Int = ClientSideQueue.LOOP_ALL,
     val error: String? = null,
     val log: List<String> = emptyList(),
     /** 控制面（UPnP 49152）掉线。设备本身在线，只是控制通道没了，提示用户重启音箱。 */
@@ -159,7 +158,14 @@ class NasViewModel(
         NasServerRef(host, port, friendlyName)
     }.getOrNull()
 
-    private fun savePlayback(items: List<QueueItem>, index: Int, loopMode: Int) {
+    /**
+     * 存会话。
+     *
+     * **`loopMode` 参数已去掉**（第三十八轮）：下发已收口到 `startQueueOnDevice`，
+     * 它内部固定 `LOOP_ALL`；这个参数只有"存进会话"一个用处，
+     * 而恢复时也从没被读回来 —— 是个只写不读的值。
+     */
+    private fun savePlayback(items: List<QueueItem>, index: Int) {
         runCatching {
             sessions.savePlayback(
                 memoryKey,
@@ -168,7 +174,7 @@ class NasViewModel(
                     deviceIp = rendererIp,
                     items = items,
                     index = index.coerceIn(0, (items.size - 1).coerceAtLeast(0)),
-                    loopMode = loopMode,
+                    loopMode = ClientSideQueue.LOOP_ALL,
                 ),
             )
         }
@@ -343,7 +349,6 @@ class NasViewModel(
         }
     }
 
-    fun setLoopMode(mode: Int) = _state.update { it.copy(loopMode = mode) }
 
     /** 开始把队列推给音箱。 */
     fun startQueue() {

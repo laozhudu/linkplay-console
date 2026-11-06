@@ -1410,3 +1410,58 @@ NAS 是唯一需要逐层下钻的源。塞进接口等于逼本地/电台/洛�
 - 本机播放时 `can(Next)` 恒为 true —— 本地播放器目前只播单首，那个"下一首"
   点了会走到 `ExoPlayer.seekToNextMediaItem()`，但队列里没有下一首。**已知限制，未改。**
 
+## 第三十八轮 · 循环模式「收一份」= **删掉两个假入口**
+
+### 查出来的真相（比"三份存储"严重）
+
+我原以为问题是"三份存储、改一处另两处不知道"。查完代码发现是**两个按钮点了根本没用**：
+
+| 位置 | 状态 | 实际行为 |
+|---|---|---|
+| 播放页 | `LoopMode`（设备真实状态） | ✅ 真发 `setPlayerCmd:loopmode:<n>` |
+| NAS 页 | `Int` = `ClientSideQueue.LOOP_*` | ❌ **只改本地 state**，下发时被 `startQueueOnDevice` 内部的 `LOOP_ALL` 覆盖 |
+| 队列页 | `Int` = `QueueLoopMode.*` | ❌ **没有任何读取点**（纯死状态） |
+
+**用户点 NAS 页的循环按钮：界面文字变了、设备没变。**
+
+这是「命令回 OK ≠ 功能生效」的一个更糟的变体 —— **连命令都没发**。
+
+### 三套编号其实是**刻意不同**的（`docs/01` §312/§366 有实测记录）
+
+| | httpapi `setPlayerCmd:loopmode` | 队列服务 `SetQueueLoopMode` |
+|---|---|---|
+| 不循环 | 0 | 0 |
+| 单曲 | 1 | 1 |
+| 列表 | **-1** | **2** |
+| 随机 | **2** | **3** |
+
+`LoopMode` 枚举的 `wire` 与 httpapi 对齐 ✓，`QueueLoopMode` 与队列服务对齐 ✓。
+**它们不是同一件事，不该合并**（`docs/65` 那条"名字一样 ≠ 重复"）。
+
+### 所以这轮"收一份"的正确做法是**删**
+
+| 文件 | 动作 |
+|---|---|
+| `NasScreen.kt` | 删循环按钮 + `nextLoop` / `loopLabel` 两个死函数 |
+| `NasViewModel.kt` | 删 `loopMode` state + `setLoopMode`；`savePlayback` 去掉 `loopMode` 参数（它只写不读） |
+| `QueueScreen.kt` | 删「循环模式」整块 + `nextLoop` |
+| `QueueViewModel.kt` | 删 `loopMode` state + `setLoopMode` |
+
+### 用户能感觉到的变化
+
+**NAS 页和队列页的循环按钮消失了。**
+
+这不是功能减少 —— 那个按钮本来就没用。循环模式只能在播放页改，那里是真的。
+
+### 验证
+
+```bash
+./gradlew :app:assembleDebug / :app:testDebugUnitTest   # 全量 1073 用例 0 失败
+grep setLoopMode / state.loopMode                       # 只剩播放页的设备状态
+```
+
+### 教训
+
+**"三份存储"不一定是"三份都在生效"** —— 可能两份是死的。
+先查清哪份真在用，再决定是合并还是删。这次的答案是**删**。
+

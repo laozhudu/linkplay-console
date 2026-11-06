@@ -294,10 +294,9 @@ fun NasScreen(
                             else "${state.picked.size} 首" + (state.nowPlaying?.let { " · 正在播：$it" } ?: ""),
                             modifier = Modifier.weight(1f),
                         )
-                        // 循环模式：一个按钮循环切换，不再并排三个抢空间
-                        OutlinedButton(onClick = { vm.setLoopMode(nextLoop(state.loopMode)) }) {
-                            Text(loopLabel(state.loopMode))
-                        }
+                        // 循环模式按钮已删（第三十八轮）：
+                        // 它只改本地 state，下发时被 `startQueueOnDevice` 内部的 LOOP_ALL 覆盖 ——
+                        // 点了界面变了、设备没变。假的入口比没有更糟。
                     }
                 }
 
@@ -489,14 +488,4 @@ private fun EntryRow(
     }
 }
 
-private fun nextLoop(current: Int): Int = when (current) {
-    ClientSideQueue.LOOP_ALL -> ClientSideQueue.LOOP_SINGLE
-    ClientSideQueue.LOOP_SINGLE -> ClientSideQueue.LOOP_NONE
-    else -> ClientSideQueue.LOOP_ALL
-}
 
-private fun loopLabel(mode: Int): String = when (mode) {
-    ClientSideQueue.LOOP_ALL -> "列表循环"
-    ClientSideQueue.LOOP_SINGLE -> "单曲循环"
-    else -> "顺序播放"
-}

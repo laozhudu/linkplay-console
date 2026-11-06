@@ -31,7 +31,6 @@ data class QueueUiState(
     val deviceName: String? = null,
     /** 设备是否声明了私有 PlayQueue 服务；没有就只能单曲投流。 */
     val queueSupported: Boolean? = null,
-    val loopMode: Int = QueueLoopMode.ALL,
     val busy: Boolean = false,
     val pushedCount: Int = 0,
     val error: String? = null,
@@ -136,7 +135,6 @@ class QueueViewModel(
 
     fun selectAll() = _state.update { it.copy(selected = it.tracks.map { t -> t.id }.toSet()) }
     fun clearSelection() = _state.update { it.copy(selected = emptySet()) }
-    fun setLoopMode(mode: Int) = _state.update { it.copy(loopMode = mode) }
 
     /**
      * 推送当前勾选的列表。

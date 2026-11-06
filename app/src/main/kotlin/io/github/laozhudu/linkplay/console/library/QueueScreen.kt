@@ -186,19 +186,9 @@ fun QueueScreen(
                     )
                 }
 
-                item {
-                    VSpace(Spacing.sm)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        SectionTitle(
-                            "循环模式",
-                            QueueLoopMode.label(state.loopMode),
-                            modifier = Modifier.weight(1f),
-                        )
-                        OutlinedButton(onClick = { vm.setLoopMode(nextLoop(state.loopMode)) }) {
-                            Text(QueueLoopMode.label(state.loopMode))
-                        }
-                    }
-                }
+                // 「循环模式」整块已删（第三十八轮）：`QueueViewModel.loopMode`
+                // **没有任何读取点** —— 设了谁都读不到，纯死状态。
+                // 循环模式只能在播放页改（那里真的发 setPlayerCmd:loopmode）。
 
                 if (state.pushedCount > 0) {
                     item {
@@ -331,12 +321,6 @@ private fun TrackRow(
     }
 }
 
-private fun nextLoop(current: Int): Int = when (current) {
-    QueueLoopMode.ALL -> QueueLoopMode.SINGLE
-    QueueLoopMode.SINGLE -> QueueLoopMode.SHUFFLE
-    QueueLoopMode.SHUFFLE -> QueueLoopMode.NONE
-    else -> QueueLoopMode.ALL
-}
 
 private fun formatDuration(seconds: Long): String {
     val m = seconds / 60
