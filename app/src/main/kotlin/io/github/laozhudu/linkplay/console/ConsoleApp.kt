@@ -284,6 +284,8 @@ internal fun ConsoleBody(vm: ConsoleViewModel) {
                         deviceIp = state.selectedIp.orEmpty(),
                         deviceLocation = state.selectedLocation,
                         deviceUuid = state.selectedUuid,
+                        // 投送状态行要显示 `doss1` 而不是 IP（定稿就是这么写的）
+                        deviceName = state.saved.firstOrNull { it.ip == state.selectedIp }?.name,
                         // 不传 onBack：播放页是一级页面，靠底部导航切换
                         onOpenSettings = { sub = SubPage.Settings },
                         onOpenNas = { sub = SubPage.Nas },
