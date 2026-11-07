@@ -99,24 +99,72 @@ class SsdpDiscovery(
      */
     suspend fun discoverMediaRenderers(): List<DiscoveredDevice> = withContext(Dispatchers.IO) {
         discoverWithTargets(listOf(SsdpMessages.ST_MEDIA_RENDERER, SsdpMessages.ST_WIIMU_PLAY_QUEUE, "ssdp:all"))
-            .filter { it.location != null }
             .mapNotNull { device ->
-                val location = device.location ?: return@mapNotNull null
+                val location = device.location
+                if (location.isNullOrBlank()) return@mapNotNull null
                 val desc = runCatching {
                     io.github.laozhudu.linkplay.protocol.upnp.UpnpRendererClient.describe(location)
-                }.getOrNull() ?: return@mapNotNull null
+                }.getOrNull()
+                /*
+                 * **拉不到描述也要把设备列出来**。
+                 *
+                 * 原来这里 `?: return@mapNotNull null` —— 一次 description 超时就等于
+                 * "这台设备不存在"。而局域网里 DMR 的描述拉取失败是常见现象
+                 * （控制端口没开、固件慢、防火墙），设备本身照样能投流。
+                 *
+                 * 用户看到的是"通用 upnp 怎么没有扫出来"，而真相是**扫到了又被自己扔了**。
+                 *
+                 * 现在：拉不到就 `profile = null`（界面只显示 IP，不猜它是什么），
+                 * 添加之后由探活来定档。
+                 */
+                if (desc == null) return@mapNotNull device.copy(profile = null)
+
                 val (profile, _) = io.github.laozhudu.linkplay.protocol.dlna.detect(desc, httpapiReachable = null)
-                if (profile == io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile.UNKNOWN) {
-                    return@mapNotNull null
-                }
+                // 判 UNKNOWN（连 AVTransport 都没有）也保留：它可能是个媒体服务器之类的误报，
+                // 但让用户看见总比静默消失好。`profile = null` 表示"扫描没能定性"。
                 device.copy(
                     friendlySsid = desc.friendlyName,
                     uuid = device.uuid ?: desc.udn,
                     friendlyName = desc.friendlyName,
-                    profile = profile,
+                    profile = profile.takeIf { it != io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile.UNKNOWN },
                 )
             }
             .distinctBy { (it.uuid ?: it.ip).lowercase() }
+    }
+
+    /**
+     * 同一台设备的多次应答怎么合并。
+     *
+     * 单独抽出来是为了能单测 —— 这段逻辑原来内联在收包循环里，
+     * 出错时表现是"扫描结果里少了几台"，从现象完全看不出是这个函数的问题。
+     *
+     * 规则：**带 LOCATION 的那次说了算**。没带 LOCATION 的应答只用来补空缺字段，
+     * 不允许把已有的 LOCATION 抹掉（抹掉就等于这台设备从结果里消失了）。
+     */
+    internal fun mergeAnswer(
+        previous: DiscoveredDevice?,
+        ip: String,
+        location: String?,
+        usn: String?,
+        server: String?,
+        searchTarget: String?,
+    ): DiscoveredDevice {
+        if (previous != null && location.isNullOrBlank()) {
+            return previous.copy(
+                searchTarget = previous.searchTarget ?: searchTarget,
+                uuid = previous.uuid ?: SsdpMessages.uuidOf(usn),
+                usn = previous.usn ?: usn,
+                server = previous.server ?: server,
+            )
+        }
+        return DiscoveredDevice(
+            ip = ip,
+            location = location ?: previous?.location,
+            usn = usn ?: previous?.usn,
+            server = server ?: previous?.server,
+            searchTarget = searchTarget ?: previous?.searchTarget,
+            uuid = SsdpMessages.uuidOf(usn) ?: previous?.uuid,
+        )
     }
 
     private suspend fun discoverWithTargets(targets: List<String>): List<DiscoveredDevice> = withContext(Dispatchers.IO) {
@@ -150,25 +198,27 @@ class SsdpDiscovery(
                 val headers = parseHeaders(text)
                 val ip = packet.address?.hostAddress ?: continue
                 val st = headers["st"]
-                if (st != null) {
-                    found[ip] = DiscoveredDevice(
-                        ip = ip,
-                        location = headers["location"],
-                        usn = headers["usn"],
-                        server = headers["server"],
-                        searchTarget = st,
-                        uuid = SsdpMessages.uuidOf(headers["usn"]),
-                    )
-                } else if (text.contains("HTTP/1.1 200", ignoreCase = true) && !found.containsKey(ip)) {
-                    // 部分固件回包缺 ST，但有 LOCATION，仍然收下。
-                    found[ip] = DiscoveredDevice(
-                        ip = ip,
-                        location = headers["location"],
-                        usn = headers["usn"],
-                        server = headers["server"],
-                        searchTarget = null,
-                    )
-                }
+                val location = headers["location"]
+                if (st == null && !text.contains("HTTP/1.1 200", ignoreCase = true)) continue
+
+                /*
+                 * **一台设备会答好几次**：`ssdp:all` 会让它把 rootdevice、设备类型、
+                 * 每个服务类型各答一遍，而这几次里**有的带 LOCATION、有的不带**。
+                 *
+                 * 原来直接 `found[ip] = 新应答`。如果最后来的一条恰好不带 LOCATION，
+                 * 这台设备就被自己的应答"覆盖没了"，后面 `filter { location != null }`
+                 * 一过就消失 —— 表现是扫描结果里少了几台，而且完全看不出原因。
+                 *
+                 * 规则：**带 LOCATION 的那次说了算**，其余只用来补空缺字段。
+                 */
+                found[ip] = mergeAnswer(
+                    previous = found[ip],
+                    ip = ip,
+                    location = location,
+                    usn = headers["usn"],
+                    server = headers["server"],
+                    searchTarget = st,
+                )
             }
         }
         found.values.toList()

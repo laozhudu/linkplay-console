@@ -216,10 +216,32 @@ fun detect(
  * `/description.xml` 反而 404）。两个都试一遍是最省事、也不猜端口之外东西的做法。
  */
 object DescriptionEndpoints {
-    fun candidates(ip: String, port: Int): List<String> = listOf(
-        "http://$ip:$port/description.xml",
-        "http://$ip:$port/",
-    )
+    /**
+     * 试哪些地址去拿设备描述。
+     *
+     * @param port 主要端口（LinkPlay 是 49152；通用渲染器常见 3500 / 80）
+     *
+     * 为什么同一台要试这么多：
+     * - LinkPlay 固定 `:49152/description.xml`
+     * - 通用渲染器习惯把描述放根路径（实测那台 AirReceiver 是
+     *   `http://192.168.99.175:3500/`，`/description.xml` 反而 404）
+     *
+     * 手动填 IP 时**不知道对方是哪种**，只能都试一遍。多几次本地请求，
+     * 比"填了 IP 却说找不到设备"好得多。
+     */
+    fun candidates(ip: String, port: Int): List<String> = buildList {
+        add("http://\$ip:\$port/description.xml")
+        add("http://\$ip:\$port/")
+        // 用户手动填 IP 时常见的是通用渲染器，它的端口五花八门
+        if (port != 3500) {
+            add("http://\$ip:3500/")
+            add("http://\$ip:3500/description.xml")
+        }
+        if (port != 80) {
+            add("http://\$ip/description.xml")
+            add("http://\$ip/")
+        }
+    }.distinct()
 }
 
 /**

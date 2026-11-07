@@ -764,11 +764,17 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                         filteredOutCount = (all.size - linkplay.size - renderers.size).coerceAtLeast(0),
                     )
                 }
+                // 扫描要**说得清**：扫到几台、其中几台没读到描述（那种会显示成"未知类型"）
+                val undescribed = renderers.count { it.profile == null }
                 when {
                     fresh.isEmpty() && linkplay.isEmpty() && renderers.isEmpty() ->
-                        log("没找到音箱。确认设备已开机且与手机同一 Wi-Fi；路由器若隔离组播，可直接填 IP。")
-                    fresh.isEmpty() -> log("找到 ${linkplay.size + renderers.size} 台，都是已保存过的")
-                    else -> log("发现 ${fresh.size} 台新设备")
+                        log("没找到任何设备。确认已开机、与手机同一 Wi-Fi；路由器若隔离组播，可手动填 IP。")
+                    fresh.isEmpty() ->
+                        log("找到 ${linkplay.size + renderers.size} 台，都是已保存过的")
+                    else -> log(
+                        "发现 ${fresh.size} 台新设备" +
+                            if (undescribed > 0) "（其中 $undescribed 台没读到描述，添加后再探测）" else "",
+                    )
                 }
                 if (_state.value.filteredOutCount > 0) {
                     log("已忽略 ${_state.value.filteredOutCount} 个非音箱的 UPnP 设备（电视/路由/NAS 等）")
