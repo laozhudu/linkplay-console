@@ -73,6 +73,49 @@ object DeviceProfileCache {
     fun capabilitiesOf(ip: String): DeviceCapabilities =
         entries[ip]?.capabilities ?: DeviceCapabilities.genericDmr(hasRenderingControl = true)
 
+    /**
+     * 写入**弱结论**：靠描述文件推断出来的档位。
+     *
+     * ## 弱在哪里
+     *
+     * 「描述里有 AVTransport」只能证明它**能放声音**，
+     * **不能证明它没有私有 PlayQueue**。
+     *
+     * 所以有两种结论强度：
+     *
+     * | 来源 | 强度 | 能证明什么 |
+     * |---|---|---|
+     * | `getStatusEx` 答上来了 | **强** | 它就是 DOSS（私有 httpapi 是铁证） |
+     * | 只拉到描述 | **弱** | 它有 AVTransport；至于有没有私有服务，说不准 |
+     *
+     * ## 为什么必须区分（真机踩过）
+     *
+     * 用户：「我刚加了一个音箱，也认出音箱，为什么没收到音箱系列里」。
+     *
+     * 时序是这样的：
+     *
+     * ```
+     * t=0   扫描 → 靠私有标识认出是音箱（对）
+     * t=1   添加 → 建档，然后立刻重新探一次
+     * t=2   新入网的音箱 httpapi 还没起好 → getStatusEx 超时
+     * t=2   退到描述文件 → 有 AVTransport → 判成"通用播放设备"
+     * t=2   这个弱结论**覆盖**了刚才的正确结论 → 掉进别的组
+     * ```
+     *
+     * 规则：**已经确认过是 DOSS 的，弱结论不许把它降级。**
+     * 反过来可以（弱结论升格为强结论），下次探测成功自然纠正。
+     */
+    fun putWeak(ip: String, profile: DeviceProfile, capabilities: DeviceCapabilities) {
+        if (ip.isBlank()) return
+        val old = entries[ip]
+        val wasConfirmedDoss = old?.capabilities?.group ==
+            io.github.laozhudu.linkplay.protocol.dlna.DeviceGroup.MySpeaker
+        val nowSaysGeneric = capabilities.group !=
+            io.github.laozhudu.linkplay.protocol.dlna.DeviceGroup.MySpeaker
+        if (wasConfirmedDoss && nowSaysGeneric) return
+        entries[ip] = Entry(profile, capabilities)
+    }
+
     /** 这台设备能不能用 LinkPlay 私有的设备侧队列（PlayQueue）。 */
     fun supportsDeviceQueue(ip: String): Boolean = capabilitiesOf(ip).supportsPlayQueue
 

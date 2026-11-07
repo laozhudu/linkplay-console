@@ -230,9 +230,13 @@ internal fun HomeScreen(
             // 混排的结果是"四台看起来一样的设备"，而其中一台一半的入口点不动。
             //
             // 按**能力**分而不是按品牌分：型号标签会随固件变，能力是探测出来的。
+            // 兜底用**能力缓存**而不是 `LINKPLAY`：
+            // 卡片缺失时按"未探测"处理（通用渲染器档），跟 `DeviceProfileCache` 的默认一致。
+            // 原来这里写 `?: LINKPLAY`，等于"没探到就当音箱"—— 又是一种赌。
             val byGroup = state.saved.groupBy { dev ->
                 (state.cards[dev.uuid]?.capabilities
-                    ?: io.github.laozhudu.linkplay.protocol.dlna.DeviceCapabilities.LINKPLAY).group
+                    ?: io.github.laozhudu.linkplay.console.playback.DeviceProfileCache
+                        .capabilitiesOf(dev.ip)).group
             }
             io.github.laozhudu.linkplay.protocol.dlna.DeviceGroup.entries.forEach { group ->
                 val groupDevices = byGroup[group].orEmpty()
