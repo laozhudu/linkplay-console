@@ -63,11 +63,18 @@ class MainActivity : ComponentActivity() {
             if (event.action == KeyEvent.ACTION_DOWN) {
                 // 返回新音量就顺手弹出系统样式的音量条（Android 自己那根已经被我们吞掉了）
                 consoleVm.adjustVolumeByKey(if (isVolUp) 1 else -1)?.let { v ->
+                    // 浮层上写**目标那台**的名字，不是"选中的设备"
+                    // （切了目标之后按音量键，浮层写错设备名比不写更糟）
+                    val targetIp = (
+                        io.github.laozhudu.linkplay.console.playback.PlaybackOutputStore.current.value
+                            as? io.github.laozhudu.linkplay.console.playback.PlaybackOutput.Device
+                        )?.ip?.takeIf { it.isNotEmpty() }
+                        ?: consoleVm.state.value.selectedIp
                     VolumeOsd.show(
                         volume = v,
-                        mute = consoleVm.state.value.selectedIp?.let { VolumeBus.volumeOf(it)?.mute } ?: false,
+                        mute = targetIp?.let { VolumeBus.volumeOf(it)?.mute } ?: false,
                         deviceName = consoleVm.state.value.saved
-                            .firstOrNull { it.ip == consoleVm.state.value.selectedIp }?.title,
+                            .firstOrNull { it.ip == targetIp }?.title,
                     )
                 }
             }

@@ -129,7 +129,12 @@ internal class DeviceControl(private val host: ConsoleHost) {
     )
 
     fun adjustVolumeByKey(delta: Int): Int? {
-        val ip = host.state.value.selectedIp ?: return null
+        // 和 [canHandleVolumeKey] 同一条规则：目标是本机就不碰设备音量
+        if (io.github.laozhudu.linkplay.console.playback.PlaybackOutputStore
+                .current.value is io.github.laozhudu.linkplay.console.playback.PlaybackOutput.Local
+        ) return null
+
+        val ip = targetDeviceIp() ?: host.state.value.selectedIp ?: return null
         if (host.state.value.online[ip] == false) return null
         val current = VolumeBus.volumeOf(ip)?.volume
             ?: host.state.value.groupMembers.firstOrNull { it.ip == ip }?.volume
@@ -157,11 +162,40 @@ internal class DeviceControl(private val host: ConsoleHost) {
      * 活动必须在 ACTION_DOWN 与 ACTION_UP 上给出**一致的**答案，
      * 否则会出现"按下改了音箱、抬起又改了手机"的双重响应。
      */
+    /**
+     * 音量键要不要拦。
+     *
+     * ## 规则：**按当前播放目标决定**（用户 2026-11-07 明确）
+     *
+     * > 「当前设备是本机按键调的音量是本机，设备为 doss1 按键调的音量为 doss1，
+     * >  如果是通用 upnp 设备音量键调这个设备的音量」
+     *
+     * | 播放目标 | 音量键 |
+     * |---|---|
+     * | **本机** | **不拦** —— 交给系统，调手机音量 |
+     * | doss1 / doss2 / doss3 | 拦 —— 调那台音箱 |
+     * | 通用 UPnP（电视盒子） | 拦 —— 调那台设备 |
+     *
+     * 原来只看「选中的设备」在不在线，**不看目标**。于是目标切到本机之后，
+     * 按音量键还在调音箱 —— 手机上放歌时按音量键，声音一点不变。
+     */
     fun canHandleVolumeKey(): Boolean {
-        val ip = host.state.value.selectedIp ?: return false
+        // 目标是本机（或者还没定）→ 不拦，让系统调手机自己的媒体音量
+        val target = io.github.laozhudu.linkplay.console.playback.PlaybackOutputStore
+            .current.value
+        if (target is io.github.laozhudu.linkplay.console.playback.PlaybackOutput.Local) return false
+
+        // 目标是某台设备 → 优先用目标那台，没有具体目标时退回「选中的设备」
+        val ip = targetDeviceIp() ?: host.state.value.selectedIp ?: return false
         if (host.state.value.online[ip] == false) return false
         return VolumeBus.volumeOf(ip) != null || host.state.value.groupMembers.any { it.ip == ip }
     }
+
+    /** 当前目标指向的设备 IP；目标不是设备时返回 null。 */
+    private fun targetDeviceIp(): String? =
+        (io.github.laozhudu.linkplay.console.playback.PlaybackOutputStore.current.value
+            as? io.github.laozhudu.linkplay.console.playback.PlaybackOutput.Device)
+            ?.ip?.takeIf { it.isNotEmpty() }
 
 
     /** 开定时关闭（分钟）。0 = 取消。原厂设备菜单第四项。 */
