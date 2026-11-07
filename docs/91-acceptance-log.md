@@ -3204,3 +3204,59 @@ Canvas(...) {
 | 大标题下的空白 | 搜索态时「接着听/最近加入/全部来源」都隐藏，中间会空一段 |
 | 真机 | **未验** |
 
+## 第六十六轮 · 修播放页 cast 图标消失（浅色主题下黑图标落在深色背景上）
+
+用户截图：播放页左下角**只剩一行几乎看不见的 "doss1"，图标没了**。
+
+### 根因：抽公共组件时把"页面背景"这个前提丢了
+
+上一轮把 `CastButton` 从 `PlayerScreen` 抽到 `ui/components/TargetPicker.kt`，
+顺手把颜色从硬编码的 `OnDarkPalette.text` 改成了 `MaterialTheme.colorScheme.onSurface`。
+
+问题是：
+
+| 页面 | 背景 | `onSurface` 在浅色主题下 | 结果 |
+|---|---|---|---|
+| 内容页 | 跟随主题（浅） | 黑 | 正常 |
+| **播放页** | **固定深色**（那页不看主题） | **黑** | **黑图标落在深色底上 = 看不见** |
+
+不是图标没画，是画了看不见。
+
+### 修法：颜色变成必填参数
+
+```kotlin
+fun CastButton(
+    label: String,
+    isLocal: Boolean,
+    onClick: () -> Unit,
+    contentColor: Color,   // ← 必填，没有默认值
+)
+```
+
+- 播放页传 `OnDarkPalette.text`（深色页专用前景色）
+- 内容页传 `MaterialTheme.colorScheme.onSurface`
+
+**故意不给默认值**：默认值会让下一个调用方又踩同一个坑。
+显式要求调用方回答"你的背景是什么色"。
+
+### 顺带修掉同屏另一处
+
+曲名下面原来显示 `192.168.99.164` —— 那是 `artist` 为空时的兜底值。
+
+它既不是作品信息、也不是用户关心的东西，却占着标题正下方最值钱的一行。
+设备是谁，顶栏已经写了。改成空串（不占高度）。
+
+### 验证
+
+```bash
+./gradlew :app:compileDebugKotlin / :app:testDebugUnitTest / :app:assembleDebug
+# 1081 用例 0 失败
+```
+
+### 没验的
+
+| 项 | 状态 |
+|---|---|
+| 真机：cast 图标在深色页上是否清晰 | **未验** |
+| 真机：内容页 cast 在浅色/深色主题下是否都对 | **未验** |
+

@@ -518,9 +518,14 @@ fun PlayerScreen(
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
             )
+            // 没有歌手就别硬填一个 IP。
+            //
+            // 真机截图：「064【东汉】白马驮经」下面一行写 `192.168.99.164` ——
+            // 那是 `artist` 为空时的兜底值，可它既不是作品信息、也不是用户关心的东西，
+            // 白白占掉标题正下方最值钱的一行。设备是谁在顶栏已经写了。
             Text(
-                text = artist
-                    ?: if (state.state == TransportState.NO_MEDIA_PRESENT) "去媒体库点一首" else deviceIp,
+                text = artist?.takeIf { it.isNotBlank() }
+                    ?: if (state.state == TransportState.NO_MEDIA_PRESENT) "去媒体库点一首" else "",
                 style = MaterialTheme.typography.bodySmall,
                 color = OnDarkPalette.muted,
                 maxLines = 1,
@@ -673,6 +678,8 @@ fun PlayerScreen(
                     label = targetLabel,
                     isLocal = targetNow is PlaybackOutput.Local,
                     onClick = { showTargetSheet = true },
+                    // 这一页是**固定深色**背景，必须用深色页专用的前景色
+                    contentColor = OnDarkPalette.text,
                 )
                 // 能力位决定这个按钮能不能用（docs/86 不变量 I3）。
                 //

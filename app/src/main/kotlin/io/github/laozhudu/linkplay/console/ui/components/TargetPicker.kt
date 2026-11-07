@@ -51,6 +51,21 @@ fun CastButton(
     label: String,
     isLocal: Boolean,
     onClick: () -> Unit,
+    /**
+     * 图标和文字的颜色。
+     *
+     * ## 为什么必须能由调用方指定（真机 bug）
+     *
+     * 播放页的背景是**固定深色**（那页不看主题，就是要沉浸）。
+     * 而内容页跟随主题。如果这个组件写死用 `MaterialTheme.colorScheme.onSurface`：
+     *
+     * - 浅色主题 + 播放页深色背景 → onSurface 是**黑的** → **黑图标落在深色底上，等于没有**
+     * - 真机截图就是这个现象：左下角只剩一行几乎看不见的 "doss1"
+     *
+     * 所以颜色必须是参数：播放页传 `OnDarkPalette.text`，内容页传主题色。
+     * **组件不认识背景，背景由调用方知道。**
+     */
+    contentColor: androidx.compose.ui.graphics.Color,
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -59,9 +74,8 @@ fun CastButton(
             .clickable(onClick = onClick)
             .padding(horizontal = Spacing.xs, vertical = 2.dp),
     ) {
-        // **颜色必须在 Canvas 外面取**：DrawScope 不是 @Composable，
-        // 在里面调 MaterialTheme 会报 "invocations can only happen from a @Composable function"
-        val iconColor = MaterialTheme.colorScheme.onSurface
+        // 颜色在 Canvas **外面**取：DrawScope 不是 @Composable 上下文
+        val iconColor = contentColor
         androidx.compose.foundation.Canvas(Modifier.size(22.dp)) {
             val w = size.width
             val h = size.height
@@ -104,7 +118,8 @@ fun CastButton(
             // label 已经是最终名字（由 targetLabel 算好），这里只截长度防溢出
             text = label.take(8),
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            // 文字比图标再淡一点，层次分明；但同样必须跟随调用方给的颜色
+            color = contentColor.copy(alpha = 0.75f),
             maxLines = 1,
             modifier = Modifier.padding(top = 1.dp),
         )
