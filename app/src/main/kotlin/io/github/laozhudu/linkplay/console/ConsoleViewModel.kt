@@ -192,6 +192,23 @@ data class ConsoleUiState(
     val busy: Boolean = false,
     /** 扫描后有没有被过滤掉的其它 UPnP 设备（用于给用户一句解释，而不是「怎么什么都搜不到」）。 */
     val filteredOutCount: Int = 0,
+
+    /**
+     * 扫描到的设备**是什么东西**（ip → 人话标签）。
+     *
+     * ## 为什么要有（用户 2026-11-07）
+     *
+     * > 「设备页，扫描，doss 系列是适配通用 upnp 的，但通用 upnp 不一定是 doss，
+     * >  doss 有特殊标识的」
+     *
+     * 判定本身早就分两路做了（`discoverLinkPlayDevices` 靠私有 PlayQueue 服务，
+     * `discoverMediaRenderers` 靠标准 AVTransport），**但结果合并成一个列表直接显示**，
+     * 于是界面上只有「名字 / IP / 添加」—— 用户根本看不出这一行是音箱还是电视。
+     *
+     * 加这个映射不是"多显示一个字段"，是**让用户知道自己在加什么**：
+     * 加音箱和加电视盒子，后面能用的功能差一个量级。
+     */
+    val scanKinds: Map<String, String> = emptyMap(),
                 /**
      * 组网结果的一句话说明。
      *
@@ -742,10 +759,16 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                     return d.uuid == null || savedUuids.none { u.contains(it) }
                 }
                 val fresh = linkplay.filter(::isNew) + renderers.filter(::isNew)
+                // 两种来源各给一个人话标签 —— 用户要能分清"我的音箱"和"别的播放设备"
+                val kinds = buildMap {
+                    linkplay.forEach { put(it.ip, "音箱 · 能收整份列表") }
+                    renderers.forEach { put(it.ip, "通用播放设备 · 逐首投") }
+                }
                 _state.update {
                     it.copy(
                         scanning = false,
                         devices = fresh,
+                        scanKinds = kinds,
                         filteredOutCount = (all.size - linkplay.size - renderers.size).coerceAtLeast(0),
                     )
                 }

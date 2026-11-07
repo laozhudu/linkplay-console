@@ -351,7 +351,12 @@ internal fun HomeScreen(
                         state.devices.take(3).forEachIndexed { index, d ->
                             ListRow(
                                 title = d.friendlyName ?: d.friendlySsid ?: d.ip,
-                                subtitle = d.ip,
+                                // 副标题带上"这是什么东西"：加音箱和加电视盒子，
+                                // 后面能用的功能差一个量级，不能让用户猜
+                                subtitle = listOfNotNull(
+                                    d.ip,
+                                    state.scanKinds[d.ip],
+                                ).joinToString(" · "),
                                 trailing = {
                                     Text(
                                         "添加",
