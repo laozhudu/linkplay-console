@@ -1,8 +1,11 @@
 package io.github.laozhudu.linkplay.console.playback
 
-import android.content.Context
+import io.github.laozhudu.linkplay.console.playback.endpoint.DeviceSnapshotInput
+import io.github.laozhudu.linkplay.console.playback.endpoint.Endpoints
+import io.github.laozhudu.linkplay.console.playback.endpoint.PlaybackEndpoint
 import io.github.laozhudu.linkplay.protocol.dlna.DeviceCapabilities
 import io.github.laozhudu.linkplay.protocol.playback.PlayIntent
+import io.github.laozhudu.linkplay.protocol.upnp.TransportState
 
 /**
  * **全部播放意图的唯一执行点。**
@@ -63,20 +66,63 @@ class PlaybackDispatcher(
      *
      * 注意 `Local` 分支一律 true —— 本机播放器什么都能做，不存在能力位问题。
      */
-    fun can(intent: PlayIntent): Boolean = when (intent) {
-        PlayIntent.Next, PlayIntent.Previous -> when (router.output()) {
-            PlaybackOutput.Local -> true
-            is PlaybackOutput.Device -> caps().supportsNextPrev
+    fun can(intent: PlayIntent): Boolean {
+        val c = endpoint().capabilities()
+        return when (intent) {
+            PlayIntent.Next -> c.canNext
+            PlayIntent.Previous -> c.canPrevious
+            is PlayIntent.SeekTo -> c.canSeek
+            PlayIntent.Mute -> c.canMute
+            is PlayIntent.SetVolume, PlayIntent.VolumeUp, PlayIntent.VolumeDown -> true
+            PlayIntent.LoopNext -> c.hasQueue
+            else -> true
         }
-        is PlayIntent.SeekTo -> when (router.output()) {
-            PlaybackOutput.Local -> true
-            is PlaybackOutput.Device -> caps().supportsSeek
-        }
-        is PlayIntent.SetVolume, PlayIntent.VolumeUp, PlayIntent.VolumeDown ->
-            router.output() == PlaybackOutput.Local || caps().supportsVolume
-        PlayIntent.Mute -> router.output() == PlaybackOutput.Local || caps().supportsMute
-        PlayIntent.LoopNext -> router.output() == PlaybackOutput.Local
-        else -> true
+    }
+
+    /**
+     * 当前目标那个 endpoint。
+     *
+     * ## 这就是本类存在的全部意义
+     *
+     * 原来这里有 **12 个 `when (router.output())`** —— 每个意图都写一遍
+     * 「本机这样、设备那样」。加第三类（通用 UPnP）时，12 处都要回头看一遍，
+     * 漏一处就是"这个功能在盒子上不生效"。
+     *
+     * 现在判断只在 `Endpoints` 工厂里做一次，这里只负责转交。
+     */
+    private fun endpoint(): PlaybackEndpoint {
+        val ip = QueueBus.owner()
+        val capsNow = ip?.let { capabilities(it) } ?: DeviceCapabilities.NONE
+        val snapshot = vm()?.state?.value
+        return Endpoints.current(
+            router = router,
+            vm = this::vm,
+            ip = ip,
+            label = snapshot?.friendlyName ?: (ip ?: "设备"),
+            capabilities = capsNow,
+            input = ::deviceInput,
+        )
+    }
+
+    /** 把 VM 的状态投影成"不依赖具体协议"的原料（见 `DeviceSnapshotInput` 的注释）。 */
+    private fun deviceInput(): DeviceSnapshotInput {
+        val s = vm()?.state?.value ?: return DeviceSnapshotInput()
+        val queue = QueueBus.state.value
+        return DeviceSnapshotInput(
+            playing = s.state == TransportState.PLAYING ||
+                s.state == TransportState.TRANSITIONING,
+            stopped = s.state == TransportState.STOPPED || s.state == TransportState.NO_MEDIA_PRESENT,
+            title = s.title,
+            artist = s.artist,
+            positionSec = s.positionSec,
+            durationSec = s.durationSec,
+            volume = s.volume,
+            mute = s.mute,
+            queueIndex = (queue.index + 1).coerceAtLeast(0),
+            queueCount = queue.items.size.coerceAtLeast(0),
+            // 输入源的人话名字由界面层已有的 translator 给；这里只管"是不是网络输入"
+            inputSourceLabel = null,
+        )
     }
 
     /** 当前受控设备的能力位。取不到设备时给「什么都没有」，走最保守的一支。 */
@@ -87,115 +133,72 @@ class PlaybackDispatcher(
 
     private fun vm(): PlaybackViewModel? = PlaybackViewModels.current
 
-    // ---- 每个意图一个私有实现。dispatch 只做分派，这里不许再长出第二层 when ----
+    // ---- 意图 → endpoint 的方法。这里**不许再长出第二层判断** ----
 
-    private suspend fun next(): Boolean {
-        val target = vm() ?: return false
-        return when (router.output()) {
-            PlaybackOutput.Local -> { router.local.raw().seekToNextMediaItem(); true }
-            is PlaybackOutput.Device -> caps().supportsNextPrev.also { if (it) target.next() }
-        }
-    }
+    private suspend fun next(): Boolean = endpoint().let { it.next(); it.capabilities().canNext }
 
-    private suspend fun previous(): Boolean {
-        val target = vm() ?: return false
-        return when (router.output()) {
-            PlaybackOutput.Local -> { router.local.raw().seekToPreviousMediaItem(); true }
-            is PlaybackOutput.Device -> caps().supportsNextPrev.also { if (it) target.previous() }
-        }
-    }
+    private suspend fun previous(): Boolean =
+        endpoint().let { it.previous(); it.capabilities().canPrevious }
 
+    /**
+     * 播放 / 暂停是**幂等**的，不能直接调 `toggle()`。
+     *
+     * `toggle()` 是"切换"，而 `PlayIntent.Play` 的语义是"要它放"。
+     * 如果当前已经在放，再 toggle 一下就停了 —— 语音说「播放」反而把歌停了，
+     * 这类错只在"已经在放的时候又说一遍"才出现，很难复现。
+     */
     private suspend fun play(): Boolean {
-        val target = vm() ?: return false
-        return when (router.output()) {
-            PlaybackOutput.Local -> { router.startLocalService(); router.local.raw().play(); true }
-            is PlaybackOutput.Device -> { target.play(); true }
-        }
+        if (router.output() == PlaybackOutput.Local) router.startLocalService()
+        val ep = endpoint()
+        if (!ep.snapshot().playing) ep.toggle()
+        return true
     }
 
     private suspend fun pause(): Boolean {
-        val target = vm() ?: return false
-        return when (router.output()) {
-            PlaybackOutput.Local -> { router.local.raw().pause(); true }
-            is PlaybackOutput.Device -> { target.pause(); true }
-        }
+        val ep = endpoint()
+        if (ep.snapshot().playing) ep.toggle()
+        return true
     }
 
     private suspend fun stop(): Boolean {
-        val target = vm() ?: return false
-        return when (router.output()) {
-            PlaybackOutput.Local -> { router.local.raw().stop(); true }
-            is PlaybackOutput.Device -> { target.stop(); true }
+        if (router.output() == PlaybackOutput.Local) {
+            router.local.raw().stop()
+            return true
         }
+        vm()?.stop()
+        return true
     }
 
-    /** 「播放/暂停」取决于当前状态 —— 以设备回报为准，不在本地猜。 */
-    private suspend fun toggle(): Boolean =
-        if (vm()?.state?.value?.state == io.github.laozhudu.linkplay.protocol.upnp.TransportState.PLAYING) {
-            pause()
-        } else {
-            play()
-        }
+    /** 「播放/暂停」取决于当前状态 —— 以 endpoint 的报告为准，不在本地猜。 */
+    private suspend fun toggle(): Boolean {
+        endpoint().toggle()
+        return true
+    }
 
     private suspend fun volumeBy(delta: Int): Boolean {
-        val target = vm() ?: return false
-        return when (router.output()) {
-            PlaybackOutput.Local -> {
-                // ExoPlayer 的音量是 0f..1f，设备侧是 0..100 —— 换算是这一层的责任，
-                // 别让上层记两套刻度（真机上「显示 60 实际 0.6」这种错很难看出来）。
-                val player = router.local.raw()
-                val current = (player.volume * 100f).toInt()
-                player.volume = ((current + delta).coerceIn(0, 100)) / 100f
-                true
-            }
-            is PlaybackOutput.Device -> {
-                if (!caps().supportsVolume) return false
-                target.setVolumeLive((target.state.value.volume + delta).coerceIn(0, 100))
-                true
-            }
-        }
+        val ep = endpoint()
+        ep.setVolume(ep.snapshot().volume + delta)
+        return true
     }
 
     private suspend fun setVolume(value: Int): Boolean {
-        val target = vm() ?: return false
-        return when (router.output()) {
-            PlaybackOutput.Local -> { router.local.raw().volume = value.coerceIn(0, 100) / 100f; true }
-            is PlaybackOutput.Device -> {
-                if (!caps().supportsVolume) return false
-                target.setVolumeLive(value.coerceIn(0, 100))
-                true
-            }
-        }
+        endpoint().setVolume(value)
+        return true
     }
 
     private suspend fun seekTo(seconds: Long): Boolean {
-        val target = vm() ?: return false
-        return when (router.output()) {
-            // 本机侧用毫秒；设备侧协议就是秒（见 PlaybackViewModel.seekTo 的参数）
-            PlaybackOutput.Local -> { router.local.raw().seekTo(seconds * 1000L); true }
-            is PlaybackOutput.Device -> {
-                if (!caps().supportsSeek) return false
-                target.seekTo(seconds)
-                true
-            }
-        }
+        endpoint().seek(seconds)
+        return true
     }
 
     private suspend fun mute(): Boolean {
-        val target = vm() ?: return false
-        return when (router.output()) {
-            PlaybackOutput.Local -> { router.local.raw().volume = 0f; true }
-            is PlaybackOutput.Device -> {
-                if (!caps().supportsMute) return false
-                target.toggleMute()
-                true
-            }
-        }
+        endpoint().setMute(true)
+        return true
     }
 
     private suspend fun loopNext(): Boolean {
         // 循环模式只有设备侧有（本机侧 ExoPlayer 的 repeatMode 不在本轮范围）
-        if (router.output() != PlaybackOutput.Device("")) return false
+        if (router.output() !is PlaybackOutput.Device) return false
         val target = vm() ?: return false
         target.cycleLoopMode()
         return true

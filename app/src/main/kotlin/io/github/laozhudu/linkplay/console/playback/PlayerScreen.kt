@@ -292,8 +292,51 @@ fun PlayerScreen(
     // 之前的问题：切到本机后进度条和音量条是空的，因为界面只读设备状态，
     // 而手机上放的时候没有人往那里填值。
     val routerRef = remember { PlaybackRouter.of(appContext) }
-    val localUi by routerRef.localState.collectAsState()
-    val isLocalOutput = routerRef.output() is PlaybackOutput.Local
+    /*
+     * ---- 后端：本机 / DOSS / 通用 UPnP，由工厂三选一 ----
+     *
+     * 用户 2026-11-07：「通用 upnp 是一个独立模块，doss 体系是另一个模块……
+     * 还有本机播放应该也是个独立模块」。
+     *
+     * 原来这一页有 20 处 `if (isLocalOutput)` —— 每加一类设备，20 处都要回头查一遍，
+     * 漏一处就是"这个功能在盒子上不对"。现在从这行往下**不认识设备类型**，
+     * 只读 [snap]（统一状态）和 [caps]（能力位）。
+     */
+    val endpoint = androidx.compose.runtime.remember(deviceIp, targetNow) {
+        io.github.laozhudu.linkplay.console.playback.endpoint.Endpoints.current(
+            router = routerRef,
+            vm = { vm },
+            ip = deviceIp,
+            label = targetLabel,
+            capabilities = io.github.laozhudu.linkplay.console.playback.DeviceProfileCache
+                .capabilitiesOf(deviceIp),
+            input = {
+                val snapNow = vm.state.value
+                val q = io.github.laozhudu.linkplay.console.playback.QueueBus.state.value
+                io.github.laozhudu.linkplay.console.playback.endpoint.DeviceSnapshotInput(
+                    playing = snapNow.state == TransportState.PLAYING ||
+                        snapNow.state == TransportState.TRANSITIONING,
+                    stopped = snapNow.state == TransportState.STOPPED ||
+                        snapNow.state == TransportState.NO_MEDIA_PRESENT,
+                    title = snapNow.title,
+                    artist = snapNow.artist,
+                    positionSec = snapNow.positionSec,
+                    durationSec = snapNow.durationSec,
+                    // 音量优先读 VolumeBus：全站四个改音量的入口都汇到它
+                    volume = io.github.laozhudu.linkplay.console.playback.VolumeBus
+                        .volumeOf(deviceIp)?.volume ?: snapNow.volume,
+                    mute = snapNow.mute,
+                    queueIndex = (q.index + 1).coerceAtLeast(0),
+                    queueCount = q.items.size,
+                    inputSourceLabel = null,
+                )
+            },
+        )
+    }
+    val snap = endpoint.snapshot()
+    val caps = endpoint.capabilities()
+    /** 只有"本机"这一种后端没有队列概念（设备那两种的说法不同，见下方文案）。 */
+    val isLocalEndpoint = endpoint.key == "local"
     /*
      * **整页数据按输出选源**（真机 bug）。
      *
@@ -308,26 +351,14 @@ fun PlayerScreen(
      *   - 本机 → `localUi`（ExoPlayer 的真实状态）
      *   - 设备 → `state` / `queue`（设备回报的）
      */
-    val playing = if (isLocalOutput) {
-        localUi.playing
-    } else {
-        state.state == TransportState.PLAYING || state.state == TransportState.TRANSITIONING
-    }
+    val playing = snap.playing
     // 能力位：这台的设备支不支持切歌（电视盒子不支持）。每次重组算一次，很便宜（读缓存）。
-    val canPrev = dispatcher.can(PlayIntent.Previous)
-    val canNext = dispatcher.can(PlayIntent.Next)
+    val canPrev = caps.canPrevious
+    val canNext = caps.canNext
 
-    val duration = if (isLocalOutput) {
-        localUi.durationMs / 1000L
-    } else {
-        state.durationSec.coerceAtLeast(0L)
-    }
-    val positionSecNow = if (isLocalOutput) localUi.positionMs / 1000.0 else state.positionSec.toDouble()
-    val progress = scrubDraft ?: if (isLocalOutput) {
-        if (duration <= 0L) 0f else (positionSecNow / duration).toFloat().coerceIn(0f, 1f)
-    } else {
-        state.progress
-    }
+    val duration = snap.durationSec
+    val positionSecNow = snap.positionSec.toDouble()
+    val progress = scrubDraft ?: snap.progressFraction
     /*
      * 设备侧音量**优先读 VolumeBus**，不是 `state.volume`。
      *
@@ -338,7 +369,7 @@ fun PlayerScreen(
      * VolumeBus 是唯一真相；`state.volume` 只是它的一条旧副本，兜底用。
      */
     val busVolume = VolumeBus.volumeOf(deviceIp)?.volume
-    val volumeNow = if (isLocalOutput) localUi.volume else (busVolume ?: state.volume)
+    val volumeNow = snap.volume
     val shownVolume = volDraft ?: (volumeNow.toFloat() / 100f)
     val art = state.albumArtUrl?.takeIf { it.isNotBlank() }
         ?: queue.current?.albumArtUrl?.takeIf { it.isNotBlank() }
@@ -347,13 +378,9 @@ fun PlayerScreen(
             runCatching { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() }.getOrNull()
         }
     }
-    val title = if (isLocalOutput) {
-        localUi.title
-    } else {
-        state.title ?: queue.current?.title
-    }
+    val title = snap.title ?: queue.current?.title
     // 投本机时**不显示音箱那首歌的歌手** —— 那是另一路的内容
-    val artist = if (isLocalOutput) null else (state.artist ?: queue.current?.artist)
+    val artist = snap.artist ?: queue.current?.artist
 
     // 松手才 seek：逐像素 seek 会让设备进度反复回弹
     LaunchedEffect(scrubDraft) {
@@ -578,14 +605,9 @@ fun PlayerScreen(
             Text(
                 // 只写**状态**，不再重复设备名 —— 顶栏已经写了一次。
                 // 之前是「E900V22C-175[DLNA] · 待播放」，一屏里同一个名字出现两遍。
-                text = when {
-                    // 本机播放没有"投送"这回事，说"正在放/已暂停"才对
-                    isLocalOutput -> if (playing) "本机播放" else "已暂停"
-                    state.error != null -> "出错了"
-                    playing -> "投送中"
-                    queue.running -> "已暂停"
-                    else -> "待播放"
-                },
+                // 措辞由各后端自己决定（本机说"本机播放"、DOSS 说"投送中"、
+                // 盒子说"播放中"、切到线路输入时要说明输入源）—— 界面不拼这个词
+                text = snap.statusText,
                 style = MaterialTheme.typography.labelMedium,
                 color = OnDarkPalette.muted,
                 maxLines = 1,
@@ -637,11 +659,8 @@ fun PlayerScreen(
                 CircleIcon(
                     onClick = {
                         // 静音同样跟输出走：本机把 ExoPlayer 音量归零/恢复，设备发命令
-                        if (isLocalOutput) {
-                            routerRef.local.setVolume(if (localUi.volume > 0) 0 else 60)
-                        } else {
-                            actionScope.launch { dispatcher.dispatch(PlayIntent.Mute) }
-                        }
+                        // 静音是"切换"：现在是响的就静音，静着的就恢复
+                        actionScope.launch { endpoint.setMute(volumeNow > 0) }
                     },
                     size = 32.dp,
                 ) {
@@ -658,11 +677,8 @@ fun PlayerScreen(
                         volDraft = it
                         // **音量跟着输出走**（用户：音量控制应该与对应设备直接相关）
                         // 本机 → ExoPlayer 的音量；设备 → 那台设备的音量
-                        if (isLocalOutput) {
-                            routerRef.local.setVolume((it * 100).toInt())
-                        } else {
-                            vm.setVolumeLive((it * 100).toInt())
-                        }
+                        // 拖动是连续事件，设备侧有 60ms 合并通道，只保留最新值
+                        actionScope.launch { endpoint.setVolume((it * 100).toInt()) }
                     },
                     onValueChangeFinished = { volDraft = null },
                     modifier = Modifier.weight(1f),
@@ -674,7 +690,7 @@ fun PlayerScreen(
                 )
                 Spacer(Modifier.width(Spacing.xs))
                 Text(
-                    if (!isLocalOutput && state.mute) "静音" else volumeNow.toString(),
+                    if (snap.mute && caps.canMute) "静音" else volumeNow.toString(),
                     style = MaterialTheme.typography.labelSmall,
                     color = OnDarkPalette.muted,
                     textAlign = TextAlign.End,
@@ -795,14 +811,14 @@ fun PlayerScreen(
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(14.dp))
                     // 本机没有"设备侧队列"，点进去只会看到音箱的列表 → 干脆不给点
-                    .clickable(enabled = !isLocalOutput) { showPlaylist = true }
+                    .clickable(enabled = caps.hasQueue) { showPlaylist = true }
                     .padding(horizontal = Spacing.xs, vertical = Spacing.sm),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = if (isLocalOutput) {
-                        // 本机播放器只播单曲，没有列表 —— 假装有队列比不显示更糟
-                        "本机播放 · 单曲"
+                    text = if (!caps.hasQueue) {
+                        // 没有可看队列时如实说，不要画一个点开是空的东西
+                        if (isLocalEndpoint) "本机播放 · 单曲" else "这台设备不提供列表"
                     } else {
                         buildString {
                             append("播放列表")

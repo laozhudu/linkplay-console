@@ -3596,3 +3596,81 @@ python3 scripts/check-*.py   # 8 个全 PASS
 | 真机：本机按键后音量条是否立刻跟 | **未验** |
 | 电视盒子若不响应 SetVolume | 会显示"设备拒绝了该操作"（不再是静默）|
 
+## 第七十二轮 · 三种播放后端拆成独立模块
+
+用户：「通用 upnp 是一个独立模块，doss 体系是另一个模块，肯定是你考虑欠缺导致的。
+还有本机播放应该也是个独立模块」。
+
+### 上一轮的修法是错的
+
+上一轮我给 `DeviceControl` 加了 `transportFor(ip)`，按能力位决定发 LinkPlay 还是 SOAP，
+以为那就是"支持了通用 UPnP"。实际上只是**在一个 if 后面接第二个 if**。
+
+真实情况是家里有**三套完全平行的体系**：
+
+| 体系 | 状态从哪来 | 控制怎么发 | 界面分支 |
+|---|---|---|---|
+| 本机 | ExoPlayer 回调 | `LocalPlayer` / `AudioManager` | 20 处 `if (isLocalOutput)` |
+| DOSS | `getPlayerStatus` 轮询 | LinkPlay 私有 httpapi | `transportFor` 查表 |
+| 通用 UPnP | AVTransport 轮询 | SOAP RenderingControl | 同上 |
+| ↑ 播放/暂停 | 同上 | **又一条**：`host.renderer(device).play()` | 第三套 |
+
+同一个判断散在**三个层次、三十多处**，互相不知道对方存在。
+加第四类（蓝牙）时每处都要回头看一遍 —— 这是"考虑欠缺"的准确含义。
+
+### 做法：一个工厂 + 三个实现
+
+新增 `app/.../playback/endpoint/`：
+
+| 文件 | 职责 |
+|---|---|
+| `PlaybackEndpoint.kt` | 契约：`key` / `label` / `capabilities()` / `snapshot()` + 6 个控制方法 |
+| `DeviceEndpoint.kt` | 设备那一路的骨架（DOSS 与 UPnP 共用"走 VM 下发"） |
+| `LinkPlayEndpoint.kt` | **DOSS 体系**：能力表按固件问出来（老固件不支持切歌） |
+| `UpnpEndpoint.kt` | **通用 UPnP 体系**：能力表**写死**（DLNA 标准里没有下一首） |
+| `LocalEndpoint.kt` | **本机体系**：没有队列、没有静音、没有切歌 |
+| `Endpoints.kt` | **唯一允许判断"走哪一路"的地方** |
+
+三个关键设计决定：
+
+**① 只做投影，不造第二条 Flow。**
+三方状态已经存在于 `LocalPlayer.state` / `ConsoleUiState` 里。再造三条 Flow
+就是制造第二份真相，那份副本一定漂移。`snapshot()` 是纯函数，Compose 重组时调一次。
+
+**② 能力位必填、无默认值。**
+逼每个实现在写的时候回答"我到底能不能做这个"。给默认值的话，新体系会悄悄
+继承**别人**的能力表 —— 那正是漂移的来源。本机 `hasQueue=false`
+→ 播放列表入口整块不画，而不是画一个点开是空的。
+
+**③ 状态文案由后端自己算。**
+"本机播放" / "投送中" / "播放中" / "输入源 线路输入 · 播放中" 四种措辞
+属于各体系自己的知识。放界面里就又变成 20 处 if。
+
+### 顺带修掉的两个真 bug
+
+**bug A · `PlaybackDispatcher` 里 12 个 `when (output())`。**
+每一处都写一遍"本机这样、设备那样"。现在 `dispatch` 只转交给 endpoint。
+
+**bug B · `play` / `pause` 是幂等的，不能实现成 `toggle()`。**
+`PlayIntent.Play` 的语义是"要它放"。如果当前已经在放，再 toggle 一下就停了 ——
+语音说「播放」反而把歌停了。这类错只在"已经在放的时候又说一遍"才出现，极难复现。
+现在实现为"看 snapshot 再决定要不要 toggle"。
+
+### 数字
+
+```
+isLocalOutput          20 处 → 0 处（两个文件全部清零）
+PlaybackDispatcher    12 个 when(output()) → 0
+新增                   6 个文件 / 4 个单测
+测试                   1081 → 1089（+4 EndpointStateTest，+2 来自 core-protocol 合入）
+脚本                   8 个全 PASS
+```
+
+### 没验的
+
+| 项 | 状态 |
+|---|---|
+| 真机：播放页三种后端切换是否都对 | **未验** |
+| 真机：本机按音量键音量条是否立刻跟（上一轮的 ContentObserver） | **未验** |
+| 真机：电视盒子音量键能不能调它 | **未验** |
+| 通用 UPnP 的 `Set` 类动作（从来没测过） | **未验** |
