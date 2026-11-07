@@ -31,6 +31,9 @@ import kotlinx.coroutines.flow.asStateFlow
  */
 class LocalPlayer(context: Context) {
 
+    /** 构造参数 `context` 不是 val，类内拿不到 —— 存一份给 AudioManager 用。 */
+    private val appContext: Context = context.applicationContext
+
     private val player: ExoPlayer = ExoPlayer.Builder(context.applicationContext).build()
 
     private val _state = MutableStateFlow(PlayerUiState(
@@ -121,7 +124,7 @@ source = PlayerUiState.Source.Local))
             // Media3 用 C.TIME_UNSET（负数）表示"还不知道"，不能直接当 0 用
             durationMs = if (duration > 0) duration else 0L,
             isLive = player.isCurrentMediaItemLive || duration <= 0,
-            volume = (player.volume * 100f).toInt().coerceIn(0, 100),
+            volume = systemVolumePercent(),
         )
     }
 
@@ -139,7 +142,34 @@ source = PlayerUiState.Source.Local))
      * 和 `PlayerUiState.volume` 的读出方向对称。
      */
     fun setVolume(percent: Int) {
-        player.volume = (percent.coerceIn(0, 100) / 100f)
+        // **写系统媒体音量**，不是 ExoPlayer 的 volume。
+        //
+        // 用户要的是一一对应：按音量键调本机、拖音量条也调本机，两者必须是同一件事。
+        // 若改的是 `player.volume`（App 内缩放），按音量键变系统音量、拖条变 App 音量，
+        // 就是两个旋钮，数字永远对不上。
+        runCatching {
+            audioManager.setStreamVolume(
+                android.media.AudioManager.STREAM_MUSIC,
+                percentToSystem(percent),
+                0, // 不带 FLAG_SHOW_UI：我们自己的界面已经在显示这个值了
+            )
+        }
         publish()
     }
+
+    /** 系统媒体音量百分比（0..100）。 */
+    private fun systemVolumePercent(): Int = runCatching {
+        val max = audioManager.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+        if (max <= 0) 100 else (audioManager.getStreamVolume(android.media.AudioManager.STREAM_MUSIC) * 100 / max).coerceIn(0, 100)
+    }.getOrDefault(100)
+
+    /** 百分比 → 系统步数（四舍五入）。 */
+    private fun percentToSystem(percent: Int): Int {
+        val max = audioManager.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+        if (max <= 0) return 0
+        return Math.round(percent.coerceIn(0, 100) * max / 100f).coerceIn(0, max)
+    }
+
+    private val audioManager: android.media.AudioManager
+        get() = appContext.getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
 }
