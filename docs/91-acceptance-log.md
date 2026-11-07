@@ -3531,3 +3531,68 @@ val volumeNow = if (isLocalOutput) localUi.volume else (busVolume ?: state.volum
 | 真机：目标是电视盒子时按音量键 | **未验**（有些通用渲染器 SetVolume 失败会静默）|
 | 系统音量步数换算 | 用 `max * percent / 100` 四舍五入，各机型 max 不同（通常 15~25 档），**未验** |
 
+## 第七十一轮 · 本机音量同步 + 通用 UPnP 音量（两个真 bug）
+
+用户：「本机界面音量条与按键音量条不同步，通用 upnp 设备无法控制音量」。
+
+### ① 通用 UPnP 音量：**通道从来没接上**
+
+`DeviceControl` 里写死：
+
+```kotlin
+private val transport: RemoteTransport = LinkPlayTransport(host.http())
+```
+
+**不管设备是什么类型，都发 LinkPlay 私有 httpapi。** 给电视盒子发这些命令，
+设备不认 → 静默失败（连接是通的，只是它不认这个命令），用户按音量键**没有任何反应也没有提示**。
+
+而 `GenericRenderer` 那边**早就实现了** `setVolume` / `setMute`（走 SOAP `RenderingControl`），
+只是从来没人从这条路上调它。
+
+修法：
+
+| 设备类型 | 通道 |
+|---|---|
+| LINKPLAY（DOSS） | `LinkPlayTransport` |
+| **其它（通用渲染器）** | **新增 `UpnpRemoteTransport`** → SOAP RenderingControl |
+
+新增 `app/.../device/UpnpRemoteTransport.kt`（约 80 行）：
+
+- `supports()` 只报通用渲染器真有的能力（音量/静音/播放/暂停/停止/进度），
+  上一首下一首、预设键、组网一律 false —— 界面据此不画按不动的按钮
+- 失败按 `DispatchFailure` 分三类：连不上 / 不支持 / 设备拒绝
+
+分派依据是**探测出来的 `DeviceCapabilities.group`**，不是品牌名
+（型号标签会随固件变）。
+
+### ② 本机音量不同步：只有 ticker 在刷，而它只在播放时跑
+
+改成读写系统音量之后，读值只在 500ms ticker 里刷新，而那个 ticker
+**只在播放时跑**（暂停不空转，省电）。于是：
+
+```
+没在播放 → 按音量键 → 系统音量 30 → 60
+ticker 没跑 → localUi.volume 还是 30 → 音量条不动
+```
+
+修法：用 `ContentObserver` 监听 `Settings.System` 里的 `volume_music`。
+系统音量一变立刻 `publish()`，比轮询实时得多也不费电。
+
+**必须在 `release()` 里注销** —— 不注销会在界面走掉后继续持有这个对象。
+
+### 验证
+
+```bash
+./gradlew :app:compileDebugKotlin / :app:testDebugUnitTest / :app:assembleDebug
+# 1081 用例 0 失败
+python3 scripts/check-*.py   # 8 个全 PASS
+```
+
+### 没验的
+
+| 项 | 状态 |
+|---|---|
+| 真机：电视盒子音量键能不能调它 | **未验**（`GenericRenderer.setVolume` 之前只测过 GetVolume 11ms 通，**Set 类从来没测过**）|
+| 真机：本机按键后音量条是否立刻跟 | **未验** |
+| 电视盒子若不响应 SetVolume | 会显示"设备拒绝了该操作"（不再是静默）|
+

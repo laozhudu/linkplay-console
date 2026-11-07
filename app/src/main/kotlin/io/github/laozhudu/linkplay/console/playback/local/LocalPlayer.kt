@@ -45,6 +45,30 @@ class LocalPlayer(context: Context) {
     private val audioManager: android.media.AudioManager
         get() = appContext.getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
 
+    /**
+     * 盯着**系统媒体音量**的变化。
+     *
+     * ## 为什么必须有（真机问题）
+     *
+     * 用户：「本机界面音量条与按键音量条不同步」。
+     *
+     * 改成读写系统音量之后，读值只在 500ms ticker 里刷新，而那个 ticker
+     * **只在播放时跑**（暂停时不空转，省电）。于是：
+     *
+     * ```
+     * 没在播放 → 用户按音量键 → 系统音量 30 → 60
+     * ticker 没跑 → localUi.volume 还是 30 → 音量条不动
+     * ```
+     *
+     * 系统音量变化是有广播的（`Settings.System.VOLUME_SETTINGS` 里 `volume_music` 这个键），
+     * 用 `ContentObserver` 监听它，比轮询实时得多，也不费电。
+     */
+    private val volumeObserver = object : android.database.ContentObserver(
+        android.os.Handler(android.os.Looper.getMainLooper()),
+    ) {
+        override fun onChange(selfChange: Boolean) = publish()
+    }
+
     private val player: ExoPlayer = ExoPlayer.Builder(context.applicationContext).build()
 
     private val _state = MutableStateFlow(PlayerUiState(
@@ -76,6 +100,14 @@ source = PlayerUiState.Source.Local))
 
     init {
         player.addListener(listener)
+        // 系统音量一变就刷新界面（见 volumeObserver 的说明）
+        runCatching {
+            appContext.contentResolver.registerContentObserver(
+                android.provider.Settings.System.getUriFor("volume_music"),
+                false,
+                volumeObserver,
+            )
+        }
         ticker.launch {
             while (true) {
                 delay(io.github.laozhudu.linkplay.console.util.PollCadence.LOCAL_PROGRESS_MS)
@@ -115,6 +147,8 @@ source = PlayerUiState.Source.Local))
     /** 页面销毁时**不要**调 —— 播放要能继续。只在 App 退出/切换输出时调。 */
     fun release() {
         runCatching {
+            // 注销系统音量观察者：不注销会在 Activity 走掉后继续持有这个对象
+            appContext.contentResolver.unregisterContentObserver(volumeObserver)
             ticker.cancel()
             player.removeListener(listener)
             player.release()
