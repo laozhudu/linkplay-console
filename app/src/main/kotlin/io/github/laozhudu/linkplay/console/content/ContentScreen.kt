@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -95,6 +96,7 @@ internal fun ContentScreen(
     var filter by remember { mutableStateOf(SourceFilter.All) }
 
     // B 站：输入 BV 号 / 链接（docs/85 §2.4：搜索接口有风控，搜不了关键词）
+    var showTarget by remember { mutableStateOf(false) }
     var showBili by remember { mutableStateOf(false) }
     var biliInput by remember { mutableStateOf("") }
 
@@ -136,18 +138,31 @@ internal fun ContentScreen(
         )
         VSpace(Spacing.sm)
 
-        // ---- 投给谁（`docs/96` 模型 A）----
+        // ---- 投给谁（和播放页**同一个组件**）----
         //
-        // 大厂都让目标永远可见：Sonos 顶部房间条、Spotify 底部 Connect 图标。
-        // 我们的内容页原来是"点了就投"，投给谁完全不显示 —— 这是"投错设备"的根源。
-        TargetRow(
-            target = target,
-            devices = state.saved,
-            onPick = { out ->
-                io.github.laozhudu.linkplay.console.playback.PlaybackOutputStore.write(context, out)
-            },
-        )
-        VSpace(Spacing.sm)
+        // 用户明确要求两边一致。原来这里是横向 chips（设备名一长就撑出屏幕、
+        // 而且和下面的筛选 chips 挤成两排滚动条）。
+        // 现在和播放页一样：一个 cast 图标 + 点开弹层。
+        val targetLabel = when (val tn = target) {
+            is io.github.laozhudu.linkplay.console.playback.PlaybackOutput.Local -> "本机"
+            is io.github.laozhudu.linkplay.console.playback.PlaybackOutput.Device ->
+                state.saved.firstOrNull { it.ip == tn.ip }?.name
+                    ?: tn.label.takeIf { it.isNotBlank() && it != tn.ip }
+                    ?: "设备"
+            null -> "投给"
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+        ) {
+            io.github.laozhudu.linkplay.console.ui.components.CastButton(
+                label = targetLabel,
+                isLocal = target is io.github.laozhudu.linkplay.console.playback.PlaybackOutput.Local,
+                onClick = { showTarget = true },
+            )
+            Spacer(Modifier.weight(1f))
+        }
+        VSpace(Spacing.xs)
 
         // 搜索框。回车 → 交给统一搜索页（那里一次问四个源，按源分组出结果）。
         // **不在本页出结果**：搜索结果有自己的排序、来源标注、失败说明，
@@ -296,6 +311,20 @@ internal fun ContentScreen(
         }
 
         VSpace(Spacing.xl)
+    }
+
+    if (showTarget) {
+        io.github.laozhudu.linkplay.console.ui.components.TargetSheet(
+            devices = state.saved,
+            onDismiss = { showTarget = false },
+            onPick = { out ->
+                showTarget = false
+                io.github.laozhudu.linkplay.console.playback.PlaybackOutputStore.write(context, out)
+                runCatching {
+                    io.github.laozhudu.linkplay.console.playback.PlaybackService.restart(context)
+                }
+            },
+        )
     }
 
     if (showBili) {
@@ -471,60 +500,9 @@ internal fun sourceLabelOf(sourceType: String): String = when (sourceType) {
 }
 
 /**
- * 「投给谁」一行 —— 和播放页的「从哪出声」是**同一个真值**（`docs/96` 模型 A）。
+ * 搜索结果列表 —— 按源分组，**结果直接可点**。
  *
- * 放在内容页最上面而不是藏进设置，理由就是大厂的做法：
- * Sonos 的房间条常驻顶部、Spotify 的 Connect 图标常驻播放条 —— 目标是**随时可见、随时可改**的。
- */
-@Composable
-private fun TargetRow(
-    target: io.github.laozhudu.linkplay.console.playback.PlaybackOutput?,
-    devices: List<io.github.laozhudu.linkplay.protocol.session.SavedDevice>,
-    onPick: (io.github.laozhudu.linkplay.console.playback.PlaybackOutput) -> Unit,
-) {
-    androidx.compose.foundation.layout.Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(vertical = Spacing.xs),
-        horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
-        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-    ) {
-        Text(
-            "投给",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        val localSelected = target is io.github.laozhudu.linkplay.console.playback.PlaybackOutput.Local
-        FilterChip(
-            selected = localSelected,
-            onClick = { onPick(io.github.laozhudu.linkplay.console.playback.PlaybackOutput.Local) },
-            label = { Text("本机") },
-        )
-        devices.forEach { dev ->
-            val sel = (target as? io.github.laozhudu.linkplay.console.playback.PlaybackOutput.Device)
-                ?.ip == dev.ip
-            FilterChip(
-                selected = sel,
-                onClick = {
-                    onPick(
-                        io.github.laozhudu.linkplay.console.playback.PlaybackOutput.Device(
-                            dev.ip,
-                            dev.name,
-                        ),
-                    )
-                },
-                label = { Text(dev.name.ifBlank { dev.ip }) },
-            )
-        }
-    }
-}
-
-/**
- * 搜索结果列表 —— **在本页直接列、直接点**（用户明确要求）。
- *
- * 按源分组，每组最多 5 条（`SearchHubViewModel` 已经截好）。
- * 没有合并排序：NAS 上的《晴天》和洛雪的《晴天》不是同一份东西，混排只会让人点错。
+ * 没有合并排序：NAS 上的《晴天》和洛雪的不是同一份东西，混排只会让人点错。
  */
 @Composable
 private fun SearchResultList(
@@ -534,13 +512,15 @@ private fun SearchResultList(
 ) {
     io.github.laozhudu.linkplay.console.search.SourceId.entries.forEach { src ->
         val probe = state.probes[src] ?: return@forEach
-        val items = (probe as? io.github.laozhudu.linkplay.console.search.ProbeState.Found)?.items.orEmpty()
+        val items = (probe as? io.github.laozhudu.linkplay.console.search.ProbeState.Found)
+            ?.items.orEmpty()
 
         if (items.isNotEmpty()) {
             InsetGroup(
                 title = src.label,
-                footer = (probe as? io.github.laozhudu.linkplay.console.search.ProbeState.Found)
-                    ?.let { if (it.count > it.items.size) "共 ${it.count} 条，这里显示前 ${it.items.size} 条" else null },
+                footer = (probe as? io.github.laozhudu.linkplay.console.search.ProbeState.Found)?.let {
+                    if (it.count > it.items.size) "共 ${it.count} 条，这里显示前 ${it.items.size} 条" else null
+                },
             ) {
                 items.forEachIndexed { i, hit ->
                     ListRow(
@@ -554,7 +534,6 @@ private fun SearchResultList(
             }
             VSpace(Spacing.sm)
         } else {
-            // 没结果 / 不可用：说清原因，并且给一个"去那边"的出口
             val reason = when (probe) {
                 io.github.laozhudu.linkplay.console.search.ProbeState.Searching -> "搜索中…"
                 io.github.laozhudu.linkplay.console.search.ProbeState.Idle -> return@forEach
