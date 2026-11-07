@@ -230,13 +230,14 @@ internal fun HomeScreen(
             // 混排的结果是"四台看起来一样的设备"，而其中一台一半的入口点不动。
             //
             // 按**能力**分而不是按品牌分：型号标签会随固件变，能力是探测出来的。
-            // 兜底用**能力缓存**而不是 `LINKPLAY`：
-            // 卡片缺失时按"未探测"处理（通用渲染器档），跟 `DeviceProfileCache` 的默认一致。
-            // 原来这里写 `?: LINKPLAY`，等于"没探到就当音箱"—— 又是一种赌。
+            // 分组依据 = **设备档案里的档位**（能力缓存是它的运行时镜像，启动时已预热）。
+            //
+            // 不用 `cards[uuid].capabilities`：那是本轮探测的临时状态，冷启动时还没填，
+            // 一张空卡的能力是 NONE，会把整组设备推进「其它设备」。
+            // 也不用任何"默认值"：档案里存着每台设备是什么，不需要猜。
             val byGroup = state.saved.groupBy { dev ->
-                (state.cards[dev.uuid]?.capabilities
-                    ?: io.github.laozhudu.linkplay.console.playback.DeviceProfileCache
-                        .capabilitiesOf(dev.ip)).group
+                io.github.laozhudu.linkplay.console.playback.DeviceProfileCache
+                    .capabilitiesOf(dev.ip).group
             }
             io.github.laozhudu.linkplay.protocol.dlna.DeviceGroup.entries.forEach { group ->
                 val groupDevices = byGroup[group].orEmpty()
@@ -356,11 +357,10 @@ internal fun HomeScreen(
                             ListRow(
                                 title = d.friendlyName ?: d.friendlySsid ?: d.ip,
                                 // 副标题带上"这是什么东西"：加音箱和加电视盒子，
-                                // 后面能用的功能差一个量级，不能让用户猜
-                                subtitle = listOfNotNull(
-                                    d.ip,
-                                    state.scanKinds[d.ip],
-                                ).joinToString(" · "),
+                                // 后面能用的功能差一个量级，不能让用户猜。
+                                // 数据来自 `DiscoveredDevice.profile` —— 发现层拉描述时就判过了。
+                                subtitle = listOfNotNull(d.ip, discoveredKindLabel(d.profile))
+                                    .joinToString(" · "),
                                 trailing = {
                                     Text(
                                         "添加",
@@ -690,6 +690,20 @@ internal fun HomeScreen(
  *
  * 文案写在 UI 层，不写进 `core-protocol` 的枚举 —— 协议模块不该带中文文案。
  */
+/**
+ * 扫描结果里的人话标签。
+ *
+ * 拿不到档位时返回 null（界面上就只有 IP）—— **不猜**。
+ * 猜的代价是用户以为自己在加音箱，加完发现组网用不了。
+ */
+private fun discoveredKindLabel(
+    profile: io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile?,
+): String? = when (profile) {
+    io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile.LINKPLAY -> "音箱 · 能收整份列表"
+    io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile.GENERIC_DMR -> "通用播放设备 · 逐首投"
+    else -> null
+}
+
 @Composable
 private fun DeviceGroupHeader(group: io.github.laozhudu.linkplay.protocol.dlna.DeviceGroup) {
     val label = when (group) {
