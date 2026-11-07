@@ -625,7 +625,14 @@ fun PlayerScreen(
             // 音量（拖动跟手）
             Row(verticalAlignment = Alignment.CenterVertically) {
                 CircleIcon(
-                    onClick = { actionScope.launch { dispatcher.dispatch(PlayIntent.Mute) } },
+                    onClick = {
+                        // 静音同样跟输出走：本机把 ExoPlayer 音量归零/恢复，设备发命令
+                        if (isLocalOutput) {
+                            routerRef.local.setVolume(if (localUi.volume > 0) 0 else 60)
+                        } else {
+                            actionScope.launch { dispatcher.dispatch(PlayIntent.Mute) }
+                        }
+                    },
                     size = 32.dp,
                 ) {
                     VolumeGlyph(
@@ -639,7 +646,13 @@ fun PlayerScreen(
                     value = shownVolume,
                     onValueChange = {
                         volDraft = it
-                        vm.setVolumeLive((it * 100).toInt())
+                        // **音量跟着输出走**（用户：音量控制应该与对应设备直接相关）
+                        // 本机 → ExoPlayer 的音量；设备 → 那台设备的音量
+                        if (isLocalOutput) {
+                            routerRef.local.setVolume((it * 100).toInt())
+                        } else {
+                            vm.setVolumeLive((it * 100).toInt())
+                        }
                     },
                     onValueChangeFinished = { volDraft = null },
                     modifier = Modifier.weight(1f),

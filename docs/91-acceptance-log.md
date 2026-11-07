@@ -3330,3 +3330,56 @@ val volumeNow = if (isLocalOutput) localUi.volume else state.volume
 | 真机：本机播一首，进度和音量是否实时 | **未验** |
 | 真机：从本机切回音箱，是否恢复音箱的数据 | **未验** |
 
+## 第六十八轮 · 音量控制跟输出走（本机调手机、设备调设备）
+
+用户：「音量控制应该也与对应设备直接相关」。
+
+### 问题：读的时候分岔了，写的时候没分
+
+上一轮只让**显示值**按输出切换：
+
+```kotlin
+val volumeNow = if (isLocalOutput) localUi.volume else state.volume   // 读 ✓
+```
+
+但 `onValueChange` 里还是：
+
+```kotlin
+vm.setVolumeLive(...)   // ← 永远调设备
+```
+
+结果：切到本机拖音量条，**改的是音箱的音量**，手机这边一点没变；
+音量数字还显示 0（因为 `localUi.volume` 的初值是 0，而 ExoPlayer 实际是 1.0 = 100）。
+
+### 改法三处
+
+| 处 | 本机 | 设备 |
+|---|---|---|
+| 拖动音量 | `LocalPlayer.setVolume()`（ExoPlayer 0f..1f） | `vm.setVolumeLive()` |
+| 静音按钮 | 音量归零 / 恢复 60 | `PlayIntent.Mute` |
+| 初始值 | `volume = (player.volume * 100f)` | —— |
+
+**换算只放在 `LocalPlayer` 这一层**（0..100 ↔ 0f..1f），和 `PlayerUiState.volume`
+的读出方向对称 —— 和 `docs/91` 第 365 条记的那个坑（ExoPlayer 是 0f..1f、
+设备是 0..100）同一个处理原则。
+
+### 静音为什么不发命令
+
+本机没有"静音"这个设备侧概念，只有音量。所以把 ExoPlayer 音量归零，
+再点一次恢复成 60 —— 不恢复成"上一次的值"，因为那需要额外记状态，
+而 60 是一个用户不会觉得"怎么突然这么大"的中间值。
+
+### 验证
+
+```bash
+:app:compileDebugKotlin / :app:testDebugUnitTest / :app:assembleDebug
+# 1081 用例 0 失败
+```
+
+### 没验的
+
+| 项 | 状态 |
+|---|---|
+| 真机：本机拖音量条手机声音是否真的变 | **未验** |
+| 真机：切回音箱后音量条是否显示那台的音量 | **未验** |
+
