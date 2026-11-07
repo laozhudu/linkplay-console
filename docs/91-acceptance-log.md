@@ -3142,3 +3142,65 @@ val file = extraFiles[path] ?: resolver.resolve(path)
 真出这个现象的话，下一步是「先在本机用带 Referer 的请求把文件拉下来，
 再经本机 HTTP 提供」（比 remux 便宜得多，只是多一次下载）。
 
+## 第六十五轮 · 「投给」统一成一个组件（用户指出两页样式不一致）
+
+用户截图：「这个页面投给我说过与播放页面的投屏保持样式和功能一致，你没做到。页面杂乱」。
+
+### 问题
+
+| 页面 | 「投给 / 从哪出声」长什么样 |
+|---|---|
+| 播放页 | 左下角 cast 图标 + 点开弹层 |
+| **内容页** | **一排横向 chips**（本机 / doss1 / DOSS_CloudBook_56C…） |
+
+同一个概念两种形态。而且内容页那排：
+
+- 设备名一长（`DOSS_CloudBook_56C4`）就撑出屏幕
+- 和下面的**筛选 chips** 挤成两排横向滚动条，视觉上重复又杂乱
+
+### 改法：抽成一个公共组件
+
+新建 `ui/components/TargetPicker.kt`：
+
+| 组件 | 用途 |
+|---|---|
+| `CastButton(label, isLocal, onClick)` | cast 形状图标 + 目标名，贴在界面上 |
+| `TargetSheet(devices, onDismiss, onPick)` | 点开后从底部弹出的选择层 |
+| `TargetSheetRow` | 弹层里的一行（当前项打勾） |
+
+**播放页和内容页都用这一套**，`grep CastButton` 现在两处都是它。
+
+内容页那排 chips 和它背后的 `TargetRow` 组件**整段删除**。
+
+### 一个编译错误值得记
+
+`CastButton` 里画图标的 `Canvas`：
+
+```kotlin
+Canvas(...) {
+    val c = MaterialTheme.colorScheme.onSurface   // ❌ DrawScope 不是 @Composable
+}
+```
+
+`DrawScope` 不在 Compose 组合上下文里，取主题色必须**提到 Canvas 外面**。
+这是从播放页搬代码时暴露的 —— 播放页那版用的是常量 `OnDarkPalette.text`（硬编码深色），
+搬成主题色才触发这个错。
+
+顺带说明为什么共用组件能抓到这类问题：**组件一旦要同时服务深色页和浅色页，
+就把"硬编码颜色"这个隐患逼出来了。**
+
+### 验证
+
+```bash
+./gradlew :app:compileDebugKotlin / :app:testDebugUnitTest / :app:assembleDebug
+# 1081 用例 0 失败
+```
+
+### 还没整理的
+
+| 项 | 说明 |
+|---|---|
+| 搜索框样式 | 现在是带边框 + 右侧「搜索」字样，和苹果风的"无边框灰底"不一致 |
+| 大标题下的空白 | 搜索态时「接着听/最近加入/全部来源」都隐藏，中间会空一段 |
+| 真机 | **未验** |
+
