@@ -139,6 +139,18 @@ source = PlayerUiState.Source.Local))
         publish()
     }
 
+    /**
+     * 跳进度（秒）。
+     *
+     * 补齐原因：本机播放原来**只能播放/暂停/停止**，播放页的进度条对本机是
+     * "看得见拖不动"的假控件 —— 而 `MovementDemo` 里最常用就是拖回去重听一段。
+     */
+    fun seekTo(positionSec: Long) {
+        val ms = (positionSec * 1000L).coerceIn(0L, (player.duration.takeIf { it > 0 } ?: 0L))
+        player.seekTo(ms)
+        publish()
+    }
+
     fun stop() {
         player.stop()
         publish()

@@ -57,16 +57,46 @@ internal fun MiniPlayerBar(
     // 之前本机播放时这条还显示音箱的曲名 —— 因为这里只读 QueueBus。
     val barContext = androidx.compose.ui.platform.LocalContext.current
     val routerRef = androidx.compose.runtime.remember { PlaybackRouter.of(barContext) }
-    val localUi by routerRef.localState.collectAsState()
-    val isLocalOutput = routerRef.output() is PlaybackOutput.Local
-    val ui = if (isLocalOutput) {
-        localUi
-    } else {
-        PlayerUiState.fromRemote(
-            nowPlaying = queue.nowPlaying,
-            running = queue.total > 0,
-            playing = playing,
+    val targetNow = io.github.laozhudu.linkplay.console.playback.PlaybackOutputStore.current
+        .collectAsState().value
+
+    // 和播放页同一套后端判断：迷你条也不认识"本机/音箱/盒子"的区别
+    val endpoint = androidx.compose.runtime.remember(targetNow, queue.ownerIp) {
+        io.github.laozhudu.linkplay.console.playback.endpoint.Endpoints.current(
+            router = routerRef,
+            vm = { io.github.laozhudu.linkplay.console.playback.PlaybackViewModels.current },
+            ip = queue.ownerIp,
+            label = queue.nowPlaying ?: "",
+            capabilities = queue.ownerIp?.let {
+                io.github.laozhudu.linkplay.console.playback.DeviceProfileCache.capabilitiesOf(it)
+            } ?: io.github.laozhudu.linkplay.protocol.dlna.DeviceCapabilities.NONE,
+            input = {
+                val st = io.github.laozhudu.linkplay.console.playback.PlaybackViewModels.current
+                    ?.state?.value
+                io.github.laozhudu.linkplay.console.playback.endpoint.DeviceSnapshotInput(
+                    playing = playing,
+                    title = st?.title,
+                    artist = st?.artist,
+                    positionSec = st?.positionSec ?: 0,
+                    durationSec = st?.durationSec ?: 0,
+                    volume = st?.volume ?: 0,
+                    mute = st?.mute ?: false,
+                    queueIndex = (queue.index + 1).coerceAtLeast(0),
+                    queueCount = queue.items.size,
+                )
+            },
         )
+    }
+    val snap = endpoint.snapshot()
+
+    /** 副标题：有队列说第几首，本机单曲说进度，都没有就说"点开"。 */
+    val subText = when {
+        snap.queueCount > 0 && snap.queueIndex > 0 ->
+            "第 " + snap.queueIndex + "/" + snap.queueCount + " 首 · 点开操作"
+        snap.durationSec > 0 ->
+            clock(snap.positionSec * 1000) + " / " + clock(snap.durationSec * 1000) + " · 点开操作"
+        snap.title != null -> "点开操作"
+        else -> "点开继续操作"
     }
     Row(
         modifier = modifier
@@ -93,27 +123,20 @@ internal fun MiniPlayerBar(
         Spacer(Modifier.width(Spacing.sm))
         Column(Modifier.weight(1f)) {
             Text(
-                ui.title ?: "未在播放",
+                snap.title ?: queue.nowPlaying ?: "未在播放",
                 style = MaterialTheme.typography.titleMedium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                when {
-                    // 本机播放没有"第几首"的概念（本地播放器目前只播单首）
-                    isLocalOutput && ui.hasContent && ui.durationMs > 0 ->
-                        "${clock(ui.positionMs)} / ${clock(ui.durationMs)} · 点开操作"
-                    isLocalOutput && ui.hasContent -> "本机播放 · 点开操作"
-                    queue.index >= 0 && queue.total > 0 -> "第 ${queue.index + 1}/${queue.total} 首 · 点开操作"
-                    else -> "点开继续操作"
-                },
+                subText,
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         // 播放/暂停：与首页「全部播放」配套，不用为了停一下再进播放页
         CircleIcon(onClick = onToggle, size = 40.dp) {
-            if (ui.playing) {
+            if (snap.playing) {
                 Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
                     Box(Modifier.size(4.dp, 14.dp).background(MaterialTheme.colorScheme.onSurface))
                     Box(Modifier.size(4.dp, 14.dp).background(MaterialTheme.colorScheme.onSurface))

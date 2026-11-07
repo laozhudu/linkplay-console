@@ -69,7 +69,20 @@ internal class DeviceControl(private val host: ConsoleHost) {
     }
 
     /**
-     * **按设备类型选通道**（真机 bug 的修法）。
+     * **按设备类型选通道** —— 但只服务"对**任意一台**下命令"的场景。
+     *
+     * ## 它和 `playback/endpoint` 的分工（别搞混）
+     *
+     * | | 谁用 | 作用于 |
+     * |---|---|---|
+     * | **这里** | 首页卡片的长按菜单、实体音量键 | **任意一台**设备（当前选中/目标）|
+     * | **`endpoint`** | 播放页、迷你条 | **当前播放目标**那一台 |
+     *
+     * 两者不能合并：首页的"选中设备"和播放页的"目标"**可以是不同的两台**
+     * （用户在首页点了 doss2 看详情，声音还在 doss1 上）。
+     * 合并成一个会变成"看一眼哪台就把声音切过去"。
+     *
+     * ## 历史
      *
      * 原来这里写死 `LinkPlayTransport`，于是给电视盒子也发 LinkPlay 私有 httpapi ——
      * 设备不认，静默失败，用户按了音量键没有任何反应也没有提示。
@@ -85,6 +98,20 @@ internal class DeviceControl(private val host: ConsoleHost) {
         } else {
             linkPlayTransport
         }
+
+    /**
+     * 两条通道**外借给 `Endpoints` 工厂**（播放页用）。
+     *
+     * 为什么不各造一份：`LinkPlayTransport(host.http())` 背后是同一个连接池，
+     * 再造一个实例就会多一份 keep-alive 连接 —— 而三台音箱的固件对并发连接数很敏感。
+     *
+     * 为什么外借而不让 endpoint 直接调本类：endpoint 需要的是"发给谁"，
+     * 而本类的 `transportFor` 是按**当前选中设备**查的 —— 两者会打架
+     * （播放页的目标和首页选中的那台可以是不同的）。
+     */
+    internal fun linkPlayChannel(): RemoteTransport = linkPlayTransport
+
+    internal fun upnpChannel(): RemoteTransport = upnpTransport
 
     /**
      * 下发一条语义指令；**失败时把原因翻译成人话写进 error**。
