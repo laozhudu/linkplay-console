@@ -284,7 +284,6 @@ fun PlayerScreen(
         }
     }
 
-    val playing = state.state == TransportState.PLAYING || state.state == TransportState.TRANSITIONING
     // ---- 播放状态按输出选源（S2.1）----
     //
     // 本机播放读 ExoPlayer 的实时位置，投音箱读设备快照。界面只用同一组字段，
@@ -295,6 +294,25 @@ fun PlayerScreen(
     val routerRef = remember { PlaybackRouter.of(appContext) }
     val localUi by routerRef.localState.collectAsState()
     val isLocalOutput = routerRef.output() is PlaybackOutput.Local
+    /*
+     * **整页数据按输出选源**（真机 bug）。
+     *
+     * 用户："切到本机时没有根据本机的情况切换页面信息，播放列表也没换；
+     * 其他音箱设备之间反而切换正常。"
+     *
+     * 原因是只有进度和音量按 `isLocalOutput` 分过岔，曲名/歌手/播放状态
+     * 仍然直接读 `state`（那是**设备**的状态）。于是切到本机后，
+     * 顶栏写"本机"，下面还挂着音箱那首歌和音箱的列表 —— 一半一半。
+     *
+     * 现在这三样也跟着切：
+     *   - 本机 → `localUi`（ExoPlayer 的真实状态）
+     *   - 设备 → `state` / `queue`（设备回报的）
+     */
+    val playing = if (isLocalOutput) {
+        localUi.playing
+    } else {
+        state.state == TransportState.PLAYING || state.state == TransportState.TRANSITIONING
+    }
     // 能力位：这台的设备支不支持切歌（电视盒子不支持）。每次重组算一次，很便宜（读缓存）。
     val canPrev = dispatcher.can(PlayIntent.Previous)
     val canNext = dispatcher.can(PlayIntent.Next)
@@ -319,8 +337,13 @@ fun PlayerScreen(
             runCatching { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() }.getOrNull()
         }
     }
-    val title = state.title ?: queue.current?.title
-    val artist = state.artist ?: queue.current?.artist
+    val title = if (isLocalOutput) {
+        localUi.title
+    } else {
+        state.title ?: queue.current?.title
+    }
+    // 投本机时**不显示音箱那首歌的歌手** —— 那是另一路的内容
+    val artist = if (isLocalOutput) null else (state.artist ?: queue.current?.artist)
 
     // 松手才 seek：逐像素 seek 会让设备进度反复回弹
     LaunchedEffect(scrubDraft) {
@@ -524,7 +547,10 @@ fun PlayerScreen(
             // 那是 `artist` 为空时的兜底值，可它既不是作品信息、也不是用户关心的东西，
             // 白白占掉标题正下方最值钱的一行。设备是谁在顶栏已经写了。
             Text(
-                text = artist?.takeIf { it.isNotBlank() }
+                // 有些设备把 IP 塞进 artist 字段回报回来（真机截图：曲名下面写着 192.168.99.164）。
+                // 那不是作品信息，一律当"没有歌手"处理。
+                text = artist
+                    ?.takeIf { it.isNotBlank() && !IP_LIKE.matches(it.trim()) }
                     ?: if (state.state == TransportState.NO_MEDIA_PRESENT) "去媒体库点一首" else "",
                 style = MaterialTheme.typography.bodySmall,
                 color = OnDarkPalette.muted,
@@ -543,6 +569,8 @@ fun PlayerScreen(
                 // 只写**状态**，不再重复设备名 —— 顶栏已经写了一次。
                 // 之前是「E900V22C-175[DLNA] · 待播放」，一屏里同一个名字出现两遍。
                 text = when {
+                    // 本机播放没有"投送"这回事，说"正在放/已暂停"才对
+                    isLocalOutput -> if (playing) "本机播放" else "已暂停"
                     state.error != null -> "出错了"
                     playing -> "投送中"
                     queue.running -> "已暂停"
@@ -743,18 +771,24 @@ fun PlayerScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(14.dp))
-                    .clickable { showPlaylist = true }
+                    // 本机没有"设备侧队列"，点进去只会看到音箱的列表 → 干脆不给点
+                    .clickable(enabled = !isLocalOutput) { showPlaylist = true }
                     .padding(horizontal = Spacing.xs, vertical = Spacing.sm),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = buildString {
-                        append("播放列表")
-                        if (queue.items.isNotEmpty()) {
-                            append(" · ${queue.items.size} 首")
-                            if (queue.index >= 0) append(" · 第 ${queue.index + 1} 首")
-                        } else {
-                            append(" · 空")
+                    text = if (isLocalOutput) {
+                        // 本机播放器只播单曲，没有列表 —— 假装有队列比不显示更糟
+                        "本机播放 · 单曲"
+                    } else {
+                        buildString {
+                            append("播放列表")
+                            if (queue.items.isNotEmpty()) {
+                                append(" · ${queue.items.size} 首")
+                                if (queue.index >= 0) append(" · 第 ${queue.index + 1} 首")
+                            } else {
+                                append(" · 空")
+                            }
                         }
                     },
                     style = MaterialTheme.typography.bodyMedium,
@@ -1255,3 +1289,6 @@ private fun PlaylistSheet(
         }
     }
 }
+
+/** 长得像 IPv4 的字符串 —— 设备有时把它塞进 artist 字段返回。 */
+private val IP_LIKE = Regex("""^\d{1,3}(\.\d{1,3}){3}$""")
