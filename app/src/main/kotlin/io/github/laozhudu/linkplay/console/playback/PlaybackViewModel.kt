@@ -636,6 +636,62 @@ class PlaybackViewModel(
     }
 
     /**
+     * **通用 DLNA 设备的切歌：重投下一首。**
+     *
+     * ## 为什么不能走 AVTransport.Next
+     *
+     * 实测那台 `E900V22C-175`（AirReceiver）对 `AVTransport.Next` 回
+     * **701 transition not available** —— 它没有自己的队列，不知道该切到哪。
+     * （这条实测结论一直记在 `DeviceCapabilitiesTest` 里。）
+     *
+     * ## 那"能不能切歌"？
+     *
+     * **能。** 用户 2026-11-07：「通用 upnp 模块是能播放列表能切歌」——
+     * 指的是从**我们的**列表切。设备自己不会切，我们把下一首重新投给它，
+     * 效果完全一样（中间的停顿来自重新 SetAVTransportURI，不是用户能感知的差别）。
+     *
+     * 这就是 `EndpointCapabilities.canNext = true` 但
+     * `DeviceCapabilities.supportsNextPrev = false` 的原因：
+     * **前者问"我们能不能让它换"，后者问"它自己会不会换"。**
+     */
+    fun nextByReplay() = replayStep(+1)
+
+    fun previousByReplay() = replayStep(-1)
+
+    private fun replayStep(delta: Int) {
+        val q = QueueBus.state.value
+        val items = q.items
+        if (items.isEmpty()) {
+            log("没有列表可切")
+            return
+        }
+        val target = q.index + delta
+        if (target !in items.indices) {
+            log(if (delta > 0) "已经是最后一首" else "已经是第一首")
+            return
+        }
+        val ctx = appContext
+        if (ctx == null) {
+            log("没有上下文，重投不了")
+            return
+        }
+        viewModelScope.launch {
+            runCatching {
+                startQueueOnDevice(
+                    context = ctx,
+                    deviceIp = deviceIp,
+                    location = location,
+                    deviceUuid = deviceUuid,
+                    items = items,
+                    startAt = target,
+                    note = if (delta > 0) "下一首" else "上一首",
+                    log = ::log,
+                )
+            }.onFailure { log("重投失败：" + (it.message ?: it.javaClass.simpleName)) }
+        }
+    }
+
+    /**
      * 切循环模式。先改本地状态再下发：设备回读 `loop` 有延迟，
      * 等回读再更新会让按钮「点了不动」，手感很差。
      */

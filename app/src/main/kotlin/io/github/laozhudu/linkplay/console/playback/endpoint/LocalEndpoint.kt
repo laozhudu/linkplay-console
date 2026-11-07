@@ -15,16 +15,26 @@ import io.github.laozhudu.linkplay.console.playback.PlaybackRouter
  *
  * 于是每次有人问"本机为什么和音箱不一样"，答案都是"因为它是 if 的 else 分支"。
  *
- * ## 本机的真实能力（如实报，不假装）
+ * ## 本机的真实能力（用户 2026-11-07 纠错后重写）
  *
- * | 能力 | 有没有 | 为什么 |
+ * | 能力 | 有没有 | 依据 |
  * |---|---|---|
- * | 上一首 / 下一首 | **没有** | 本机播放器只播单曲（投流过来的就是一个 URL） |
- * | 队列 | **没有** | 同上 —— 画一个点开是空的播放列表比不画更糟 |
- * | 静音 | **没有** | 手机没有"设备侧静音"，只有音量 |
- * | 跳进度 | **有** | ExoPlayer 支持，本轮补的 |
+ * | 上一首 / 下一首 | **有** | ExoPlayer 的 `seekToNext/PreviousMediaItem` |
+ * | 队列 | **有** | ExoPlayer 的 `setMediaItems`（复数） |
+ * | 跳进度 | 有 | |
+ * | 静音 | **没有** | 手机只有音量，没有"设备侧静音"这个状态 |
  *
- * 这四条由 [capabilities] 如实声明，界面据此**不画**这些控件 —— 而不是画出来点了没反应。
+ * ## 上一版错在哪（必须记住）
+ *
+ * 我上一版写的是"本机没有队列、不能切歌"，理由写"本机播放器只播单曲"。
+ * 那是**实现缺口伪装成平台限制** —— ExoPlayer 从来就支持列表，
+ * 是我只调了 `setMediaItem`（单数），然后在日志里打了一句"暂不支持"。
+ *
+ * 用户一眼就看出来了：「通用 upnp 模块是能播放列表能切歌，**包括本机也是**，
+ * 你的认知错误」。
+ *
+ * **教训：能力表只写"平台真做不到的"，不写"我这轮没做"。**
+ * 后者应该进待办，不该进 `capabilities()` —— 写进去之后没有任何东西会提醒你补。
  */
 class LocalEndpoint(
     private val router: PlaybackRouter,
@@ -34,10 +44,15 @@ class LocalEndpoint(
 
     override val label: String = "本机"
 
-    override fun capabilities(): EndpointCapabilities = LOCAL_CAPS
+    override fun capabilities(): EndpointCapabilities = EndpointCapabilitiesCatalog.local
 
     override fun snapshot(): EndpointState {
         val ui = router.localState.value
+        // 队列信息从 **ExoPlayer 真实状态**读，不读 QueueBus —— 后者是发布用的副本，
+        // 用户点列表跳一首之后它不一定立刻跟上（切歌发生在 player 内部）。
+        val player = router.local.raw()
+        val count = player.mediaItemCount
+        val idx = player.currentMediaItemIndex
         return EndpointState(
             playing = ui.playing,
             // 本机不显示"歌手"：投流过来的只有一个标题，那个字段是空的
@@ -47,8 +62,8 @@ class LocalEndpoint(
             durationSec = ui.durationMs / 1000L,
             volume = ui.volume,
             mute = false,
-            queueIndex = 0,
-            queueCount = 0,
+            queueIndex = if (count > 0 && idx >= 0) idx + 1 else 0,
+            queueCount = count,
             statusText = when {
                 ui.playing -> "本机播放"
                 ui.hasQueue -> "已暂停"
@@ -63,9 +78,31 @@ class LocalEndpoint(
     }
 
     /** 本机没有队列 —— 安静忽略（`capabilities()` 已经让界面不画这个键）。 */
-    override suspend fun next() = Unit
+    override suspend fun next() {
+        router.local.seekNext()
+        syncIndexToBus()
+    }
 
-    override suspend fun previous() = Unit
+    override suspend fun previous() {
+        router.local.seekPrevious()
+        syncIndexToBus()
+    }
+
+    /**
+     * 切歌后把"第几首"同步给 `QueueBus`。
+     *
+     * 不这么做的话：列表高亮停在第 1 首，声音已经在第 2 首。
+     * 界面读 `queue.index`（列表高亮）和 `snapshot().queueIndex`（真相）来自两处 ——
+     * 必须让它们跟上，而不是在界面上再算一遍。
+     */
+    private fun syncIndexToBus() {
+        val i = router.local.raw().currentMediaItemIndex
+        if (i >= 0) {
+            runCatching {
+                io.github.laozhudu.linkplay.console.playback.QueueBus.syncDeviceIndex(i)
+            }
+        }
+    }
 
     override suspend fun seek(positionSec: Long) {
         router.local.seekTo(positionSec)
@@ -88,13 +125,5 @@ class LocalEndpoint(
     private companion object {
         /** 静音取消后给一个中间值，不是 100（突然巨响）。 */
         const val DEFAULT_UNMUTE_VOLUME = 60
-
-        val LOCAL_CAPS = EndpointCapabilities(
-            canNext = false,
-            canPrevious = false,
-            canSeek = true,
-            canMute = false,
-            hasQueue = false,
-        )
     }
 }

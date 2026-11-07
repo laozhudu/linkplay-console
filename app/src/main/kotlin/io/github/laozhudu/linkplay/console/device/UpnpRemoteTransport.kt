@@ -30,7 +30,19 @@ import io.github.laozhudu.upnp.GenericRenderer
  *
  * 通用渲染器只有 AVTransport + RenderingControl 两个服务，所以：
  * - 能：播放 / 暂停 / 停止 / 音量 / 静音 / 进度
- * - 不能：上一首下一首（它不持有我们的列表）、预设键、组网、声道
+ * - 不能：上一首下一首（设备回 701 transition not available，实测）、预设键、组网、声道
+ *
+ * ## ⚠️ "这条通道没有下一首" ≠ "用户在界面上不能切歌"
+ *
+ * 上一首下一首不在这条**设备命令**通道里，因为它走不通（实测 701）。
+ * 但用户在自己的 App 里是**能切**的 —— 我们从自己的列表里重投下一首
+ * （`PlaybackViewModel.nextByReplay`），效果一样。
+ *
+ * 所以：
+ *   - `supports(Next)` = false  ← 这条通道发不出去
+ *   - `EndpointCapabilities.canNext` = true  ← 界面该画这个按钮
+ *
+ * 把这两件事混在一起，就是上一版删掉切歌按钮的原因。
  *
  * 不能的一律 `supports = false`，界面据此不画按钮（项目铁律：不给按了没反应的按钮）。
  */
@@ -46,6 +58,7 @@ class UpnpRemoteTransport(
         RemoteCommand.Play -> true
         RemoteCommand.Pause -> true
         RemoteCommand.Stop -> true
+
         is RemoteCommand.Seek -> true
         else -> false
     }
@@ -61,6 +74,7 @@ class UpnpRemoteTransport(
                 RemoteCommand.Play -> renderer.play()
                 RemoteCommand.Pause -> renderer.pause()
                 RemoteCommand.Stop -> renderer.stop()
+
                 is RemoteCommand.Seek -> renderer.seek(command.positionSec.toLong())
                 else -> return DispatchResult.Failed(DispatchFailure.Unsupported)
             }

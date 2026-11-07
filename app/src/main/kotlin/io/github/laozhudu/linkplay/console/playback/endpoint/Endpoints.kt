@@ -52,13 +52,7 @@ object Endpoints {
             UpnpEndpoint(vm, ip, input, label)
         } else {
             LinkPlayEndpoint(vm, ip, input, label) {
-                EndpointCapabilities(
-                    canNext = capabilities.supportsNextPrev,
-                    canPrevious = capabilities.supportsNextPrev,
-                    canSeek = capabilities.supportsSeek,
-                    canMute = capabilities.supportsMute,
-                    hasQueue = true,
-                )
+                EndpointCapabilitiesCatalog.linkPlay(capabilities)
             }
         }
     }

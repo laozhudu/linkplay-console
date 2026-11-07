@@ -125,6 +125,18 @@ data class EndpointCapabilities(
     val canSeek: Boolean,
     /** 有"静音"这个独立状态吗（本机没有，只有音量）。 */
     val canMute: Boolean,
-    /** 持有可查看的队列吗。 */
+    /**
+     * **我们有列表给用户看、让他点第 N 首吗？**
+     *
+     * ⚠️ 这问的不是"设备持有队列吗"。设备是否持有整份列表是
+     * `DeviceCapabilities.supportsPlayQueue`（LinkPlay 私有），两者完全无关：
+     *
+     * | | 含义 | 谁有 |
+     * |---|---|---|
+     * | `supportsPlayQueue` | 设备持有列表，App 退出照播 | 只有 DOSS |
+     * | `hasQueue` | 界面能显示列表、能点选 | **三种后端都有** |
+     *
+     * 上一版把这两个混为一谈，导致本机和电视盒子的播放列表整块消失。
+     */
     val hasQueue: Boolean,
 )

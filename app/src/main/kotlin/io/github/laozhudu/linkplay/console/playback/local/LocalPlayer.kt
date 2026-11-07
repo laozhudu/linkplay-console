@@ -83,7 +83,11 @@ source = PlayerUiState.Source.Local))
     private val listener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) = publish()
         override fun onPlaybackStateChanged(playbackState: Int) = publish()
-        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) = publish()
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            // 切歌后标题要跟着换，否则界面一直显示第一首
+            currentTitle = mediaItem?.mediaId
+            publish()
+        }
     }
 
     /**
@@ -127,6 +131,54 @@ source = PlayerUiState.Source.Local))
         player.prepare()
         player.play()
         publish()
+    }
+
+    /**
+     * **整份队列交给本机播放器**（用户 2026-11-07：「包括本机也是」）。
+     *
+     * ## 原来为什么只播一首
+     *
+     * 这里之前是 `setMediaItem`（单数）—— ExoPlayer 明明支持 `setMediaItems`（复数）、
+     * 支持 `seekToNext/PreviousMediaItem`，我却只用了单数版本，然后在调用处
+     * 打印一句「本机播放：只播这一首（本地列表暂不支持）」。
+     *
+     * **那是实现缺口，不是平台限制。** 把它写进能力表（`canNext = false`）
+     * 就是把"我没做"伪装成"做不到"—— 用户点列表第 5 首只出第 5 首，然后
+     * 下一首按钮是灰的，他会以为本机播放器就是这么弱。
+     *
+     * ## 和 DOSS 的区别（别搞混）
+     *
+     * DOSS 的 `setPlayerCmd:playlist` 是**把整份列表交给音箱**，App 退出照播。
+     * 本机这个队列**活在 App 里**，App 被杀就没了 —— 对"手机上听"这个场景足够。
+     */
+    fun playQueue(urls: List<Pair<String, String?>>, startAt: Int) {
+        if (urls.isEmpty()) return
+        val items = urls.map { (url, title) ->
+            MediaItem.Builder()
+                .setUri(url)
+                .setMediaId(title ?: url)
+                .build()
+        }
+        currentTitle = urls.getOrNull(startAt)?.second
+        player.setMediaItems(items, startAt.coerceIn(0, urls.lastIndex), 0L)
+        player.prepare()
+        player.play()
+        publish()
+    }
+
+    /** 下一首。没有下一首时 ExoPlayer 会自己停 —— 不假装切换成功。 */
+    fun seekNext() {
+        if (player.hasNextMediaItem()) {
+            player.seekToNextMediaItem()
+            publish()
+        }
+    }
+
+    fun seekPrevious() {
+        if (player.hasPreviousMediaItem()) {
+            player.seekToPreviousMediaItem()
+            publish()
+        }
     }
 
     fun pause() {

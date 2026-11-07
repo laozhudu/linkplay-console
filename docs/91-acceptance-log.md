@@ -3674,3 +3674,76 @@ PlaybackDispatcher    12 个 when(output()) → 0
 | 真机：本机按音量键音量条是否立刻跟（上一轮的 ContentObserver） | **未验** |
 | 真机：电视盒子音量键能不能调它 | **未验** |
 | 通用 UPnP 的 `Set` 类动作（从来没测过） | **未验** |
+
+## 第七十三轮 · 三个后端真正能播列表、能切歌
+
+用户：「通用 upnp 模块是能播放列表能切歌，包括本机也是，你的认知错误」。
+
+### 我犯的错（这一轮的核心）
+
+上一版我在能力表里写了：
+
+```kotlin
+canNext = false, canPrevious = false, hasQueue = false    // 本机
+canNext = false, canPrevious = false, hasQueue = false    // 通用 UPnP
+```
+
+理由分别是"本机播放器只播单曲"和"DLNA 标准里没有这个动作"。
+
+**两条都是假的。**
+
+| 我写的理由 | 真相 |
+|---|---|
+| 本机播放器只播单曲 | ExoPlayer 有 `setMediaItems`（复数）/ `seekToNextMediaItem`，**是我只调了单数版本**，还在日志里打了一句"暂不支持" |
+| DLNA 标准里没有下一首 | `Next` / `Previous` 是 AVTransport 的标准可选动作；而且**就算设备不会切，我们有列表可以重投** |
+
+**这是最坏的一种错：把"我没做"伪装成"平台做不到"。**
+写进 `capabilities()` 之后，界面上那个按钮就消失了，而且**没有任何东西会提醒你补**。
+
+### 两个"队列"必须分清
+
+| | 含义 | DOSS | 通用 UPnP | 本机 |
+|---|---|---|---|---|
+| `supportsPlayQueue` | **设备持有**整份列表，App 退出照播 | 有（私有） | 无 | 无 |
+| `hasQueue`（界面） | **我们**有列表可看、可点第 N 首 | 有 | **有** | **有** |
+
+上一版把这两个混为一谈，于是本机和电视盒子的播放列表整块消失。
+
+### 两个"能不能切"也必须分清
+
+| | 含义 | 通用 UPnP |
+|---|---|---|
+| `supportsNextPrev` | **它自己**会不会换（实测回 701） | **false** |
+| `canNext`（界面） | **我们**能不能让它换（重投下一首） | **true** |
+
+只差一个词，答案相反。旧测试里那条 `generic dmr cannot do next or previous`
+写的是前一个、是对的，我误以为它在说后一个。
+
+### 实际补的代码
+
+| 改动 | 位置 |
+|---|---|
+| 本机真能播队列 | `LocalPlayer.playQueue(urls, startAt)` → `setMediaItems` |
+| 本机真能切歌 | `LocalPlayer.seekNext/seekPrevious` + 切歌后更新标题 |
+| 队列发布到界面 | `PlaybackRouter.playQueue` 的 Local 分支补 `QueueBus.begin(LOCAL_OWNER, items, startAt)` |
+| 本机列表高亮跟着走 | `LocalEndpoint.syncIndexToBus()` |
+| 通用 UPnP 重投切歌 | `PlaybackViewModel.nextByReplay/previousByReplay` |
+| 切歌策略各写各的 | `DeviceEndpoint.next/previous` 改 **abstract**，三个后端分别实现 |
+| 能力表集中 | 新增 `EndpointCapabilitiesCatalog`（三张表并排，差别一眼可见） |
+| `QueueBus.begin` 补 startAt | 原来写死 0：从第 8 首起播，列表显示"第 1 首" |
+
+### 数字
+
+```
+测试      1089 → 1095（+6，全部是"防回退"的断言）
+脚本      8/8 PASS
+能力表    false 只剩一个：本机的静音（手机真的没有这个状态）
+```
+
+### 没验的
+
+| 项 | 状态 |
+|---|---|
+| 真机：本机播队列、切歌 | **未验** |
+| 真机：电视盒子重投切歌（可能每次有 1~2 秒 SetAVTransportURI 停顿） | **未验** |
+| 真机：三种后端切歌按钮是否都出现 | **未验** |

@@ -27,7 +27,7 @@ import io.github.laozhudu.linkplay.console.playback.PlaybackViewModel
  */
 abstract class DeviceEndpoint(
     /** 当前受控的 VM。取不到时所有控制方法返回 false/无操作 —— **不假装成功**。 */
-    private val vm: () -> PlaybackViewModel?,
+    protected val vm: () -> PlaybackViewModel?,
     private val ip: String,
     /** 每帧现取状态（纯读，不触发 IO）。 */
     private val input: () -> DeviceSnapshotInput,
@@ -77,15 +77,21 @@ abstract class DeviceEndpoint(
         if (input().playing) target.pause() else target.play()
     }
 
-    override suspend fun next() {
-        if (!capabilities().canNext) return
-        vm()?.next()
-    }
+    /**
+     * **切歌是各后端自己的策略，所以这里是抽象的**（不是偷懒的 `vm().next()`）。
+     *
+     * | 后端 | 怎么切 |
+     * |---|---|
+     * | DOSS | 直接发 `setPlayerCmd:next`，设备自己换 |
+     * | 通用 UPnP | **重投下一首** —— 设备对 AVTransport.Next 回 701（实测） |
+     * | 本机 | ExoPlayer 的 `seekToNextMediaItem` |
+     *
+     * 上一版把三个都写成 `vm().next()`，对通用 UPnP 就是发一条必然失败的命令 ——
+     * 而失败又被能力表的 `canNext = false` 挡住了，所以**永远没人发现它坏着**。
+     */
+    abstract override suspend fun next()
 
-    override suspend fun previous() {
-        if (!capabilities().canPrevious) return
-        vm()?.previous()
-    }
+    abstract override suspend fun previous()
 
     override suspend fun seek(positionSec: Long) {
         if (!capabilities().canSeek) return

@@ -16,11 +16,19 @@ import io.github.laozhudu.linkplay.console.playback.PlaybackViewModel
  * | 音量 / 静音 | 有 | 有（`RenderingControl` 标准动作）|
  * | 播放 / 暂停 / 停止 | 有 | 有（`AVTransport`）|
  * | 跳进度 | 有 | 有 |
- * | **上一首 / 下一首** | 有 | **没有** —— DLNA 标准里没有这个动作 |
- * | **队列** | 有 | **没有** —— 它自己握着列表，我们读不到内容 |
+ * | **上一首 / 下一首** | 有 | **有** —— AVTransport 的 `Next` / `Previous` |
+ * | **队列** | 有 | **有** —— 但那是**我们的**队列，不是它的 |
  *
- * 所以这台在界面上**不该出现切歌按钮**。原来正是因为
- * 界面按 `DeviceCapabilities` 猜、而能力表报得太宽，才出现"点了没反应"。
+ * ## 两个"队列"必须分清（我上一版就混了）
+ *
+ * | | 含义 | DOSS | 通用 UPnP |
+ * |---|---|---|---|
+ * | `supportsPlayQueue` | 设备**持有**整份列表，App 退出照播 | 有（私有） | 没有 |
+ * | `hasQueue`（本接口） | **我们**有列表可看、可点第 N 首 | 有 | **有** |
+ *
+ * 上一版我把后者写成 false，理由是"它自己握着列表，我们读不到内容"——
+ * 混淆了这两件事。界面上的播放列表一直是**我们自己的**列表，
+ * 逐首投给它就行，跟它持不持有列表无关。
  *
  * ## 关于 `.175` 的 80 端口
  *
@@ -37,22 +45,23 @@ class UpnpEndpoint(
     /** 通用渲染器上放的可能是任何人推的内容，措辞用中性的「播放中」。 */
     override val statusWord: String = "播放中"
 
-    /**
-     * **写死的能力表** —— 这是这个模块最重要的一行。
-     *
-     * 不查设备、不查探测结果：DLNA 标准里就是没有下一首。
-     * 万一某个盒子自己实现了，那是它的扩展，我们不为它开例外
-     * （开了以后每个盒子都要单独适配，正是 docs/50 说的"唯一实现者污染抽象"）。
-     */
-    override fun capabilities(): EndpointCapabilities = UPnP_CAPS
+    /** 能力表在 `EndpointCapabilitiesCatalog`（三张表并排放，差别一眼可见）。 */
+    override fun capabilities(): EndpointCapabilities = EndpointCapabilitiesCatalog.genericUpnp
 
-    private companion object {
-        val UPnP_CAPS = EndpointCapabilities(
-            canNext = false,
-            canPrevious = false,
-            canSeek = true,
-            canMute = true,
-            hasQueue = false,
-        )
+    /**
+     * **重投下一首** —— 不是发 `AVTransport.Next`。
+     *
+     * 那台 AirReceiver 对 `Next` 回 701 transition not available（实测，
+     * 见 `DeviceCapabilitiesTest` 里那条断言）。它没有自己的队列，不知道切到哪。
+     *
+     * 但我们有队列，把下一首重新投给它，效果一样 ——
+     * 这就是用户说的「通用 upnp 模块是能播放列表能切歌」的实现方式。
+     */
+    override suspend fun next() {
+        vm()?.nextByReplay()
+    }
+
+    override suspend fun previous() {
+        vm()?.previousByReplay()
     }
 }
