@@ -3747,3 +3747,75 @@ canNext = false, canPrevious = false, hasQueue = false    // 通用 UPnP
 | 真机：本机播队列、切歌 | **未验** |
 | 真机：电视盒子重投切歌（可能每次有 1~2 秒 SetAVTransportURI 停顿） | **未验** |
 | 真机：三种后端切歌按钮是否都出现 | **未验** |
+
+## 第七十四轮 · 通道判定改白名单（DOSS 是 UPnP 的特例）
+
+用户：「设备页，扫描，doss 系列是适配通用 upnp 的，但通用 upnp 不一定是 doss，
+doss 有特殊标识的」。
+
+### 这句话的技术含义
+
+- **DOSS 本身就是 UPnP 设备**（有 AVTransport + RenderingControl）
+- 所以「是 UPnP」**推不出**「是 DOSS」
+- 判定只能反过来：**有 DOSS 的私有标识**才算 DOSS
+
+私有标识有两个（`DeviceProfile.detect()` 里早就是这个顺序）：
+1. 描述里声明 `urn:schemas-wiimu-com:service:PlayQueue:1`
+2. `getStatusEx` httpapi 答得上来（探活时走的就是这条 —— 能答就是铁证）
+
+### 我错在哪：反选
+
+`Endpoints.current` 上一版写的是：
+
+```kotlin
+if (group == DeviceGroup.OtherPlayer) UpnpEndpoint else LinkPlayEndpoint
+```
+
+这是**反选**，它默认"世界上只有 DOSS 和那台电视盒子两种设备"。可是 `group` 有三档：
+
+| group | 什么时候 |
+|---|---|
+| `MySpeaker` | 有私有 PlayQueue **且**能组网 ← 这才是 DOSS |
+| `OtherPlayer` | 有 AVTransport 的普通渲染器 |
+| `Other` | **还没探全 / 不可控** ← 反选把这一类塞进了 DOSS 分支 |
+
+于是"刚扫到还没探完"或"探测超时"的设备被当成 DOSS，一路发 LinkPlay 私有命令，
+全部静默失败。现在改成 `group == MySpeaker` 才走私有通道。
+
+### 为什么判不出来时要偏向通用通道
+
+**两个方向错一个能忍、一个不能忍：**
+
+| 情况 | 结果 |
+|---|---|
+| 用通用 SOAP 控 DOSS | **能工作**（少组网/队列/预设，但声音出得来） |
+| 用 LinkPlay 私有命令控通用设备 | **静默失败**（连报错都没有） |
+
+所以 `DeviceProfileCache` 的默认也从 `LINKPLAY`（功能全开）改成通用渲染器。
+原注释写的是"未知设备不乱降级"—— 那个理由在**家里只有 DOSS** 时成立，
+加了一台通用渲染器之后就不成立了。
+
+### 扫描结果的展示也一并修了
+
+判定早就分两路做对了（`discoverLinkPlayDevices` / `discoverMediaRenderers`），
+**但结果合并成一个列表直接显示** —— 界面上只有「名字 / IP / 添加」，
+用户看不出这一行是音箱还是电视，而这两者加进来之后能用的功能差一个量级。
+
+现在副标题带上种类：
+- `192.168.99.153 · 音箱 · 能收整份列表`
+- `192.168.99.175 · 通用播放设备 · 逐首投`
+
+### 数字
+
+```
+测试   1095 → 1100（+5，全是防回退断言）
+脚本   8/8 PASS
+```
+
+### 没验的
+
+| 项 | 状态 |
+|---|---|
+| 真机：扫描时两台设备是否显示正确种类 | **未验** |
+| 真机：把一台通用设备加进来后是否落到「其它播放设备」组 | **未验** |
+| 真机：老固件 doss3 探测失败时是否退化成"逐首投"而不是整台失效 | **未验** |

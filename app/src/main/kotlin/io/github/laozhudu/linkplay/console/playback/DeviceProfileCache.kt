@@ -13,7 +13,20 @@ import io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile
  * 每次都去拉一遍描述文件既慢又没必要 —— 能力档在一台设备的生命周期里几乎不变。
  *
  * 所以：`ConsoleViewModel` 探活时检测一次，写进这里；起播时读缓存。
- * 缓存里没有时**默认按 LinkPlay 处理**（未知设备不乱降级，保持既有行为不变）。
+ *
+ * ## 缓存里没有时按什么处理（用户 2026-11-07 纠正后改了）
+ *
+ * 原来是 `DeviceCapabilities.LINKPLAY`（功能全开），理由是"未知设备不乱降级"。
+ * 那个理由在**家里只有 DOSS** 时成立，加了一台通用渲染器之后就不成立了：
+ *
+ * > 「doss 系列是适配通用 upnp 的，但通用 upnp 不一定是 doss，doss 有特殊标识的」
+ *
+ * 未知 = 可能是一台从没见过的通用设备。这时按 LINKPLAY 处理会：
+ * ① 界面上画满组网 / 预设键 / 设备侧队列 —— 全是按了没反应的按钮；
+ * ② 起播时尝试把整份列表推给设备（`setPlayerCmd:playlist`）—— 通用设备不认，静默失败。
+ *
+ * 现在按**通用渲染器**处理（最保守但真能用）。DOSS 探测失败时也只是退化成
+ * "逐首投"，声音照样出得来 —— 比"整台设备看起来都不响应"好得多。
  *
  * ## 为什么不放进 `SavedDevice`
  *
@@ -42,14 +55,23 @@ object DeviceProfileCache {
      * 取能力档。没记录过就返回 [DeviceProfile.LINKPLAY] —— 见类注释，宁可按"功能全开"处理，
      * 也不要因为一次没探测到就把已有的设备侧队列关掉。
      */
-    fun of(ip: String): DeviceProfile = entries[ip]?.profile ?: DeviceProfile.LINKPLAY
+    fun of(ip: String): DeviceProfile = entries[ip]?.profile ?: DeviceProfile.GENERIC_DMR
+
+    /**
+     * **确认**这是 DOSS 档吗（有私有 PlayQueue 且能组网）。
+     *
+     * 名字里带 Confirmed 是刻意的：区分"我们探测确认过"和"没记录、按默认处理"。
+     * 播放页选通道只看这个 —— DOSS 有特殊标识，不是"不是别人就是它"。
+     */
+    fun isConfirmedDoss(ip: String): Boolean =
+        entries[ip]?.capabilities?.group == io.github.laozhudu.linkplay.protocol.dlna.DeviceGroup.MySpeaker
 
     /**
      * 取能力表。没记录过就返回 [DeviceCapabilities.LINKPLAY] ——
      * 与 [of] 的默认一致：宁可按功能全开处理，也不要把已有设备的设备侧队列关掉。
      */
     fun capabilitiesOf(ip: String): DeviceCapabilities =
-        entries[ip]?.capabilities ?: DeviceCapabilities.LINKPLAY
+        entries[ip]?.capabilities ?: DeviceCapabilities.genericDmr(hasRenderingControl = true)
 
     /** 这台设备能不能用 LinkPlay 私有的设备侧队列（PlayQueue）。 */
     fun supportsDeviceQueue(ip: String): Boolean = capabilitiesOf(ip).supportsPlayQueue
