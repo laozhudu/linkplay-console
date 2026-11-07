@@ -52,7 +52,39 @@ internal class DeviceControl(private val host: ConsoleHost) {
     // 类型显式声明为接口：RemoteTransport 的注释写着「调用方只能通过 dispatch 发指令，
     // 拿不到拼字符串的能力」—— 声明成具体类时那句约束就落不了地。
     // 将来接蓝牙/红外只是多一个实现，这里一行不用改（docs/49、docs/60）。
-    private val transport: RemoteTransport = LinkPlayTransport(host.http())
+    private val linkPlayTransport: RemoteTransport = LinkPlayTransport(host.http())
+
+    /**
+     * 通用 DLNA 渲染器（电视盒子）的通道。
+     *
+     * `GenericRenderer` 需要根据 IP 拿到"描述地址 + 服务表"，所以这里现取现造，
+     * 构造失败（设备没应答）就返回 null，由 transport 报 `Unreachable`。
+     */
+    private val upnpTransport: RemoteTransport = io.github.laozhudu.linkplay.console.device.UpnpRemoteTransport { ip ->
+        withContext(Dispatchers.IO) {
+            val location = host.state.value.saved.firstOrNull { it.ip == ip }?.location
+                ?: io.github.laozhudu.upnp.GenericRenderer.defaultLocation(ip)
+            runCatching { io.github.laozhudu.upnp.GenericRenderer.describe(location) }.getOrNull()
+        }
+    }
+
+    /**
+     * **按设备类型选通道**（真机 bug 的修法）。
+     *
+     * 原来这里写死 `LinkPlayTransport`，于是给电视盒子也发 LinkPlay 私有 httpapi ——
+     * 设备不认，静默失败，用户按了音量键没有任何反应也没有提示。
+     *
+     * 分派依据是**探测出来的能力**（`DeviceCapabilities.group`），不是品牌名：
+     * 型号标签会随固件变，能力是问出来的。
+     */
+    private fun transportFor(ip: String): RemoteTransport =
+        if (io.github.laozhudu.linkplay.console.playback.DeviceProfileCache.capabilitiesOf(ip).group ==
+            io.github.laozhudu.linkplay.protocol.dlna.DeviceGroup.OtherPlayer
+        ) {
+            upnpTransport
+        } else {
+            linkPlayTransport
+        }
 
     /**
      * 下发一条语义指令；**失败时把原因翻译成人话写进 error**。
@@ -62,7 +94,7 @@ internal class DeviceControl(private val host: ConsoleHost) {
      * 否则用户点「光纤」什么都没发生，就是铁律禁止的"按了没反应的按钮"。
      */
     private suspend fun dispatch(ip: String, command: RemoteCommand) {
-        val result = transport.dispatch(ip, command)
+        val result = transportFor(ip).dispatch(ip, command)
         if (result is DispatchResult.Failed) throw java.io.IOException(result.failure.describe())
     }
 
@@ -119,7 +151,7 @@ internal class DeviceControl(private val host: ConsoleHost) {
         sendNow = { ip, v ->
             host.launch("volumeKey") {
                 withContext(Dispatchers.IO) {
-                    val result = transport.dispatch(ip, RemoteCommand.SetVolume(v))
+                    val result = transportFor(ip).dispatch(ip, RemoteCommand.SetVolume(v))
                     if (result is DispatchResult.Failed) {
                         host.log("音量下发失败：${result.failure.describe()}")
                     }
@@ -147,7 +179,7 @@ internal class DeviceControl(private val host: ConsoleHost) {
         // 合并通道是为拖动设计的，按键本来就是离散事件，多一次 60ms 等待只会显得钝。
         host.launch("volumeKey") {
             withContext(Dispatchers.IO) {
-                val result = transport.dispatch(ip, RemoteCommand.SetVolume(next))
+                val result = transportFor(ip).dispatch(ip, RemoteCommand.SetVolume(next))
                 if (result is DispatchResult.Failed) host.log("音量键下发失败：${result.failure.describe()}")
             }
         }
@@ -269,7 +301,7 @@ internal class DeviceControl(private val host: ConsoleHost) {
             }
             if (!ok) {
                 withContext(Dispatchers.IO) {
-                    transport.dispatch(device.ip, if (playing) RemoteCommand.Pause else RemoteCommand.Play)
+                    transportFor(device.ip).dispatch(device.ip, if (playing) RemoteCommand.Pause else RemoteCommand.Play)
                 }
             }
             delay(800)
@@ -320,7 +352,7 @@ internal class DeviceControl(private val host: ConsoleHost) {
                 }.getOrDefault(false)
             }
             if (!ok) {
-                withContext(Dispatchers.IO) { transport.dispatch(masterIp, RemoteCommand.Play) }
+                withContext(Dispatchers.IO) { transportFor(masterIp).dispatch(masterIp, RemoteCommand.Play) }
             }
             host.log("全部播放 → ${st.groupMasterName ?: masterIp}（组内 ${st.groupMembers.size.coerceAtLeast(1)} 台）")
             // 让界面的"在放什么"立刻刷新，不用等 3 秒心跳
@@ -345,7 +377,7 @@ internal class DeviceControl(private val host: ConsoleHost) {
                         true
                     }.getOrDefault(false)
                 }
-                if (!ok) withContext(Dispatchers.IO) { transport.dispatch(ip, RemoteCommand.Pause) }
+                if (!ok) withContext(Dispatchers.IO) { transportFor(ip).dispatch(ip, RemoteCommand.Pause) }
             }
             host.log("全部暂停 → ${targets.size} 台")
         }
@@ -362,7 +394,7 @@ internal class DeviceControl(private val host: ConsoleHost) {
     fun pressPreset(uiIndex: Int) {
         val ip = host.state.value.selectedIp ?: return
         host.run("预设键 ${uiIndex + 1}") {
-            val result = transport.dispatch(ip, RemoteCommand.Preset(uiIndex))
+            val result = transportFor(ip).dispatch(ip, RemoteCommand.Preset(uiIndex))
             host.log("预设键 ${uiIndex + 1} → ${result.describeForLog()}")
             delay(800)
             host.refreshCards()
