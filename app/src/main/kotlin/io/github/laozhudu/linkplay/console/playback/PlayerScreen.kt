@@ -328,7 +328,17 @@ fun PlayerScreen(
     } else {
         state.progress
     }
-    val volumeNow = if (isLocalOutput) localUi.volume else state.volume
+    /*
+     * 设备侧音量**优先读 VolumeBus**，不是 `state.volume`。
+     *
+     * 为什么：全站有四个地方能改音量（播放页拖、首页行内拖、音量键、原厂 App），
+     * 它们都汇到 VolumeBus。如果这里读 `state.volume`（VM 自己那份副本），
+     * 就要求两条更新路径**永远同步** —— 而历史上它们正是先后漏掉过。
+     *
+     * VolumeBus 是唯一真相；`state.volume` 只是它的一条旧副本，兜底用。
+     */
+    val busVolume = VolumeBus.volumeOf(deviceIp)?.volume
+    val volumeNow = if (isLocalOutput) localUi.volume else (busVolume ?: state.volume)
     val shownVolume = volDraft ?: (volumeNow.toFloat() / 100f)
     val art = state.albumArtUrl?.takeIf { it.isNotBlank() }
         ?: queue.current?.albumArtUrl?.takeIf { it.isNotBlank() }
