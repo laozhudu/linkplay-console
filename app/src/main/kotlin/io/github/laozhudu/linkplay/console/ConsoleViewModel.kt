@@ -209,6 +209,18 @@ data class ConsoleUiState(
      * 加音箱和加电视盒子，后面能用的功能差一个量级。
      */
     val scanKinds: Map<String, String> = emptyMap(),
+
+    /**
+     * 扫描那一刻**已经确认的档位**（ip → profile）。
+     *
+     * 与 [scanKinds] 的分工：那是给人看的文字，这是给逻辑用的结论。
+     *
+     * 为什么必须留着：`add()` 之后设备会重新探一次，而**刚入网的音箱 httpapi
+     * 常常还没起好**，那一探会把它判成通用设备 ——
+     * 用户：「我刚加了一个音箱，也认出音箱，为什么没收到音箱系列里」。
+     * 扫描时手上就有正确答案，没有理由丢掉再猜一遍。
+     */
+    val scanProfiles: Map<String, DeviceProfile> = emptyMap(),
                 /**
      * 组网结果的一句话说明。
      *
@@ -487,7 +499,9 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         //    电视盒子会被判成"离线"，卡片上全是点不动的入口。
         val (upnpProfile, upnpCaps) = withContext(Dispatchers.IO) { profileOfSaved(d) }
         if (upnpProfile == DeviceProfile.GENERIC_DMR) {
-            putCardProfile(d.uuid, DeviceProfile.GENERIC_DMR, upnpCaps)
+            // 弱结论：只证明"它有 AVTransport"，不证明"它不是音箱"。
+            // 已确认是音箱的不会因为一次 httpapi 超时就被降级
+            putCardProfile(d.uuid, DeviceProfile.GENERIC_DMR, upnpCaps, weak = true)
             return ProbeKind.DMR
         }
         // ② 剩下的可能是「IP 变了」：交给调用方整批扫一次 SSDP（并发时各扫会抢端口）
@@ -634,14 +648,40 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         uuid: String,
         profile: DeviceProfile,
         capabilities: DeviceCapabilities = DeviceCapabilities.NONE,
+        /**
+         * 这条结论有多强。见 `DeviceProfileCache.putWeak`：
+         * 只拉到描述 = 弱；`getStatusEx` 答上来了 = 强。
+         */
+        weak: Boolean = false,
+        /** 新建档时 `saved` 里可能刚好查不到这台，直接给地址更稳。 */
+        ipHint: String? = null,
     ) {
-        _state.value.saved.firstOrNull { it.uuid == uuid }?.ip?.let { ip ->
-            io.github.laozhudu.linkplay.console.playback.DeviceProfileCache.put(ip, profile, capabilities)
+        val ip = ipHint ?: _state.value.saved.firstOrNull { it.uuid == uuid }?.ip
+        if (ip != null) {
+            if (weak) {
+                io.github.laozhudu.linkplay.console.playback.DeviceProfileCache
+                    .putWeak(ip, profile, capabilities)
+            } else {
+                io.github.laozhudu.linkplay.console.playback.DeviceProfileCache
+                    .put(ip, profile, capabilities)
+            }
+        }
+        // 弱结论下，卡片也要**跟着缓存走**：
+        // 缓存里如果还认为它是已确认的音箱，卡片就不能被这次推断降级
+        val effProfile = if (weak && ip != null) {
+            io.github.laozhudu.linkplay.console.playback.DeviceProfileCache.of(ip)
+        } else {
+            profile
+        }
+        val effCaps = if (weak && ip != null) {
+            io.github.laozhudu.linkplay.console.playback.DeviceProfileCache.capabilitiesOf(ip)
+        } else {
+            capabilities
         }
         _state.update { st ->
             st.copy(
                 cards = st.cards + (uuid to (st.cards[uuid] ?: DeviceCard())
-                    .copy(profile = profile, capabilities = capabilities)),
+                    .copy(profile = effProfile, capabilities = effCaps)),
             )
         }
     }
@@ -764,11 +804,16 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                     linkplay.forEach { put(it.ip, "音箱 · 能收整份列表") }
                     renderers.forEach { put(it.ip, "通用播放设备 · 逐首投") }
                 }
+                val profiles = buildMap {
+                    linkplay.forEach { put(it.ip, DeviceProfile.LINKPLAY) }
+                    renderers.forEach { put(it.ip, DeviceProfile.GENERIC_DMR) }
+                }
                 _state.update {
                     it.copy(
                         scanning = false,
                         devices = fresh,
                         scanKinds = kinds,
+                        scanProfiles = profiles,
                         filteredOutCount = (all.size - linkplay.size - renderers.size).coerceAtLeast(0),
                     )
                 }
@@ -879,6 +924,22 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         )
         save(saved)
         _state.update { it.copy(devices = it.devices.filterNot { d -> d.ip == device.ip }) }
+        // **用扫描那一刻的结论直接建档**。
+        // 不这么做的话，空卡的能力是 NONE → 落进「其它设备」组，
+        // 而接下来那一探如果碰上 httpapi 还没就绪，还会把它判成通用设备。
+        _state.value.scanProfiles[device.ip]?.let { known ->
+            putCardProfile(
+                uuid = saved.uuid,
+                profile = known,
+                capabilities = if (known == DeviceProfile.LINKPLAY) {
+                    DeviceCapabilities.LINKPLAY
+                } else {
+                    DeviceCapabilities.genericDmr(hasRenderingControl = true)
+                },
+                ipHint = device.ip,
+            )
+            log("建档：${saved.name} 按扫描结果记为 ${if (known == DeviceProfile.LINKPLAY) "音箱" else "通用播放设备"}")
+        }
         log("已保存 ${saved.name}")
         open(saved)
     }

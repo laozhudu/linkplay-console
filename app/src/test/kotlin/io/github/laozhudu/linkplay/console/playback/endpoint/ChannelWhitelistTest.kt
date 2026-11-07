@@ -96,6 +96,53 @@ class ChannelWhitelistTest {
     }
 
     @Test
+    fun `已确认是音箱的，不会被一次描述推断降级`() {
+        // 真机场景（用户 2026-11-07）：
+        //   扫描认出了音箱 → 添加 → 立刻重探 → 新入网音箱的 httpapi 还没起好
+        //   → 退到描述文件 → 有 AVTransport → 判成"通用播放设备" → 掉出音箱组
+        //
+        // 修复：描述推断只是**弱结论**，不许把已确认的 DOSS 降级。
+        DeviceProfileCache.put("10.0.0.12", DeviceProfile.LINKPLAY, DeviceCapabilities.LINKPLAY)
+        assertTrue(DeviceProfileCache.isConfirmedDoss("10.0.0.12"))
+
+        DeviceProfileCache.putWeak(
+            "10.0.0.12",
+            DeviceProfile.GENERIC_DMR,
+            DeviceCapabilities.genericDmr(hasRenderingControl = true),
+        )
+
+        assertTrue(
+            "一次 httpapi 超时不该把音箱踢出音箱组",
+            DeviceProfileCache.isConfirmedDoss("10.0.0.12"),
+        )
+    }
+
+    @Test
+    fun `弱结论可以把未知设备认成通用播放设备`() {
+        // 反方向必须允许：从不认识 → 认出是通用设备，这是进步不是降级。
+        DeviceProfileCache.putWeak(
+            "10.0.0.13",
+            DeviceProfile.GENERIC_DMR,
+            DeviceCapabilities.genericDmr(hasRenderingControl = true),
+        )
+
+        assertFalse(DeviceProfileCache.isConfirmedDoss("10.0.0.13"))
+        assertTrue("至少知道它能出声", DeviceProfileCache.capabilitiesOf("10.0.0.13").supportsVolume)
+    }
+
+    @Test
+    fun `强结论可以纠正弱结论`() {
+        // 之前只拉到描述判成通用设备，这次 httpapi 答上来了 → 应该升格成音箱。
+        val generic = DeviceCapabilities.genericDmr(hasRenderingControl = true)
+        DeviceProfileCache.putWeak("10.0.0.14", DeviceProfile.GENERIC_DMR, generic)
+        assertFalse(DeviceProfileCache.isConfirmedDoss("10.0.0.14"))
+
+        DeviceProfileCache.put("10.0.0.14", DeviceProfile.LINKPLAY, DeviceCapabilities.LINKPLAY)
+
+        assertTrue("强结论必须能把它纠正过来", DeviceProfileCache.isConfirmedDoss("10.0.0.14"))
+    }
+
+    @Test
     fun `通用设备确认后不冒充 DOSS`() {
         DeviceProfileCache.put(
             "10.0.0.11",
