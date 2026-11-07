@@ -281,6 +281,37 @@ class DeviceProfileTest {
         )
     }
 
+    /**
+     * **探活用的候选地址必须窄**。
+     *
+     * 这条测试存在的原因：我为了"手动填 IP 也能加通用设备"，一度往
+     * `candidates()` 里塞了 `:3500` 和 `:80` 的候选。
+     *
+     * 那个函数被 `probeOne` 每轮对每台设备调用一次 —— 三台音箱 × 每轮 × 4 个
+     * 多出来的地址 × 每次可能等超时，探活会明显变慢，而用户根本看不出为什么。
+     *
+     * 正确做法是分成两个函数：探活用窄的，手动添加用宽的。
+     */
+    @Test
+    fun `探活候选地址只有两个，不许加`() {
+        assertEquals(
+            "探活每轮每台都要跑，多一个地址就多一次可能超时",
+            2,
+            DescriptionEndpoints.candidates("192.168.99.164", 49152).size,
+        )
+    }
+
+    @Test
+    fun `手动添加试更多端口以覆盖未知设备`() {
+        val urls = DescriptionEndpoints.manualCandidates("192.168.99.175")
+
+        // 用户手上可能是 DOSS（49152）、电视盒子（3500）或国产盒子（80）
+        assertTrue("要试 LinkPlay 的 49152", urls.any { it.contains(":49152/") })
+        assertTrue("要试 AirReceiver 的 3500", urls.any { it.contains(":3500/") })
+        assertTrue("要试常见的 80", urls.any { it.contains(":80/") })
+        assertEquals("同一地址不该重复", urls.size, urls.distinct().size)
+    }
+
     /** 档位自带的判断方法（界面用）。 */
     @Test
     fun `档位的便捷判断`() {

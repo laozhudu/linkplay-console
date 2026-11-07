@@ -217,29 +217,35 @@ fun detect(
  */
 object DescriptionEndpoints {
     /**
-     * 试哪些地址去拿设备描述。
+     * **探活**用：只试这台设备**已知端口**上的两个位置。
      *
-     * @param port 主要端口（LinkPlay 是 49152；通用渲染器常见 3500 / 80）
+     * 必须窄：`probeOne` 每轮对每台设备都要跑一次，多试一个地址就多一次可能超时。
+     * 三台音箱 × 每轮 × 4 个多余地址 = 明显变慢。
      *
-     * 为什么同一台要试这么多：
      * - LinkPlay 固定 `:49152/description.xml`
-     * - 通用渲染器习惯把描述放根路径（实测那台 AirReceiver 是
-     *   `http://192.168.99.175:3500/`，`/description.xml` 反而 404）
-     *
-     * 手动填 IP 时**不知道对方是哪种**，只能都试一遍。多几次本地请求，
-     * 比"填了 IP 却说找不到设备"好得多。
+     * - 通用渲染器习惯把描述放根路径（实测 AirReceiver 是 `:3500/`，
+     *   `/description.xml` 反而 404）
      */
-    fun candidates(ip: String, port: Int): List<String> = buildList {
-        add("http://\$ip:\$port/description.xml")
-        add("http://\$ip:\$port/")
-        // 用户手动填 IP 时常见的是通用渲染器，它的端口五花八门
-        if (port != 3500) {
-            add("http://\$ip:3500/")
-            add("http://\$ip:3500/description.xml")
-        }
-        if (port != 80) {
-            add("http://\$ip/description.xml")
-            add("http://\$ip/")
+    fun candidates(ip: String, port: Int): List<String> = listOf(
+        "http://$ip:$port/description.xml",
+        "http://$ip:$port/",
+    )
+
+    /**
+     * **手动填 IP 添加设备**用：不知道对方是哪种设备，只能多试几个。
+     *
+     * 和 [candidates] 分开是刻意的 —— 那个每轮探活都要跑，不能随手加地址；
+     * 这个只在用户点「手动添加」时跑一次，多几次本地请求完全值得。
+     *
+     * 覆盖的端口依据是家里实际有的设备：
+     * - `:49152` LinkPlay（DOSS）
+     * - `:3500`  SoftMedia AirReceiver（电视盒子）
+     * - `:80`    大量国产盒子和路由的默认 UPnP 端口
+     */
+    fun manualCandidates(ip: String): List<String> = buildList {
+        listOf(49152, 3500, 80).forEach { port ->
+            add("http://$ip:$port/description.xml")
+            add("http://$ip:$port/")
         }
     }.distinct()
 }

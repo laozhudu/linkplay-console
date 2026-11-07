@@ -834,11 +834,13 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
             )
         }
         // 没有 httpapi 时退回 UPnP 描述判断。
-        // 两个候选地址都试：LinkPlay 在 `/description.xml`，通用渲染器常把描述放在根路径
-        // （实测 AirReceiver：`http://192.168.99.175:3500/` 就是描述，`/description.xml` 404）。
+        //
+        // 这里用 **manualCandidates**（试 49152 / 3500 / 80），不是 `candidates`：
+        // 手动填 IP 时我们不知道对方是哪种设备，而用户手上可能是一台从没见过的盒子。
+        // 探活路径**不能**用这个宽列表 —— 那个每轮每台都要跑，多试地址就是白等超时。
         var desc: io.github.laozhudu.linkplay.protocol.upnp.DeviceDescription? = null
         var usedUrl: String? = null
-        for (url in DescriptionEndpoints.candidates(ip, port)) {
+        for (url in DescriptionEndpoints.manualCandidates(ip)) {
             val d = runCatching { UpnpRendererClient.describe(url) }.getOrNull() ?: continue
             if (d.avTransportControlUrl != null) {
                 desc = d
