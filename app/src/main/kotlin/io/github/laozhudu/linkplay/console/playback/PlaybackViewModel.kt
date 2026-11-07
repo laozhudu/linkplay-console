@@ -332,7 +332,17 @@ class PlaybackViewModel(
             // 请求在飞的过程中用户切了设备 → 这份快照属于上一台，丢弃
             if (generation.isStale(gen)) return
             // 设备侧的真实音量同步给全站（首页多房间卡片也订阅它）
-            VolumeBus.publish(deviceIp, snapshot.volume, snapshot.mute)
+            // 音量和静音分开处理：音量有"在途保护"，静音是离散值可以直接采信
+            val vol = if (acceptDeviceVolume(snapshot.volume)) snapshot.volume else _state.value.volume
+            VolumeBus.publish(deviceIp, vol, snapshot.mute)
+            // **必须同时写回本地状态。**
+            //
+            // 之前只写了 VolumeBus，界面读的却是 `state.volume` ——
+            // 于是"用原厂 App / 遥控器改了音量，这边界面不变"（用户说的"没一一对应"）。
+            // 两处都写，才能保证"界面显示 = 设备实际"这条不变量。
+            if (vol != _state.value.volume || snapshot.mute != _state.value.mute) {
+                _state.update { it.copy(volume = vol, mute = snapshot.mute) }
+            }
             // 设备侧队列位置（1 基转 0 基在 DeviceQueueState 里做）同步给列表高亮
             readDeviceQueue()?.let { q ->
                 if (q.hasQueue) QueueBus.syncDeviceIndex(q.index)
@@ -670,6 +680,8 @@ class PlaybackViewModel(
      */
     fun setVolumeLive(value: Int) {
         val v = value.coerceIn(0, 100)
+        // **记下"刚发过音量命令"的时刻**，见 [acceptDeviceVolume] 的说明
+        lastVolumeCommandAt = System.currentTimeMillis()
         _state.update { it.copy(volume = v) }
         // 立刻广播给全站：首页的音量条同一帧就跟上，不用等设备回读
         VolumeBus.publishVolume(deviceIp, v)
@@ -677,6 +689,43 @@ class PlaybackViewModel(
     }
 
     private val volumeChannel = Channel<Int>(Channel.CONFLATED)
+
+    /**
+     * 上一次**用户**改音量的时刻（毫秒）。
+     *
+     * ## 为什么需要它：这就是"音量没一一对应"的根因
+     *
+     * 拖动音量条的实际时序：
+     *
+     * ```
+     * t=0    用户拖到 50 → 界面立刻显示 50（乐观值），同时命令发出去
+     * t=80   60ms 合并通道把 setPlayerCmd:vol:50 发出去
+     * t=120  轮询恰好命中，设备回的却是**命令之前**的 20（命令还在设备队列里）
+     * t=120  界面从 50 跳回 20   ← 用户看到"拖了没用/自己弹回去"
+     * t=400  下一次轮询回 50    ← 又跳回来
+     * ```
+     *
+     * 用户说的"没有一一对应"就是这种**来回弹**。
+     *
+     * 修法：命令发出后 [VOLUME_SETTLE_MS] 内**不采信**设备回报 ——
+     * 那段时间的回读必然是旧值。过了这段时间设备还没跟上，就说明真没设进去，
+     * 这时候采信它才是对的（宁可显示真值，也不假装成功）。
+     */
+    @Volatile
+    private var lastVolumeCommandAt: Long = 0L
+
+    /**
+     * 设备回报的音量要不要采信。
+     *
+     * @param reported 设备这次回报的音量
+     * @return true = 采信（写进状态）；false = 丢掉（保留用户的乐观值）
+     */
+    private fun acceptDeviceVolume(reported: Int): Boolean {
+        val since = System.currentTimeMillis() - lastVolumeCommandAt
+        if (since >= VOLUME_SETTLE_MS) return true
+        // 在稳定期内：只有设备已经等于我们的目标值才采信（说明它跟上来了）
+        return reported == _state.value.volume
+    }
 
     /**
      * 播放列表里点某一首。
@@ -822,7 +871,17 @@ class PlaybackViewModel(
                     mode = snapshot.mode,
                 )
             }
-            VolumeBus.publish(deviceIp, snapshot.volume, snapshot.mute)
+            // 音量和静音分开处理：音量有"在途保护"，静音是离散值可以直接采信
+            val vol = if (acceptDeviceVolume(snapshot.volume)) snapshot.volume else _state.value.volume
+            VolumeBus.publish(deviceIp, vol, snapshot.mute)
+            // **必须同时写回本地状态。**
+            //
+            // 之前只写了 VolumeBus，界面读的却是 `state.volume` ——
+            // 于是"用原厂 App / 遥控器改了音量，这边界面不变"（用户说的"没一一对应"）。
+            // 两处都写，才能保证"界面显示 = 设备实际"这条不变量。
+            if (vol != _state.value.volume || snapshot.mute != _state.value.mute) {
+                _state.update { it.copy(volume = vol, mute = snapshot.mute) }
+            }
             // 设备侧队列位置（1 基转 0 基在 DeviceQueueState 里做）同步给列表高亮
             readDeviceQueue()?.let { q ->
                 if (q.hasQueue) QueueBus.syncDeviceIndex(q.index)
@@ -940,3 +999,6 @@ class PlaybackViewModel(
         safeLaunch("clearEmbeddedTags") { prepare() }
     }
 }
+
+/** 音量命令发出后多久内不采信设备回报（见 `lastVolumeCommandAt`）。 */
+private const val VOLUME_SETTLE_MS = 900L

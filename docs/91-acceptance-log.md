@@ -3383,3 +3383,87 @@ vm.setVolumeLive(...)   // ← 永远调设备
 | 真机：本机拖音量条手机声音是否真的变 | **未验** |
 | 真机：切回音箱后音量条是否显示那台的音量 | **未验** |
 
+## 第六十九轮 · 音量「一一对应」的三层问题（用户要求研究深一点）
+
+用户：「关于音量你需要研究深一点，还没实现设备音量对应的完全一一对应」。
+
+深挖之后发现，音量这条链有**三层**，前两轮只修好了前两层。
+
+### 第 1 层 · 读：按输出选源（第六十七轮已修）
+
+```kotlin
+val volumeNow = if (isLocalOutput) localUi.volume else state.volume
+```
+
+### 第 2 层 · 写：按输出分派（第六十八轮已修）
+
+```kotlin
+if (isLocalOutput) LocalPlayer.setVolume(...) else vm.setVolumeLive(...)
+```
+
+### 第 3 层 · 对应关系（本轮，两个真 bug）
+
+#### bug A · 「拖动后自己弹回去」
+
+实际时序：
+
+```
+t=0    用户拖到 50 → 界面显示 50（乐观值），命令进 60ms 合并通道
+t=80   setPlayerCmd:vol:50 发出
+t=120  轮询恰好命中，设备回的却是**命令之前**的 20（命令还在设备队列里）
+t=120  界面从 50 跳回 20        ← 用户看到"拖了没用"
+t=400  下一次轮询回 50          ← 又弹回来
+```
+
+用户说的"没有一一对应"就是这个**来回弹**。
+
+修法：命令发出后 `VOLUME_SETTLE_MS = 900ms` 内**不采信**设备回报
+（那段时间的回读必然是旧值）；但**如果设备已经等于目标值就采信**（说明它跟上来了）。
+超过 900ms 还没跟上就采信 —— 宁可显示真值，也不假装成功。
+
+#### bug B · 「用原厂 App 改音量，这边不变」
+
+轮询回报只写了 `VolumeBus`，**没写回 `_state.volume`**。
+而播放页读的是 `state.volume` → 设备侧改了音量，界面纹丝不动。
+
+修法两处：
+
+1. 回报时**同时写** `VolumeBus` 和 `_state.volume`（保证"界面显示 = 设备实际"这条不变量）
+2. 播放页改成**优先读 `VolumeBus`**：
+
+```kotlin
+val busVolume = VolumeBus.volumeOf(deviceIp)?.volume
+val volumeNow = if (isLocalOutput) localUi.volume else (busVolume ?: state.volume)
+```
+
+理由：全站有四个地方能改音量（播放页拖 / 首页行内拖 / 音量键 / 原厂 App），
+它们都汇到 `VolumeBus`。读 `state.volume` 等于读它的一份副本，
+要求两条更新路径**永远同步** —— 而历史上它们正是先后漏掉过。
+`VolumeBus` 是唯一真相，`state.volume` 只做兜底。
+
+### 现在的对应关系表
+
+| 场景 | 谁改 | 界面怎么知道 |
+|---|---|---|
+| 播放页拖 | `setVolumeLive` → 立刻写两处 | 同一帧 |
+| 首页行内拖 | `SetVolumeUseCase` → VolumeBus | 读 VolumeBus，立即 |
+| 手机音量键 | `adjustVolumeByKey` → VolumeBus + 直接发 | 读 VolumeBus，立即 |
+| **原厂 App / 遥控器改** | 设备自己变 → 轮询回报 | 读 VolumeBus，≤1s（受在途保护约束） |
+| 切设备 | 各自的 VolumeBus 条目 | 立即 |
+| 本机 | ExoPlayer 自己的音量 | `localUi`（500ms ticker） |
+
+### 验证
+
+```bash
+:app:compileDebugKotlin / :app:testDebugUnitTest / :app:assembleDebug
+# 1081 用例 0 失败
+```
+
+### 仍不等价的地方（如实记）
+
+| 项 | 说明 |
+|---|---|
+| 本机音量 ≠ 手机音量键 | 现在改的是 **App 内播放器音量**（0-100），不是系统媒体音量。要改成后者是另一种实现（`AudioManager`），大厂两种都有人做 |
+| 设备不支持音量 | 通用渲染器（电视盒子）能 SetVolume，但有些设备失败静默 |
+| 900ms 这个数 | 按 `docs/01` 实测的指令往返 40~80ms + 60ms 合并窗口估的，**真机可能需要调** |
+
