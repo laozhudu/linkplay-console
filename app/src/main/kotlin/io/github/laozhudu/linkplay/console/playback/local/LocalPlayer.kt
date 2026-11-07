@@ -34,6 +34,17 @@ class LocalPlayer(context: Context) {
     /** 构造参数 `context` 不是 val，类内拿不到 —— 存一份给 AudioManager 用。 */
     private val appContext: Context = context.applicationContext
 
+    /**
+     * 系统媒体音量的读写口。
+     *
+     * ⚠️ **必须声明在 `init` 块之前**（`docs/91` 记过这个坑）：
+     * Kotlin 初始化的顺序是「属性按声明顺序 → init 块」，
+     * 如果这个 getter 依赖的属性排在 init 之后，init 里用到它就是 null，
+     * 而且报的是 NPE 而不是"顺序错了"，极难查。`check-init-order.py` 挡的就是这个。
+     */
+    private val audioManager: android.media.AudioManager
+        get() = appContext.getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
+
     private val player: ExoPlayer = ExoPlayer.Builder(context.applicationContext).build()
 
     private val _state = MutableStateFlow(PlayerUiState(
@@ -170,6 +181,5 @@ source = PlayerUiState.Source.Local))
         return Math.round(percent.coerceIn(0, 100) * max / 100f).coerceIn(0, max)
     }
 
-    private val audioManager: android.media.AudioManager
-        get() = appContext.getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
+
 }
