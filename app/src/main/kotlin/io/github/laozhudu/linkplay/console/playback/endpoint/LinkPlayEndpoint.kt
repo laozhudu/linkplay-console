@@ -30,4 +30,15 @@ class LinkPlayEndpoint(
     override val statusWord: String = "投送中"
 
     override fun capabilities(): EndpointCapabilities = caps()
+
+    /** DOSS 自己会切（`setPlayerCmd:next`），不用重投。 */
+    override suspend fun next() {
+        if (!capabilities().canNext) return
+        vm()?.next()
+    }
+
+    override suspend fun previous() {
+        if (!capabilities().canPrevious) return
+        vm()?.previous()
+    }
 }

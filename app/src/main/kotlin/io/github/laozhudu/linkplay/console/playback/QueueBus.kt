@@ -59,6 +59,15 @@ data class QueueRunState(
 }
 
 object QueueBus {
+
+    /**
+     * 本机播放时的队列归属。
+     *
+     * 为什么用字符串而不是 null：`ownerIp = null` 的语义是"不知道归属"，
+     * 界面一律按不匹配处理（那时是为了防止切设备后串台）。
+     * 本机是**明确的归属**，只是它不是一台设备 —— 所以给它一个不会和 IP 撞的标识。
+     */
+    const val LOCAL_OWNER = "local"
     private val _state = MutableStateFlow(QueueRunState())
 
     /**
@@ -97,12 +106,17 @@ object QueueBus {
      * @param deviceIp 队列归属，必填。之前是内部读 currentOwner，
      *   调用方忘了 setOwner 就把列表挂到上一台设备名下 —— 编译期强制之后不可能再漏。
      */
-    fun begin(deviceIp: String, items: List<QueueItem>) {
+    fun begin(deviceIp: String, items: List<QueueItem>, startAt: Int = 0) {
         currentOwner = deviceIp
         _state.update {
             QueueRunState(
                 ownerIp = deviceIp,
-                running = true, items = items, index = 0, total = items.size, playedCount = 0,
+                running = true,
+                items = items,
+                // startAt 之前写死 0：从中间某一首起播时，列表显示"第 1 首"而声音是第 8 首
+                index = startAt.coerceIn(0, maxOf(0, items.lastIndex)),
+                total = items.size,
+                playedCount = 0,
             )
         }
     }

@@ -136,6 +136,17 @@ data class DeviceCapabilities(
             supportsHttpapi = false,
             supportsVolume = hasRenderingControl,
             supportsSeek = true,
+            // **设备自己不会切** —— 实测那台 AirReceiver 对 AVTransport.Next 回
+            // 701 transition not available（它没有自己的队列，不知道切到哪）。
+            //
+            // ⚠️ 但这**不等于"用户不能在我们这儿切歌"**：
+            // 我们从自己的列表里重投下一首（`PlaybackViewModel.nextByReplay`），
+            // 效果一样。所以界面的切歌按钮是**有**的，判断依据是
+            // `EndpointCapabilities.canNext`，不是这一位。
+            //
+            // 两句话分开记：
+            //   supportsNextPrev = 它自己会不会换
+            //   canNext          = 我们能不能让它换
             supportsNextPrev = false,
             supportsMute = hasRenderingControl,
             // SetChannel 虽是标准 RenderingControl 的可选动作，实测 AirReceiver 不认；

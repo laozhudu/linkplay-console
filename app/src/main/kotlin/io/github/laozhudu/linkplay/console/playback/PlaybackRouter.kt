@@ -195,10 +195,15 @@ class PlaybackRouter(
         if (items.isEmpty()) return false
         return when (output()) {
             PlaybackOutput.Local -> {
-                val item = items.getOrNull(startAt.coerceIn(0, items.lastIndex)) ?: items.first()
+                // 整份队列交给本机播放器 —— 原来只播一首，还把"暂不支持"写进日志。
+                // 那是实现缺口：ExoPlayer 本身就支持媒体项列表。
                 startLocalService()
-                local.play(item.url, item.title)
-                log("本机播放：只播这一首（本地列表暂不支持） —— ${item.title}")
+                // 队列**必须也发布到 QueueBus**：界面的播放列表读的是它。
+                // 只把列表塞给 ExoPlayer 而不登记，用户会看到"在放第 1 首，
+                // 但播放列表是空的"—— 这正是上一版被截图抓到的形态。
+                QueueBus.begin(QueueBus.LOCAL_OWNER, items, startAt)
+                local.playQueue(items.map { it.url to it.title }, startAt)
+                log("本机播放：${items.size} 首，从第 ${startAt + 1} 首开始")
                 true
             }
             is PlaybackOutput.Device -> startQueueOnDevice(
