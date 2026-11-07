@@ -159,6 +159,8 @@ internal fun ContentScreen(
                 label = targetLabel,
                 isLocal = target is io.github.laozhudu.linkplay.console.playback.PlaybackOutput.Local,
                 onClick = { showTarget = true },
+                // 内容页跟随主题
+                contentColor = MaterialTheme.colorScheme.onSurface,
             )
             Spacer(Modifier.weight(1f))
         }
