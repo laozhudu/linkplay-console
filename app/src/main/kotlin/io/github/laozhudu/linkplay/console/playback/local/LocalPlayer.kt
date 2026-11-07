@@ -33,7 +33,10 @@ class LocalPlayer(context: Context) {
 
     private val player: ExoPlayer = ExoPlayer.Builder(context.applicationContext).build()
 
-    private val _state = MutableStateFlow(PlayerUiState(source = PlayerUiState.Source.Local))
+    private val _state = MutableStateFlow(PlayerUiState(
+        // 没播过时也要反映真实音量：ExoPlayer 默认 1.0 = 100
+        volume = (player.volume * 100f).toInt().coerceIn(0, 100),
+source = PlayerUiState.Source.Local))
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
 
     /** 当前曲名（Media3 的 mediaId 里存着，够用；不另建映射表）。 */
@@ -120,5 +123,23 @@ class LocalPlayer(context: Context) {
             isLive = player.isCurrentMediaItemLive || duration <= 0,
             volume = (player.volume * 100f).toInt().coerceIn(0, 100),
         )
+    }
+
+    /**
+     * 本机音量（0..100）。
+     *
+     * ## 为什么单独一个（真机问题）
+     *
+     * 用户：「音量控制应该也与对应设备直接相关」。
+     *
+     * 原来播放页的音量条**无论输出是谁都调设备** —— 切到本机拖音量条，
+     * 改的却是音箱的音量，手机这边的声音一点没变。
+     *
+     * ExoPlayer 的音量是 `0f..1f`，界面是 `0..100` —— 换算只放在这一层，
+     * 和 `PlayerUiState.volume` 的读出方向对称。
+     */
+    fun setVolume(percent: Int) {
+        player.volume = (percent.coerceIn(0, 100) / 100f)
+        publish()
     }
 }
