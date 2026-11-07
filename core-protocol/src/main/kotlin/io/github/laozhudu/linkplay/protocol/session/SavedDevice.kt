@@ -3,6 +3,7 @@ package io.github.laozhudu.linkplay.protocol.session
 import io.github.laozhudu.linkplay.protocol.Json
 import io.github.laozhudu.linkplay.protocol.JsonValue
 import io.github.laozhudu.linkplay.protocol.JsonWriter
+import io.github.laozhudu.linkplay.protocol.dlna.DeviceProfile
 import io.github.laozhudu.linkplay.protocol.identity.UuidMatch
 
 /**
@@ -41,6 +42,22 @@ data class SavedDevice private constructor(
     val location: String? = null,
     val modelName: String? = null,
     val lastSeenMs: Long = 0L,
+    /**
+     * **这台设备是什么东西** —— 跟着设备档案走，持久化。
+     *
+     * ## 为什么必须持久化（用户 2026-11-07 的真机问题）
+     *
+     * 之前这个判断只活在内存缓存（`DeviceProfileCache`）里，重启就归零。
+     * 于是每次冷启动，所有设备都处在"还没识别"的状态，界面只能拿一个
+     * **默认值**去分组 —— 默认给 DOSS，一台电视盒子就被当成音箱；
+     * 默认给通用，三台音箱就全变成"通用播放设备"。
+     *
+     * 我在那个默认值上来回改过两次，两次都错。根本原因是**位置错了**：
+     * 设备的类型是设备的属性，不是缓存的属性。
+     *
+     * 现在它跟 `ip` / `name` 一样存在档案里：识别一次，永久有效。
+     */
+    val profile: DeviceProfile = DeviceProfile.UNKNOWN,
 ) {
     /** 展示用：名字 + IP。名字为空时退回 IP，避免出现空标题。 */
     val title: String get() = name.ifBlank { ip }
@@ -54,6 +71,7 @@ data class SavedDevice private constructor(
                 location?.let { put("location", JsonValue.Str(it)) }
                 modelName?.let { put("model", JsonValue.Str(it)) }
                 put("seen", JsonValue.Num(lastSeenMs.toDouble()))
+                put("profile", JsonValue.Str(profile.name))
             },
         ),
     )
@@ -74,6 +92,7 @@ data class SavedDevice private constructor(
             location: String? = null,
             modelName: String? = null,
             lastSeenMs: Long = System.currentTimeMillis(),
+            profile: DeviceProfile = DeviceProfile.UNKNOWN,
         ): SavedDevice {
             // canonical 而不是 key：LinkPlay 的 UDN 是 <uuid24><前8位重复>，
             // 只去连字符会得到 32 位，与 getStatusEx 的 24 位仍是两个字符串（见 UuidMatch）
@@ -86,6 +105,7 @@ data class SavedDevice private constructor(
                 location = location,
                 modelName = modelName,
                 lastSeenMs = lastSeenMs,
+                profile = profile,
             )
         }
 
@@ -95,6 +115,26 @@ data class SavedDevice private constructor(
          * 走 [of] 而不是直接构造：**老版本存下来的脏数据也要被归一化** ——
          * 用户不该因为升级了一次 App 就得手动删掉重加设备。
          */
+        /**
+         * 档案里没有 `profile` 字段时按**音箱**补。
+         *
+         * ## 这不是"默认值赌一边"，是一条有依据的迁移规则
+         *
+         * 在这个字段出现之前，**App 根本没有"添加通用设备"这条路** ——
+         * 扫描只认 LinkPlay（`discoverMediaRenderers` 是后来才加的），
+         * 手动填 IP 也只试 `:49152/description.xml`（LinkPlay 的固定路径）。
+         *
+         * 所以老数据里的每一台设备**必然**是音箱。这不是猜，是版本事实。
+         *
+         * 反过来说：**如果这是个默认值而不是迁移规则，那它就错了** ——
+         * 因为新添加的通用设备一定会被误导。所以这段只作用于"字段缺失"，
+         * 不作用于"字段为空/UNKNOWN"（那是真的未知，等探测）。
+         */
+        private fun decodeProfile(raw: String?): DeviceProfile {
+            if (raw.isNullOrBlank()) return DeviceProfile.LINKPLAY
+            return runCatching { DeviceProfile.valueOf(raw) }.getOrDefault(DeviceProfile.UNKNOWN)
+        }
+
         fun decode(text: String?): SavedDevice? {
             if (text.isNullOrBlank()) return null
             return runCatching {
@@ -107,6 +147,7 @@ data class SavedDevice private constructor(
                     location = o.string("location"),
                     modelName = o.string("model"),
                     lastSeenMs = (o["seen"] as? JsonValue.Num)?.value?.toLong() ?: 0L,
+                    profile = decodeProfile(o.string("profile")),
                 )
             }.getOrNull()
         }

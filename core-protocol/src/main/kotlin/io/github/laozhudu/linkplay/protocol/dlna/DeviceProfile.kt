@@ -157,6 +157,23 @@ data class DeviceCapabilities(
 }
 
 /**
+ * 档位 → 能力表（**唯一派生点**）。
+ *
+ * 为什么需要它：设备档案里只存粗粒度的「是什么」（[DeviceProfile]），
+ * 而不存整张能力表 —— 能力表是可推导的，存两份必然漂移。
+ *
+ * 代价是 `GENERIC_DMR` 这档不知道设备到底有没有 `RenderingControl`
+ * （那是探测细节）。这里按「有」处理：真的没有时，设音量会失败并
+ * 显示"这台设备不支持"，比一声不响好。
+ */
+fun capabilitiesOfProfile(profile: DeviceProfile): DeviceCapabilities = when (profile) {
+    DeviceProfile.LINKPLAY -> DeviceCapabilities.LINKPLAY
+    DeviceProfile.GENERIC_DMR -> DeviceCapabilities.genericDmr(hasRenderingControl = true)
+    // 真的未知：什么都不给。**不猜**
+    DeviceProfile.UNKNOWN -> DeviceCapabilities.NONE
+}
+
+/**
  * 判定一台设备属于哪一档，并给出它的能力表。
  *
  * @param httpapiReachable `getStatusEx` 是否答得上来。**null 表示没探**（只知道描述）；
